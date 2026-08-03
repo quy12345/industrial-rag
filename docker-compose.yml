@@ -8,6 +8,8 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      QDRANT_URL: http://qdrant
     depends_on:
       - qdrant
     volumes:

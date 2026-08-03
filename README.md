@@ -2,9 +2,9 @@
 
 ## Status
 
-**Phase 2 — Document ingestion preview**
+**Phase 3A — Dense indexing and retrieval**
 
-This phase adds a CLI-only ingestion preview for PDF and DOCX technical manuals. It uses Docling's native `DocumentConverter` and `HierarchicalChunker` to inspect structure-aware chunks and normalize their metadata into JSON-serializable Pydantic models.
+This phase adds multilingual dense embeddings, Qdrant indexing, and ranked dense similarity search on top of the existing batched Docling ingestion flow. It does not generate final answers or call an LLM.
 
 ## Implemented
 
@@ -15,14 +15,19 @@ This phase adds a CLI-only ingestion preview for PDF and DOCX technical manuals.
 - Deterministic document and chunk IDs
 - Page provenance, heading breadcrumbs, conservative content types, and metadata normalization
 - Terminal chunk previews and optional UTF-8 JSONL output
+- FastEmbed multilingual passage and query embeddings
+- A shared Qdrant collection with the named cosine vector `dense`
+- Deterministic UUIDv5 point IDs and citation-ready payload metadata
+- Document indexing, safe re-index replacement, and dense search with document filtering
+- CLI commands for indexing and search, with Qdrant in-memory unit tests
 
-The API still exposes only the health endpoint. This phase does not write chunks to Qdrant, create embeddings, run retrieval, call an LLM, or add LangChain.
+The API still exposes only the health endpoint. LangChain, LLM generation, answer citations, abstention, query APIs, sparse retrieval, BM25, RRF, reranking, and retrieval evaluation metrics are not implemented.
 
 ## Repository structure
 
 ```text
-app/                 FastAPI application, models, and ingestion logic
-scripts/             CLI ingestion preview and future evaluation placeholder
+app/                 FastAPI application, ingestion, models, and dense retrieval
+scripts/             CLI ingestion preview, dense indexing, and dense search
 data/                Raw and evaluation data directories
 tests/               Pytest tests
 artifacts/           Generated metrics, figures, and local preview output
@@ -121,6 +126,48 @@ python scripts/ingest_preview.py data/raw/manual.pdf `
 
 Batch boundaries are page-aligned, but heading context is not reconstructed across ranges and multi-page tables are not merged across a boundary. Scanned PDFs still require an OCR-enabled mode, which is outside this Phase 2 patch. Suitable batch size depends on available RAM and PDF complexity. Some native backends may still require process isolation even when converters are not reused.
 
+## Dense indexing and retrieval
+
+Start Qdrant:
+
+```powershell
+docker compose up -d qdrant
+```
+
+Index the 21-page manual with memory-conscious PDF batching:
+
+```powershell
+python scripts/index_document.py data/raw/manual.pdf `
+  --page-start 1 `
+  --page-end 21 `
+  --page-batch-size 8
+```
+
+If Docling reports `std::bad_alloc` while Docker Desktop is using part of the available RAM, retry with `--page-batch-size 4`. Smaller page batches reduce peak memory, but additional page-range boundaries can change the number of structure-aware chunks; do not assume different batch sizes produce identical chunk counts.
+
+Run dense search:
+
+```powershell
+python scripts/search_dense.py `
+  "Thuật toán nào được dùng để phát hiện bất thường?" `
+  --limit 5
+```
+
+Filter results to one indexed document when needed:
+
+```powershell
+python scripts/search_dense.py `
+  "ODA-MD hoạt động ở đâu trong mạng?" `
+  --document-id manual-77d5dae4c2c5 `
+  --limit 5
+```
+
+The default model is `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`. The first real indexing or search run needs internet access to download its public model assets; unit tests use a deterministic fake model and never download weights. Heading breadcrumbs are added only to embedding input, while the original chunk text remains unchanged in Qdrant payloads.
+
+Re-indexing the same document removes its old points only after parsing and all embeddings succeed, then upserts deterministic replacement IDs. Other documents are not deleted. This MVP sequence is not a database transaction, so an upsert failure after deletion can temporarily leave that document incomplete.
+
+Dense similarity scores are ranking signals, not probabilities. No default score threshold is claimed to be optimal; threshold tuning belongs to later retrieval evaluation. Dense results are ranked source chunks, not final RAG answers.
+
 ## Test and lint
 
 ```bash
@@ -135,11 +182,11 @@ docker compose config
 docker compose up --build
 ```
 
-The API is available at `http://localhost:8000`; Qdrant is exposed on ports `6333` and `6334`. The Python application does not connect to Qdrant in Phase 2.
+The API is available at `http://localhost:8000`; Qdrant is exposed on ports `6333` and `6334`. Host-side CLIs use `http://localhost:6333`, while Docker Compose overrides the API container host to `http://qdrant:6333`. The health endpoint remains a liveness check and does not contact Qdrant.
 
 ## Roadmap
 
-1. Add embeddings and Qdrant ingestion.
-2. Add dense and hybrid retrieval.
-3. Add reranking, LLM generation, and citations.
-4. Add retrieval and answer evaluation.
+1. Review and evaluate Phase 3A dense retrieval behavior.
+2. Add an API and final answer contract in a later phase.
+3. Add hybrid retrieval and reranking only after retrieval evaluation.
+4. Add LLM generation, citations, and abstention in a later phase.

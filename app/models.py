@@ -24,3 +24,16 @@ class DocumentChunk(BaseModel):
     headings: list[str] = Field(default_factory=list)
     content_type: str = "text"
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RetrievedChunk(BaseModel):
+    """One ranked chunk returned by dense similarity search."""
+
+    chunk_id: str
+    document_id: str
+    filename: str
+    text: str
+    page_numbers: list[int]
+    headings: list[str]
+    content_type: str
+    score: float

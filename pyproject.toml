@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
     "docling>=2.117,<2.118",
+    "qdrant-client[fastembed]",
 ]
 
 [project.optional-dependencies]
