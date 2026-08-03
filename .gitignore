@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest_tmp/
+.pytest-work/
 .ruff_cache/
 .venv/
 venv/
@@ -21,3 +23,4 @@ artifacts/metrics/*
 !artifacts/metrics/.gitkeep
 artifacts/figures/*
 !artifacts/figures/.gitkeep
+artifacts/*.jsonl

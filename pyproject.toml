@@ -5,13 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "industrial-rag"
 version = "0.1.0"
-description = "Phase 1 scaffold for an industrial technical manual RAG system."
+description = "Document ingestion preview scaffold for an industrial technical manual RAG system."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<1.0",
     "uvicorn[standard]>=0.30,<1.0",
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
+    "docling>=2.117,<2.118",
 ]
 
 [project.optional-dependencies]
@@ -31,5 +32,10 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--basetemp=.pytest-work"
+pythonpath = ["."]
