@@ -8,10 +8,14 @@ from collections.abc import Sequence
 
 from app.config import get_settings
 from app.retrieval import (
+    INDEX_MANIFEST_PATH,
     RetrievalError,
     create_embedding_model,
     create_qdrant_client,
     dense_search,
+    get_embedding_dimension,
+    validate_dense_collection,
+    validate_index_manifest,
 )
 
 
@@ -30,7 +34,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         embedding_model = create_embedding_model(settings.embedding_model)
+        vector_size = get_embedding_dimension(embedding_model)
+        validate_index_manifest(
+            INDEX_MANIFEST_PATH,
+            collection_name=settings.qdrant_collection,
+            vector_name=settings.dense_vector_name,
+            embedding_model=settings.embedding_model,
+            embedding_dimension=vector_size,
+        )
         client = create_qdrant_client(settings)
+        validate_dense_collection(
+            client,
+            collection_name=settings.qdrant_collection,
+            vector_name=settings.dense_vector_name,
+            vector_size=vector_size,
+        )
         results = dense_search(
             client,
             args.question,

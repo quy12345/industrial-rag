@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import json
 import re
 import tempfile
 import unicodedata
@@ -48,11 +49,27 @@ def build_document_id(file_path: Path) -> str:
     return f"{slug}-{digest}"
 
 
-def build_chunk_id(document_id: str, page_numbers: Sequence[int], chunk_index: int) -> str:
-    """Build a stable chunk ID from its document, first page, and order."""
+def build_chunk_id(
+    document_id: str,
+    page_numbers: Sequence[int],
+    headings: Sequence[str],
+    text: str,
+    occurrence_index: int = 0,
+) -> str:
+    """Build a stable ID from chunk content and its duplicate occurrence."""
 
     first_page = str(min(page_numbers)) if page_numbers else "unknown"
-    return f"{document_id}_p{first_page}_c{chunk_index:04d}"
+    if occurrence_index < 0:
+        raise IngestionError("Chunk occurrence index must not be negative.")
+    canonical = _canonical_chunk_key(document_id, page_numbers, headings, text)
+    digest = hashlib.sha256(
+        json.dumps(
+            [canonical, occurrence_index],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{document_id}_p{first_page}_h{digest}"
 
 
 def build_page_batches(
@@ -110,10 +127,17 @@ def ingest_document(
     conversion_ranges = _resolve_conversion_ranges(path, page_range, batch_size)
     document_id = build_document_id(path)
     normalized_chunks: list[DocumentChunk] = []
+    occurrence_counts: dict[str, int] = {}
 
     for conversion_range in conversion_ranges:
         raw_chunks = _convert_document(path, page_range=conversion_range)
-        _append_normalized_chunks(path, document_id, raw_chunks, normalized_chunks)
+        _append_normalized_chunks(
+            path,
+            document_id,
+            raw_chunks,
+            normalized_chunks,
+            occurrence_counts,
+        )
         del raw_chunks
         gc.collect()
 
@@ -194,6 +218,7 @@ def _append_normalized_chunks(
     document_id: str,
     raw_chunks: Iterable[Any],
     normalized_chunks: list[DocumentChunk],
+    occurrence_counts: dict[str, int],
 ) -> None:
     """Append normalized chunks while preserving a document-wide chunk index."""
 
@@ -205,6 +230,9 @@ def _append_normalized_chunks(
         page_numbers = _extract_page_numbers(raw_chunk)
         headings = _extract_headings(raw_chunk)
         chunk_index = len(normalized_chunks)
+        canonical_key = _canonical_chunk_key(document_id, page_numbers, headings, text)
+        occurrence_index = occurrence_counts.get(canonical_key, 0)
+        occurrence_counts[canonical_key] = occurrence_index + 1
         metadata = {
             "source_path": _source_path(file_path),
             "file_extension": file_path.suffix.lower(),
@@ -213,7 +241,13 @@ def _append_normalized_chunks(
         }
         normalized_chunks.append(
             DocumentChunk(
-                chunk_id=build_chunk_id(document_id, page_numbers, chunk_index),
+                chunk_id=build_chunk_id(
+                    document_id,
+                    page_numbers,
+                    headings,
+                    text,
+                    occurrence_index,
+                ),
                 document_id=document_id,
                 filename=file_path.name,
                 text=text,
@@ -223,6 +257,30 @@ def _append_normalized_chunks(
                 metadata=metadata,
             )
         )
+
+
+def _canonical_chunk_key(
+    document_id: str,
+    page_numbers: Sequence[int],
+    headings: Sequence[str],
+    text: str,
+) -> str:
+    """Return the canonical identity fields used for stable chunk IDs."""
+
+    normalized_text = (
+        unicodedata.normalize("NFKC", text)
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+    )
+    normalized_headings = [
+        unicodedata.normalize("NFKC", heading).strip() for heading in headings
+    ]
+    return json.dumps(
+        [document_id, sorted(set(page_numbers)), normalized_headings, normalized_text],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _convert_document(

@@ -10,11 +10,13 @@ from pathlib import Path
 from app.config import get_settings
 from app.ingestion import IngestionError, ingest_document
 from app.retrieval import (
+    INDEX_MANIFEST_PATH,
     RetrievalError,
     create_embedding_model,
     create_qdrant_client,
     get_embedding_dimension,
     index_chunks,
+    write_index_manifest,
 )
 
 
@@ -46,6 +48,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.embedding_batch_size or settings.embedding_batch_size
             ),
             vector_size=vector_size,
+        )
+        write_index_manifest(
+            INDEX_MANIFEST_PATH,
+            collection_name=settings.qdrant_collection,
+            vector_name=settings.dense_vector_name,
+            embedding_model=settings.embedding_model,
+            embedding_dimension=vector_size,
+            ingestion_profile={
+                "ocr_mode": "off",
+                "page_batch_size": args.page_batch_size,
+                "chunker": "hierarchical",
+            },
         )
     except (IngestionError, RetrievalError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

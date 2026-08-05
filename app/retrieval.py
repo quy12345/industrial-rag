@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 from collections.abc import Iterable, Sequence
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -14,6 +16,7 @@ from app.config import Settings
 from app.models import DocumentChunk, RetrievedChunk
 
 POINT_NAMESPACE = UUID("91bf9b94-7641-5d4f-9e2a-d76c9d358c7d")
+INDEX_MANIFEST_PATH = Path("artifacts/metrics/dense-index-manifest.json")
 
 
 class RetrievalError(Exception):
@@ -134,6 +137,43 @@ def ensure_dense_collection(
         )
 
 
+def validate_dense_collection(
+    client: QdrantClient,
+    *,
+    collection_name: str,
+    vector_name: str,
+    vector_size: int,
+) -> None:
+    """Validate an existing collection without creating or changing it."""
+
+    try:
+        if not client.collection_exists(collection_name):
+            raise RetrievalError(f"Qdrant collection {collection_name} does not exist.")
+        collection = client.get_collection(collection_name)
+    except RetrievalError:
+        raise
+    except Exception as exc:
+        raise RetrievalError(
+            f"Failed to inspect Qdrant collection {collection_name}: {exc}"
+        ) from exc
+
+    vectors = collection.config.params.vectors
+    if not isinstance(vectors, dict) or vector_name not in vectors:
+        raise RetrievalError(
+            f"Collection {collection_name} does not define named vector {vector_name}."
+        )
+    vector_config = vectors[vector_name]
+    if vector_config.size != vector_size:
+        raise RetrievalError(
+            f"Collection {collection_name} uses vector size {vector_config.size}, "
+            f"but model produces {vector_size}."
+        )
+    if vector_config.distance != models.Distance.COSINE:
+        raise RetrievalError(
+            f"Collection {collection_name} vector {vector_name} must use cosine distance."
+        )
+
+
 def index_chunks(
     client: QdrantClient,
     chunks: Sequence[DocumentChunk],
@@ -192,27 +232,149 @@ def index_chunks(
     )
 
     document_ids = {chunk.document_id for chunk in chunks}
+    new_point_ids_by_document: dict[str, set[str]] = {
+        document_id: set() for document_id in document_ids
+    }
+    for points in point_batches:
+        for point in points:
+            payload = point.payload or {}
+            document_id = payload.get("document_id")
+            if isinstance(document_id, str):
+                new_point_ids_by_document[document_id].add(str(point.id))
+
+    existing_point_ids_by_document = {
+        document_id: _scroll_document_point_ids(client, collection_name, document_id)
+        for document_id in document_ids
+    }
     try:
-        for document_id in document_ids:
-            client.delete(
-                collection_name=collection_name,
-                points_selector=models.FilterSelector(
-                    filter=_document_filter(document_id),
-                ),
-                wait=True,
-            )
         for points in point_batches:
             client.upsert(
                 collection_name=collection_name,
                 points=points,
                 wait=True,
             )
+        for document_id in document_ids:
+            stale_point_ids = existing_point_ids_by_document[document_id] - (
+                new_point_ids_by_document[document_id]
+            )
+            if stale_point_ids:
+                client.delete(
+                    collection_name=collection_name,
+                    points_selector=models.PointIdsList(points=list(stale_point_ids)),
+                    wait=True,
+                )
     except Exception as exc:
         raise RetrievalError(
             f"Failed to update Qdrant collection {collection_name}: {exc}"
         ) from exc
 
     return sum(len(points) for points in point_batches)
+
+
+def write_index_manifest(
+    path: Path,
+    *,
+    collection_name: str,
+    vector_name: str,
+    embedding_model: str,
+    embedding_dimension: int,
+    ingestion_profile: dict[str, Any] | None = None,
+) -> None:
+    """Atomically write the runtime contract for a dense index."""
+
+    payload = {
+        "collection_name": collection_name,
+        "vector_name": vector_name,
+        "embedding_model": embedding_model,
+        "embedding_dimension": embedding_dimension,
+        "distance": "cosine",
+        "ingestion_profile": ingestion_profile or {},
+    }
+    manifest_path = Path(path)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=manifest_path.parent,
+            prefix=f".{manifest_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as output_file:
+            temporary_path = Path(output_file.name)
+            json.dump(payload, output_file, ensure_ascii=False, indent=2)
+            output_file.write("\n")
+        temporary_path.replace(manifest_path)
+    except OSError as exc:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise RetrievalError(
+            f"Failed to write dense index manifest {manifest_path}: {exc}"
+        ) from exc
+
+
+def validate_index_manifest(
+    path: Path,
+    *,
+    collection_name: str,
+    vector_name: str,
+    embedding_model: str,
+    embedding_dimension: int,
+) -> None:
+    """Reject a missing or incompatible dense-index manifest before search."""
+
+    manifest_path = Path(path)
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RetrievalError(
+            f"Dense index manifest is missing at {manifest_path}; re-index the collection."
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RetrievalError(f"Dense index manifest is invalid at {manifest_path}: {exc}") from exc
+
+    expected = {
+        "collection_name": collection_name,
+        "vector_name": vector_name,
+        "embedding_model": embedding_model,
+        "embedding_dimension": embedding_dimension,
+        "distance": "cosine",
+    }
+    mismatches = [
+        f"{key}={payload.get(key)!r} (expected {value!r})"
+        for key, value in expected.items()
+        if payload.get(key) != value
+    ]
+    if mismatches:
+        raise RetrievalError(
+            "Dense index manifest does not match the current model/config; "
+            f"re-index the collection. Mismatches: {'; '.join(mismatches)}"
+        )
+
+
+def _scroll_document_point_ids(
+    client: QdrantClient,
+    collection_name: str,
+    document_id: str,
+) -> set[str]:
+    """Collect existing point IDs for one document before replacement."""
+
+    point_ids: set[str] = set()
+    offset: Any = None
+    while True:
+        points, offset = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=_document_filter(document_id),
+            limit=256,
+            offset=offset,
+            with_payload=False,
+            with_vectors=False,
+        )
+        point_ids.update(str(point.id) for point in points)
+        if offset is None:
+            return point_ids
 
 
 def dense_search(

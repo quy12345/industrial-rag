@@ -19,6 +19,7 @@ data/raw/*
 !data/raw/.gitkeep
 data/eval/*
 !data/eval/.gitkeep
+!data/eval/dense_smoke.jsonl
 artifacts/metrics/*
 !artifacts/metrics/.gitkeep
 artifacts/figures/*

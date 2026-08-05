@@ -52,10 +52,21 @@ def test_input_validation_errors(tmp_path: Path) -> None:
         ingestion.validate_input_path(unsupported)
 
 
-def test_chunk_id_uses_page_or_unknown() -> None:
-    assert ingestion.build_chunk_id("manual-id", [19, 18], 3) == "manual-id_p18_c0003"
-    assert ingestion.build_chunk_id("manual-id", [], 3) == "manual-id_punknown_c0003"
-    assert ingestion.build_chunk_id("manual-id", [18], 4) != "manual-id_p18_c0003"
+def test_chunk_id_is_content_stable_and_duplicate_safe() -> None:
+    first = ingestion.build_chunk_id("manual-id", [19, 18], ["Safety"], "Disconnect power", 0)
+
+    assert first == ingestion.build_chunk_id(
+        "manual-id", [18, 19], ["Safety"], "Disconnect power", 0
+    )
+    assert first != ingestion.build_chunk_id(
+        "manual-id", [18, 19], ["Safety"], "Disconnect power first", 0
+    )
+    assert first != ingestion.build_chunk_id(
+        "manual-id", [18, 19], ["Safety"], "Disconnect power", 1
+    )
+    assert ingestion.build_chunk_id("manual-id", [], [], "Unknown page", 0).startswith(
+        "manual-id_punknown_h"
+    )
 
 
 @pytest.mark.parametrize(
@@ -215,7 +226,7 @@ def test_ingest_document_normalizes_docling_metadata(
     assert chunks[0].page_numbers == [2, 4]
     assert chunks[0].headings == ["Safety", "Electrical"]
     assert chunks[0].content_type == "table"
-    assert chunks[0].chunk_id.endswith("_p2_c0000")
+    assert chunks[0].chunk_id.startswith(f"{chunks[0].document_id}_p2_h")
     assert chunks[0].metadata["character_count"] == len(chunks[0].text)
 
 
@@ -252,11 +263,7 @@ def test_pdf_batches_are_forwarded_and_chunk_indices_are_global(
     assert [chunk.metadata["chunk_index"] for chunk in chunks] == [0, 1, 2]
     assert len({chunk.document_id for chunk in chunks}) == 1
     assert len({chunk.chunk_id for chunk in chunks}) == len(chunks)
-    assert [chunk.chunk_id.rsplit("_", maxsplit=1)[-1] for chunk in chunks] == [
-        "c0000",
-        "c0001",
-        "c0002",
-    ]
+    assert len({chunk.chunk_id for chunk in chunks}) == 3
 
 
 def test_pdf_page_range_must_not_exceed_page_count(

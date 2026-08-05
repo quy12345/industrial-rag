@@ -17,6 +17,8 @@ from app.retrieval import (
     dense_search,
     ensure_dense_collection,
     index_chunks,
+    validate_index_manifest,
+    write_index_manifest,
 )
 
 COLLECTION = "test_chunks"
@@ -43,6 +45,16 @@ class FakeEmbeddingModel:
         if "voltage" in normalized or "điện áp" in normalized:
             return [0.0, 0.0, 1.0]
         return [0.1, 0.1, 0.1]
+
+
+class FailingEmbeddingModel(FakeEmbeddingModel):
+    """Fail only when embedding document passages, after dimension probing."""
+
+    def passage_embed(self, texts):
+        texts = list(texts)
+        if texts == ["dimension probe"]:
+            return iter([[0.1, 0.1, 0.1]])
+        raise RuntimeError("embedding failed")
 
 
 def make_chunk(
@@ -211,6 +223,48 @@ def test_indexing_rejects_empty_chunks() -> None:
         _index(QdrantClient(":memory:"), FakeEmbeddingModel(), [])
 
 
+def test_embedding_failure_does_not_delete_existing_points() -> None:
+    client = QdrantClient(":memory:")
+    original_chunks = [make_chunk("a-1", "Sensor monitoring"), make_chunk("a-2", "Voltage limits")]
+    _index(client, FakeEmbeddingModel(), original_chunks)
+
+    with pytest.raises(RetrievalError, match="Failed to embed document chunks"):
+        _index(client, FailingEmbeddingModel(), [make_chunk("a-new", "New chunk")])
+
+    assert client.count(COLLECTION).count == 2
+
+
+def test_upsert_failure_does_not_delete_existing_points(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = QdrantClient(":memory:")
+    original_chunks = [make_chunk("a-1", "Sensor monitoring"), make_chunk("a-2", "Voltage limits")]
+    _index(client, FakeEmbeddingModel(), original_chunks)
+    original_upsert = client.upsert
+    calls = 0
+
+    def fail_on_second_upsert(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("upsert failed")
+        return original_upsert(*args, **kwargs)
+
+    monkeypatch.setattr(client, "upsert", fail_on_second_upsert)
+    with pytest.raises(RetrievalError, match="Failed to update Qdrant collection"):
+        _index(
+            client,
+            FakeEmbeddingModel(),
+            [
+                make_chunk("new-1", "Sensor one"),
+                make_chunk("new-2", "Sensor two"),
+                make_chunk("new-3", "Sensor three"),
+            ],
+        )
+
+    points, _ = client.scroll(COLLECTION, limit=10, with_payload=True)
+    chunk_ids = {point.payload["chunk_id"] for point in points}
+    assert {"a-1", "a-2"}.issubset(chunk_ids)
+
+
 def test_dense_search_returns_ranked_payload_and_respects_limit() -> None:
     client = QdrantClient(":memory:")
     model = FakeEmbeddingModel()
@@ -281,6 +335,34 @@ def test_dense_search_rejects_incomplete_payload() -> None:
 
     with pytest.raises(RetrievalError, match="Invalid payload"):
         _search(client, FakeEmbeddingModel(), "sensor", limit=1)
+
+
+def test_index_manifest_round_trip_and_mismatch(tmp_path) -> None:
+    manifest = tmp_path / "dense-index-manifest.json"
+    write_index_manifest(
+        manifest,
+        collection_name=COLLECTION,
+        vector_name=VECTOR_NAME,
+        embedding_model="model-a",
+        embedding_dimension=3,
+        ingestion_profile={"chunker": "hierarchical"},
+    )
+
+    validate_index_manifest(
+        manifest,
+        collection_name=COLLECTION,
+        vector_name=VECTOR_NAME,
+        embedding_model="model-a",
+        embedding_dimension=3,
+    )
+    with pytest.raises(RetrievalError, match="re-index"):
+        validate_index_manifest(
+            manifest,
+            collection_name=COLLECTION,
+            vector_name=VECTOR_NAME,
+            embedding_model="model-b",
+            embedding_dimension=3,
+        )
 
 
 def _index(

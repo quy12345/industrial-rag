@@ -1,0 +1,13 @@
+{"id":"smoke_001","question":"Thuật toán nào được dùng để phát hiện bất thường?","expected_pages":[1,2],"expected_phrases":["Mahalanobis Distance"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_002","question":"ODA-MD thực hiện phát hiện bất thường ở đâu trong mạng?","expected_pages":[2],"expected_phrases":["Cluster-Head"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_003","question":"What sensor attributes are used by the algorithm?","expected_pages":[2],"expected_phrases":["Nhiệt độ"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_004","question":"Bộ dữ liệu nào được sử dụng trong thử nghiệm?","expected_pages":[12],"expected_phrases":["Intel Berkeley Research Lab Sensor Data"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_005","question":"Thuật toán sử dụng khoảng cách thống kê nào?","expected_pages":[4],"expected_phrases":["Mahalanobis Distance"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_006","question":"Các thuộc tính cảm biến gồm những gì?","expected_pages":[2],"expected_phrases":["độ ẩm"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_007","question":"ODA-MD có cần trao đổi giữa các nút láng giềng không?","expected_pages":[2],"expected_phrases":["không yêu cầu trao đổi thông tin"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_008","question":"Kích thước Sliding Window trong giai đoạn sliding là bao nhiêu?","expected_pages":[11],"expected_phrases":["giữ kích thước = 20"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_009","question":"What threshold is used for Mahalanobis distance outlier detection?","expected_pages":[11],"expected_phrases":["3 . 338"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_010","question":"ODA-MD đạt Detection Accuracy bao nhiêu phần trăm?","expected_pages":[16],"expected_phrases":["99.49%"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_011","question":"Which baseline algorithm is used for comparison?","expected_pages":[13],"expected_phrases":["Fixed-Width Clustering"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_012","question":"Persistent faults affect ODA-MD detection in what way?","expected_pages":[17],"expected_phrases":["Persistent Faults"],"document_id":"manual-77d5dae4c2c5"}
+{"id":"smoke_013","question":"Những node nào được chọn trong tập con dữ liệu mô phỏng?","expected_pages":[12],"expected_phrases":["36 , 37 , 38"],"document_id":"manual-77d5dae4c2c5"}
