@@ -199,11 +199,11 @@ docker compose --profile tools run --rm ingestion `
 Phase 4.1 baked-image validation passed for the API target: Python 3.11.15, qdrant-client 1.19.0,
 FastEmbed 0.8.0, no importable Docling, an empty pre-runtime model-cache directory, `/health`, and
 API-to-Qdrant checks for both 99-point collections. `docker image ls` measured the API at 544 MB and
-the prior ingestion image at 9.57 GB. A fresh ingestion rebuild was started with plain progress but
-was still downloading Docling transitive wheels from the package registry at closure time; do not
-claim its new baked-source validation passes until that command finishes. The existing ingestion image
-was used only with an explicit source mount for real integration evaluation, which is not baked-image
-evidence.
+the prior ingestion image at 9.57 GB. The fresh ingestion rebuild was deliberately cancelled while
+downloading the 526.6 MB `torch` wheel after a prolonged external package-registry transfer. Do not
+claim its new baked-source validation passes until a future build completes. The existing ingestion
+image was used only with an explicit source mount for real integration evaluation, which is not
+baked-image evidence.
 
 For live reload during development, add the override file:
 

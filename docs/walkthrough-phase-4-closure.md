@@ -113,11 +113,11 @@ runtime; downloading is deferred to the shared cache volume. The API target pass
 checks with Python 3.11.15, client 1.19.0, FastEmbed 0.8.0, no Docling, health, and a real Qdrant
 connection. `docker image ls` measured it at 544 MB (the prior ingestion image is 9.57 GB).
 
-The fresh ingestion target build was started with the command above and reached Dockerfile step 12
-(`pip install ".[retrieval,ingestion]"`), but remained downloading Docling transitive wheels from the
-package registry at closure time. It is an external build-time deviation, not a source/test failure.
-Do not count it as baked-image PASS, and rerun the exact command before claiming Phase 4.1 fully
-complete.
+The fresh ingestion target build reached Dockerfile step 12 (`pip install ".[retrieval,ingestion]"`)
+and began downloading the 526.6 MB `torch-2.13.0` wheel. It was deliberately cancelled with the
+Docker CLI only because the external package-registry transfer was too slow. This is not a source/test
+failure, and it did not delete images, cache, containers, volumes, or Qdrant collections. Do not count
+ingestion as baked-image PASS; rerun the exact command before claiming Phase 4.1 Docker closure.
 
 ## Phase 5 handoff artifact
 

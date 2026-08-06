@@ -55,7 +55,7 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 3A.1 | Hoàn thành | Stable chunk IDs, safe re-index, manifest và smoke evaluation |
 | Phase 3A.2 | Hoàn thành | Direct-evidence evaluation, 30-query development set, dependency split, Docker stabilization và real Docker/Qdrant validation |
 | Phase 4 | Closed; critical gate partial | Sparse BM25 vectors, collection v2, client-side RRF, strategy evaluator, real benchmark; sparse is currently stronger than hybrid, and 2/3 critical intents miss hybrid top 5 |
-| Phase 4.1 | Implementation complete; ingestion Docker closure pending | Canonical Qdrant client 1.19.x, frozen candidate-pool audit, Phase 5 readiness artifact, API baked-image validation và documented external Docker deviation |
+| Phase 4.1 | Implementation complete; ingestion Docker closure cancelled | Canonical Qdrant client 1.19.x, frozen candidate-pool audit, Phase 5 readiness artifact, API baked-image validation và documented external Docker deviation |
 | Phase 5 | Sẵn sàng bắt đầu có điều kiện | Multilingual cross-encoder reranking để xử lý critical top-5 misses mà không thay qrels/chunks |
 | Phase 3B | Tạm hoãn | Query API, LangChain, OpenAI, citations và abstention |
 | Phase 6 | Chưa bắt đầu | End-to-end evaluation và production hardening |
@@ -510,7 +510,8 @@ reranker candidate pool: 20
 
 > Closure audit on 2026-08-06. The frozen 99 chunks and historic baselines remain immutable. This
 > phase added no reranker, model, qrel, chunking, or collection-schema change. API baked-image
-> validation passed; the fresh ingestion target build remains pending a slow package-registry download.
+> validation passed; the fresh ingestion target build was cancelled during a slow package-registry
+> download and must be rerun before full Docker closure.
 
 ### Closure decisions
 
