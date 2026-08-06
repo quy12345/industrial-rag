@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from app.models import DocumentChunk
 
 EvaluationLanguage = Literal["vi", "en"]
+DocumentLanguage = Literal["vi", "en"]
+RetrievalScenario = Literal["monolingual", "cross_lingual"]
 EvaluationCategory = Literal[
     "exact_technical_term",
     "semantic_paraphrase",
@@ -45,6 +47,8 @@ class EvaluationCase(BaseModel):
     category: EvaluationCategory
     critical: bool = False
     document_id: str = "manual-77d5dae4c2c5"
+    document_language: DocumentLanguage = "vi"
+    retrieval_scenario: RetrievalScenario | None = None
     notes: str | None = None
 
     @field_validator("id", "question", "document_id")
@@ -77,6 +81,18 @@ class EvaluationCase(BaseModel):
         if any(value <= 0 for value in values):
             raise ValueError("must contain only positive page numbers")
         return sorted(set(values))
+
+    def model_post_init(self, __context: Any) -> None:
+        """Derive the scenario from query and evidence languages when omitted."""
+
+        expected = "monolingual" if self.language == self.document_language else "cross_lingual"
+        if self.retrieval_scenario is None:
+            self.retrieval_scenario = expected
+        elif self.retrieval_scenario != expected:
+            raise ValueError(
+                "retrieval_scenario must match language/document_language "
+                f"({self.language!r} -> {self.document_language!r})"
+            )
 
 
 class RetrievedLike(Protocol):
@@ -139,9 +155,7 @@ def load_frozen_chunks(path: Path) -> list[DocumentChunk]:
         try:
             chunk = DocumentChunk.model_validate_json(line)
         except ValidationError as exc:
-            raise EvaluationError(
-                f"Invalid frozen chunk on line {line_number}: {exc}"
-            ) from exc
+            raise EvaluationError(f"Invalid frozen chunk on line {line_number}: {exc}") from exc
         if chunk.chunk_id in seen_ids:
             raise EvaluationError(f"Duplicate chunk ID on line {line_number}: {chunk.chunk_id}")
         seen_ids.add(chunk.chunk_id)
@@ -198,9 +212,7 @@ def chunk_set_metadata(chunks: Iterable[DocumentChunk]) -> dict[str, Any]:
     return {
         "chunk_count": len(chunk_list),
         "document_ids": document_ids,
-        "chunk_ids_sha256": hashlib.sha256(
-            "\n".join(chunk_ids).encode("utf-8")
-        ).hexdigest(),
+        "chunk_ids_sha256": hashlib.sha256("\n".join(chunk_ids).encode("utf-8")).hexdigest(),
     }
 
 
@@ -276,6 +288,8 @@ def evaluate_cases(
             {
                 "id": case.id,
                 "language": case.language,
+                "document_language": case.document_language,
+                "retrieval_scenario": case.retrieval_scenario,
                 "category": case.category,
                 "critical": case.critical,
                 "question": case.question,
@@ -287,8 +301,7 @@ def evaluate_cases(
                 "diagnostic_page_rank": page_rank,
                 "latency_ms": latency_ms,
                 "retrieved": [
-                    _result_summary(result, rank)
-                    for rank, result in enumerate(results, start=1)
+                    _result_summary(result, rank) for rank, result in enumerate(results, start=1)
                 ],
             }
         )
@@ -297,8 +310,14 @@ def evaluate_cases(
         "candidate_limit": candidate_limit,
         "overall": aggregate_rows(rows, candidate_limit=candidate_limit),
         "per_language": _aggregate_groups(rows, "language", candidate_limit),
+        "per_retrieval_scenario": _aggregate_groups(rows, "retrieval_scenario", candidate_limit),
         "per_category": _aggregate_groups(rows, "category", candidate_limit),
         "critical_questions": [row for row in rows if row["critical"]],
+        "critical_metrics": aggregate_rows(
+            [row for row in rows if row["critical"]], candidate_limit=candidate_limit
+        )
+        if any(row["critical"] for row in rows)
+        else None,
         "failure_cases": [
             row
             for row in rows
@@ -320,6 +339,8 @@ def aggregate_rows(rows: Sequence[dict[str, Any]], *, candidate_limit: int) -> d
         "hit_rate_at_1": _hit_rate(ranks, 1),
         "hit_rate_at_3": _hit_rate(ranks, 3),
         "hit_rate_at_5": _hit_rate(ranks, 5),
+        "hit_rate_at_candidate_limit": _hit_rate(ranks, candidate_limit),
+        "candidate_recall_at_candidate_limit": _hit_rate(ranks, candidate_limit),
         "mrr_at_5": _mrr(ranks, 5),
         "mrr_at_candidate_limit": _mrr(ranks, candidate_limit),
         "average_latency_ms": sum(latencies) / len(latencies),

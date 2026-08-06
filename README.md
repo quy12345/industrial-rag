@@ -2,14 +2,15 @@
 
 ## Status
 
-**Phase 3A.2 — Dense Baseline Closure and Docker Stabilization**
+**Phase 4 — Hybrid Retrieval with Dense + BM25 Sparse + client-side RRF**
 
 The repository ingests technical PDF/DOCX documents with Docling, indexes multilingual dense
-embeddings in Qdrant, and evaluates retrieval against manually verified direct-evidence qrels.
+embeddings in Qdrant, combines dense and BM25 sparse candidates with explicit client-side RRF, and
+evaluates retrieval against manually verified direct-evidence qrels.
 The FastAPI service currently exposes only `GET /api/v1/health`.
 
-Out of scope for the current phase: sparse/hybrid retrieval, RRF, reranking, LangChain, OpenAI,
-answer generation, citations, abstention, and a query endpoint.
+Out of scope for the current phase: cross-encoder reranking, LangChain, OpenAI, answer generation,
+citations, abstention, and a query endpoint.
 
 ## Requirements and installation
 
@@ -26,7 +27,7 @@ python -m pytest
 
 Extras are separated by responsibility:
 
-- `.[retrieval]`: Qdrant client, FastEmbed and dense search.
+- `.[retrieval]`: Qdrant client, FastEmbed, dense retrieval, sparse BM25, and RRF.
 - `.[ingestion]`: Docling document parsing.
 - `.[dev]`: test/lint tooling plus retrieval and ingestion dependencies, so the complete unit suite runs.
 
@@ -61,7 +62,7 @@ python scripts/search_dense.py `
 
 Dense cosine scores are ranking signals, not probabilities.
 
-## Dense retrieval development evaluation
+## Retrieval development evaluation
 
 `data/eval/dense_smoke.jsonl` is a **30-query retrieval development set**, with 15 Vietnamese and
 15 English factual queries. It is not the held-out final evaluation set planned for Phase 6.
@@ -70,17 +71,21 @@ Every item has stable `relevant_chunk_ids`. Direct retrieval hits, Hit@k, and MR
 IDs. Expected phrases are validated against the relevant frozen chunks; pages are diagnostics only,
 so a same-page unrelated chunk never counts as a hit.
 
-Run the baseline after Qdrant contains exactly the frozen chunk IDs:
+The evaluator supports the same qrels and chunk set for all strategies. English queries are reported
+as **cross-lingual** (`en` query → `vi` evidence); Vietnamese queries are monolingual.
+
+Run the immutable dense metric closure after Qdrant contains exactly the frozen chunk IDs:
 
 ```powershell
-python scripts/evaluate.py `
+python scripts/evaluate.py --strategy dense `
   --chunks artifacts/manual-batched.jsonl `
   --limit 20 `
-  --output artifacts/metrics/dense-baseline.json
+  --output artifacts/metrics/dense-baseline-closure.json
 ```
 
 The JSON artifact is the source of truth. It records the chunk-set hash, dataset hash, model/index
-contract, direct-evidence rank per query, Hit@1/3/5, MRR@5, MRR@20, per-language/category metrics,
+contract, direct-evidence rank per query, Hit@1/3/5/20, Candidate Recall@20, MRR@5, MRR@20,
+per-language/scenario/category metrics,
 critical-query diagnostics, failure cases, and warm-query average/p50/p95 latency. Primary latency
 includes query embedding and Qdrant round trip but excludes model initialization, model download,
 and one warmup query.
@@ -89,7 +94,60 @@ Old page-or-phrase smoke metrics are not directly comparable with this direct-ev
 
 Verified 2026-08-05 baseline on the frozen 99 chunks: Hit@1 `0.167`, Hit@3 `0.367`, Hit@5 `0.400`,
 MRR@5 `0.269`, MRR@20 `0.298`, p50 latency `15.14 ms`, p95 latency `37.77 ms`, and 18 failure
-cases. See `docs/walkthrough-phase-3a2.md` for the command sequence and interpretation.
+cases. The immutable `dense-baseline.json` is not overwritten; this additive closure recorded
+Hit@20 `0.767`, p50 `25.69 ms`, and p95 `35.40 ms` on 2026-08-06.
+
+## Hybrid BM25 + RRF retrieval
+
+Dense collection v1, `industrial_manual_chunks`, remains intact for the dense baseline. Hybrid data
+uses the independent `industrial_manual_chunks_v2` collection: named `dense` (384-d cosine) and
+named `sparse` (Qdrant IDF modifier). Each point keeps the same deterministic UUIDv5 and
+citation-ready payload as v1. `document_id` has a keyword payload index.
+
+BM25 uses FastEmbed 0.8.0 `Qdrant/bm25` with `disable_stemmer=True`, `k=1.2`, `b=0.75`, and the
+exact FastEmbed BM25 preprocessing/tokenizer result computed from the frozen 99 chunks:
+`avg_len=72.838384`. It does not use English stopword removal/stemming for the Vietnamese corpus.
+The independent manifest is `artifacts/metrics/hybrid-index-manifest.json`; hybrid search refuses
+to run if its schema, models, sparse IDF configuration, chunk hash, or RRF configuration mismatch.
+
+Index v2 only after ingestion reproduces the frozen set:
+
+```powershell
+python -m scripts.index_hybrid data/raw/manual.pdf --page-batch-size 4
+python -m scripts.index_hybrid data/raw/manual.pdf --page-batch-size 4
+```
+
+Search with 20 dense candidates, 20 sparse candidates, RRF `k=60`, and bounded output. Ranks are
+one-based. RRF is `sum(1 / (k + rank))`; raw cosine and BM25 scores are never added together and
+all scores are ranking signals, not probabilities.
+
+```powershell
+python -m scripts.search_hybrid "Thuật toán ODA-MD có mục tiêu gì?" `
+  --document-id manual-77d5dae4c2c5 --limit 5
+```
+
+```powershell
+python -m scripts.evaluate --strategy sparse --limit 20
+python -m scripts.evaluate --strategy hybrid --limit 20
+```
+
+The 2026-08-06 Python 3.11 container run measured the following development-set results:
+
+| Metric | Dense | Sparse | Hybrid | Hybrid − Dense |
+|---|---:|---:|---:|---:|
+| Hit@1 | 0.167 | 0.333 | 0.267 | +0.100 |
+| Hit@3 | 0.367 | 0.500 | 0.400 | +0.033 |
+| Hit@5 | 0.400 | 0.633 | 0.533 | +0.133 |
+| Hit@20 | 0.767 | 0.867 | 0.867 | +0.100 |
+| MRR@5 | 0.269 | 0.441 | 0.365 | +0.096 |
+| MRR@20 | 0.298 | 0.469 | 0.398 | +0.100 |
+| p50 latency | 25.69 ms | 2.16 ms | 19.14 ms | -6.55 ms |
+| p95 latency | 35.40 ms | 2.78 ms | 26.16 ms | -9.24 ms |
+
+Hybrid clears the Hit@5, MRR@20, Hit@20, and p95 targets, but only one of the three bilingual
+critical intents has direct evidence in top 5. See `docs/walkthrough-phase-4.md` for per-language,
+scenario, critical, and failure diagnostics. This remains a retrieval-development set, not Phase 6
+final evaluation.
 
 ## Docker
 
@@ -129,5 +187,7 @@ preserved.
   metrics across different chunk sets.
 - Multi-page tables can be split at batch boundaries.
 - Docling remains a heavy, on-demand ingestion dependency.
-- Dense retrieval quality is frozen as a baseline; Phase 4 will address candidate quality with
-  hybrid retrieval, not with hidden changes to this development set.
+- Dense retrieval remains frozen as the Phase 3A.2 baseline; Phase 4 improves candidates through
+  a separate sparse/RRF collection rather than hidden changes to this development set.
+- Hybrid retrieval improves the development-set aggregate, but two critical bilingual intents still
+  miss top 5; Phase 5 reranking must be evaluated against the same frozen qrels.

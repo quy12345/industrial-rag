@@ -19,6 +19,7 @@ from app.evaluation import (
     validate_cases_against_chunks,
 )
 from app.models import DocumentChunk
+from scripts import evaluate as evaluate_cli
 
 
 def _case(**overrides: object) -> EvaluationCase:
@@ -111,6 +112,13 @@ def test_schema_rejects_empty_qrels_and_unsupported_language_or_category() -> No
         _case(category="invented")
 
 
+def test_schema_derives_cross_lingual_scenario_and_rejects_inconsistent_metadata() -> None:
+    assert _case(language="en").retrieval_scenario == "cross_lingual"
+    assert _case(language="vi").retrieval_scenario == "monolingual"
+    with pytest.raises(ValueError, match="retrieval_scenario"):
+        _case(language="en", retrieval_scenario="monolingual")
+
+
 def test_qrel_validation_requires_existing_direct_evidence_phrase_and_page() -> None:
     case = _case()
     validate_cases_against_chunks([case], [_chunk()])
@@ -169,12 +177,17 @@ def test_evaluator_calculates_hit_mrr_group_metrics_and_failure_diagnostics() ->
     assert report["overall"]["hit_rate_at_1"] == pytest.approx(1 / 3)
     assert report["overall"]["hit_rate_at_3"] == pytest.approx(2 / 3)
     assert report["overall"]["hit_rate_at_5"] == pytest.approx(2 / 3)
+    assert report["overall"]["hit_rate_at_candidate_limit"] == pytest.approx(2 / 3)
+    assert report["overall"]["candidate_recall_at_candidate_limit"] == pytest.approx(2 / 3)
     assert report["overall"]["mrr_at_5"] == pytest.approx((1 + 1 / 3) / 3)
     assert report["overall"]["mrr_at_candidate_limit"] == pytest.approx((1 + 1 / 3) / 3)
     assert report["per_language"]["vi"]["query_count"] == 1
     assert report["per_language"]["en"]["query_count"] == 2
+    assert report["per_retrieval_scenario"]["cross_lingual"]["query_count"] == 2
+    assert report["per_retrieval_scenario"]["monolingual"]["query_count"] == 1
     assert [row["id"] for row in report["failure_cases"]] == ["miss"]
     assert report["critical_questions"][0]["direct_evidence_rank"] is None
+    assert report["critical_metrics"]["hit_rate_at_5"] == 0.0
 
 
 def test_percentiles_use_nearest_rank_and_reject_invalid_inputs() -> None:
@@ -189,3 +202,11 @@ def test_percentiles_use_nearest_rank_and_reject_invalid_inputs() -> None:
 def test_evaluator_requires_at_least_five_candidates() -> None:
     with pytest.raises(EvaluationError, match="at least 5"):
         evaluate_cases([_case()], lambda question, limit, document_id: [], candidate_limit=4)
+
+
+@pytest.mark.parametrize("strategy", ["dense", "sparse", "hybrid"])
+def test_evaluation_cli_accepts_all_comparable_retrieval_strategies(strategy: str) -> None:
+    args = evaluate_cli._build_parser().parse_args(["--strategy", strategy, "--limit", "20"])
+
+    assert args.strategy == strategy
+    assert args.limit == 20
