@@ -6,7 +6,9 @@
 > checked queries (15 VI / 15 EN) against the 99-chunk batch-4 artifact with fingerprint
 > `bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be`.
 >
-> Final static validation: Ruff PASS and pytest PASS — 70 tests. Real Docker/Qdrant validation used
+> Phase 4 static snapshot: Ruff PASS and pytest PASS — 70 tests. Phase 4.1 closure adds offline
+> candidate-pool coverage tests; the latest static validation is Ruff PASS and pytest PASS — 74 tests.
+> Real Docker/Qdrant validation used
 > Python 3.11.15 in the ingestion container: v1 remained at 99 dense points; v2 indexed and
 > re-indexed 99 dense+sparse points. Sparse BM25 is the strongest measured strategy on this set
 > (Hit@5 `0.633`, MRR@20 `0.469`); hybrid RRF improves on dense but trails sparse (Hit@5 `0.533`,
@@ -52,7 +54,8 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 3A | Hoàn thành | Dense embedding, Qdrant indexing và dense search |
 | Phase 3A.1 | Hoàn thành | Stable chunk IDs, safe re-index, manifest và smoke evaluation |
 | Phase 3A.2 | Hoàn thành | Direct-evidence evaluation, 30-query development set, dependency split, Docker stabilization và real Docker/Qdrant validation |
-| Phase 4 | Implementation complete; quality gate partial | Sparse BM25 vectors, collection v2, client-side RRF, strategy evaluator, real benchmark; sparse is currently stronger than hybrid, and 2/3 critical intents miss hybrid top 5 |
+| Phase 4 | Closed; critical gate partial | Sparse BM25 vectors, collection v2, client-side RRF, strategy evaluator, real benchmark; sparse is currently stronger than hybrid, and 2/3 critical intents miss hybrid top 5 |
+| Phase 4.1 | Implementation complete; ingestion Docker closure pending | Canonical Qdrant client 1.19.x, frozen candidate-pool audit, Phase 5 readiness artifact, API baked-image validation và documented external Docker deviation |
 | Phase 5 | Sẵn sàng bắt đầu có điều kiện | Multilingual cross-encoder reranking để xử lý critical top-5 misses mà không thay qrels/chunks |
 | Phase 3B | Tạm hoãn | Query API, LangChain, OpenAI, citations và abstention |
 | Phase 6 | Chưa bắt đầu | End-to-end evaluation và production hardening |
@@ -60,7 +63,7 @@ benchmark, debug và giải thích rõ từng bước.
 Thứ tự triển khai đã chốt:
 
 ```text
-Phase 3A.2 → Phase 4 → Phase 5 → Phase 3B → Phase 6
+Phase 3A.2 → Phase 4 → Phase 4.1 closure → Phase 5 → Phase 3B → Phase 6
 ```
 
 Phase 3B giữ tên theo roadmap lịch sử nhưng được triển khai sau Phase 4–5, vì retrieval phải
@@ -502,6 +505,50 @@ reranker candidate pool: 20
   host `.venv` remains Python 3.13.5. The next allowed improvement is Phase 5 reranking.
 
 ---
+
+## Phase 4.1 — Phase 4 closure and Phase 5 readiness
+
+> Closure audit on 2026-08-06. The frozen 99 chunks and historic baselines remain immutable. This
+> phase added no reranker, model, qrel, chunking, or collection-schema change. API baked-image
+> validation passed; the fresh ingestion target build remains pending a slow package-registry download.
+
+### Closure decisions
+
+- Canonical package contract: `qdrant-client >=1.19.0,<1.20.0`; the successful real Phase 4
+  integration used 1.19.0 with Python 3.11.15 and FastEmbed 0.8.0.
+- Qdrant server stays `qdrant/qdrant:v1.18.3`. Collection v1 remains dense 384/cosine with 99
+  points; v2 remains dense 384/cosine plus sparse/IDF with 99 points. Neither collection is
+  recreated or deleted.
+- The old dense artifact that reports client 1.18.0 remains a historical artifact. Documentation
+  distinguishes it from the canonical dependency; it is not rewritten to make historical runs look
+  different.
+
+### Candidate-pool audit
+
+The real audit uses exactly the frozen qrels and retrieves each independent 20-candidate pool before
+any reranking. Candidate recall is not Hit@k: it means at least one direct-evidence qrel is available
+to a reranker.
+
+| Pool | Candidate recall | Missing qrels | Candidate count |
+|---|---:|---|---|
+| dense top 20 | 0.767 | `005,006,014,017,018,021,029` | 20 maximum |
+| sparse top 20 | 0.867 | `008,014,017,020` | 7–20 |
+| hybrid RRF top 20 | 0.867 | `008,014,017,018` | 20 |
+| dense@20 ∪ sparse@20 | 0.933 | `014,017` | 22–34; median 28 |
+
+The recommended Phase 5 experiments are therefore `sparse_top20`, `hybrid_top20`, and
+`dense20_union_sparse20`; hybrid is not declared the default. RRF demotes sparse top-5 evidence
+outside top 5 for `dense_005`, `dense_019`, `dense_021`, and `dense_029`, while dense contributes
+evidence absent from sparse for `dense_008` and `dense_020`. Cross-lingual union coverage is 0.933
+versus 1.000 monolingual; missing `dense_014` is cross-lingual and `dense_017` is monolingual.
+
+`scripts/audit_candidate_pools.py` writes `artifacts/metrics/candidate-pool-audit.json` and
+`scripts/generate_phase5_readiness.py` writes `artifacts/metrics/phase-5-readiness.json`. Both are
+ignored runtime artifacts. The readiness status remains `ready_with_documented_deviation`: aggregate
+Phase 4 gates pass, but the bilingual critical top-5 gate remains 1/3 and Phase 5 must prove any
+reranker improvement on the unchanged development set.
+
+See `docs/walkthrough-phase-4-closure.md` for the complete command and Docker validation record.
 
 ## Phase 5 — Multilingual cross-encoder reranking
 

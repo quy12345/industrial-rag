@@ -4,13 +4,17 @@
 
 **Phase 4 — Hybrid Retrieval with Dense + BM25 Sparse + client-side RRF**
 
-The repository ingests technical PDF/DOCX documents with Docling, indexes multilingual dense
+The repository is in **Phase 4.1 — Phase 4 closure and Phase 5 readiness**. It ingests technical PDF/DOCX documents with Docling, indexes multilingual dense
 embeddings in Qdrant, combines dense and BM25 sparse candidates with explicit client-side RRF, and
 evaluates retrieval against manually verified direct-evidence qrels.
 The FastAPI service currently exposes only `GET /api/v1/health`.
 
 Out of scope for the current phase: cross-encoder reranking, LangChain, OpenAI, answer generation,
 citations, abstention, and a query endpoint.
+
+The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, FastEmbed `0.8.0`,
+and Qdrant server `v1.18.3`. The historic dense artifact that records client `1.18.0` is retained
+unchanged; it is a historic measurement, not the dependency declaration used after closure.
 
 ## Requirements and installation
 
@@ -149,6 +153,29 @@ critical intents has direct evidence in top 5. See `docs/walkthrough-phase-4.md`
 scenario, critical, and failure diagnostics. This remains a retrieval-development set, not Phase 6
 final evaluation.
 
+## Phase 5 candidate-pool handoff
+
+Candidate recall answers a different question from Hit@k: whether a reranker could see direct
+evidence at all. It is measured before any reranking over the same 30 qrels and frozen 99 chunks.
+
+```powershell
+python -m scripts.audit_candidate_pools --limit 20
+python -m scripts.generate_phase5_readiness
+```
+
+The generated JSON artifacts are ignored runtime evidence: `artifacts/metrics/candidate-pool-audit.json`
+and `artifacts/metrics/phase-5-readiness.json`. The 2026-08-06 audit found query-level candidate
+coverage of `0.767` (dense top 20), `0.867` (sparse top 20), `0.867` (hybrid RRF top 20), and
+`0.933` (unbounded dense@20 ∪ sparse@20, 22–34 unique candidates). The union misses only
+`dense_014` and `dense_017`; a reranker cannot recover those from this candidate pool.
+
+Phase 5 must benchmark all three candidate strategies, not assume hybrid is the default:
+`sparse_top20`, `hybrid_top20`, and `dense20_union_sparse20`. Sparse currently has stronger top-rank
+development metrics than RRF hybrid. Four cases (`dense_005`, `dense_019`, `dense_021`, and
+`dense_029`) have sparse top-5 direct evidence that RRF demotes outside top 5; dense adds evidence
+absent from sparse for `dense_008` and `dense_020`. See
+`docs/walkthrough-phase-4-closure.md` for the full diagnosis and reproducible checks.
+
 ## Docker
 
 The default Compose file is production-like: source is not bind-mounted and API reload is off.
@@ -156,18 +183,27 @@ It contains Qdrant, the API runtime, and an on-demand `ingestion` service in the
 Qdrant is pinned to `qdrant/qdrant:v1.18.3` and its named volume is persistent.
 
 ```powershell
-docker compose build api
+docker compose --progress plain build api
 docker compose up -d qdrant api
 ```
 
 The API image installs `.[retrieval]` but not Docling. Build and run ingestion only when needed:
 
 ```powershell
-docker compose --profile tools build ingestion
+docker compose --progress plain --profile tools build ingestion
 docker compose --profile tools run --rm ingestion `
   python scripts/index_document.py /data/raw/manual.pdf `
   --page-start 1 --page-end 21 --page-batch-size 4
 ```
+
+Phase 4.1 baked-image validation passed for the API target: Python 3.11.15, qdrant-client 1.19.0,
+FastEmbed 0.8.0, no importable Docling, an empty pre-runtime model-cache directory, `/health`, and
+API-to-Qdrant checks for both 99-point collections. `docker image ls` measured the API at 544 MB and
+the prior ingestion image at 9.57 GB. A fresh ingestion rebuild was started with plain progress but
+was still downloading Docling transitive wheels from the package registry at closure time; do not
+claim its new baked-source validation passes until that command finishes. The existing ingestion image
+was used only with an explicit source mount for real integration evaluation, which is not baked-image
+evidence.
 
 For live reload during development, add the override file:
 

@@ -25,9 +25,15 @@ phases.
   schema/manifest validation, safe dual-vector indexing, sparse search, and deterministic RRF.
 - `app/evaluation.py`: dependency-free typed qrels, frozen-chunk validation, direct-evidence ranks,
   retrieval metrics, group metrics, and latency percentiles.
+- `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
+  diagnostics, and RRF-demotion aggregation for the Phase 5 handoff.
 - `scripts/index_document.py`, `scripts/search_dense.py`: v1 dense integration CLIs.
 - `scripts/index_hybrid.py`, `scripts/search_hybrid.py`, `scripts/evaluate.py`: v2 indexing/search
   and shared dense/sparse/hybrid evaluation CLIs.
+- `scripts/audit_candidate_pools.py`: explicit real-model/Qdrant audit for dense@20, sparse@20,
+  hybrid@20, and dense@20 ∪ sparse@20; not part of default pytest.
+- `scripts/generate_phase5_readiness.py`: validates the frozen contract and writes the Phase 5 JSON
+  handoff from measured artifacts and live collection metadata.
 
 ## Dense-index contract
 
@@ -73,6 +79,10 @@ per-language, and per-retrieval-scenario (`vi -> vi` monolingual; `en -> vi` cro
 - `ingestion` extra: Docling.
 - `dev` extra: complete local test/lint dependencies.
 
+The canonical post-closure retrieval dependency is `qdrant-client >=1.19.0,<1.20.0`. It was the
+client used by the successful Phase 4 Python 3.11 integration; Qdrant server remains pinned to
+`v1.18.3`. Historic metrics artifacts are immutable even where older runtime metadata says `1.18.0`.
+
 `Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. Compose starts
 only API/Qdrant by default; ingestion is profile-gated. The shared `fastembed_cache` volume avoids
 downloading the same model separately for API and ingestion.
@@ -87,4 +97,6 @@ Default pytest uses fake embeddings and in-memory Qdrant. It must not download m
 connect to a real Qdrant server, or require an API key. The real manual/index/evaluator flow is an
 explicit integration smoke command documented in the README. Phase 4 adds offline tests for sparse
 schema/IDF, safe re-indexing, document filters, metadata preservation, manifest mismatches, and RRF
-duplicate/tie/empty-list behavior.
+duplicate/tie/empty-list behavior. Phase 4.1 adds offline candidate-pool tests for deterministic
+rank/score preservation, union de-duplication, qrel-only candidate recall, scenario aggregation,
+critical rows, and RRF-demotion diagnostics.

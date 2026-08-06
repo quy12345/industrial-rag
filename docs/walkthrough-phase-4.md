@@ -148,8 +148,11 @@ monolingual and cross-lingual questions; BM25 alone performs well on exact Vietn
 terms, while cross-lingual candidate recall remains lower (0.800 vs 0.933). Do not tune qrels,
 chunks, or the dense model to change this report.
 
-Phase 5 may now add multilingual cross-encoder reranking over the frozen hybrid candidate pool. It
+Phase 5 may add multilingual cross-encoder reranking only over frozen, audited candidate pools. It
 must keep this same dataset, collection v2 contract, direct-evidence evaluation, and failure rows.
+Phase 4.1 measured candidate recall of 0.867 for both sparse and hybrid top 20, and 0.933 for the
+unbounded dense@20 ∪ sparse@20 pool. Sparse is not replaced as the candidate baseline: Phase 5 must
+benchmark sparse top 20, hybrid top 20, and the union. See `docs/walkthrough-phase-4-closure.md`.
 
 ## Validation record
 
@@ -163,7 +166,6 @@ hybrid CLI smoke                    PASS
 ```
 
 The host `.venv` remains Python 3.13.5. Python 3.11 validation was performed in Docker because the
-Windows `py` launcher was unavailable. A normal Docker API rebuild was attempted but BuildKit did
-not emit progress and exceeded the command timeout; integration commands bind-mounted the Phase 4
-source into the already-built Python 3.11 ingestion image. No Docker prune or Qdrant-volume deletion
-was performed.
+Windows `py` launcher was unavailable. Phase 4.1 closes the API build-source gap with explicit plain
+progress and baked-image checks. Its ingestion rebuild is separately pending a slow registry download;
+no Docker prune or Qdrant-volume deletion is performed.
