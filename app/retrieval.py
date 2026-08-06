@@ -39,7 +39,7 @@ def build_point_id(chunk_id: str) -> str:
     return str(uuid5(POINT_NAMESPACE, chunk_id))
 
 
-def create_embedding_model(model_name: str) -> Any:
+def create_embedding_model(model_name: str, cache_dir: str | None = None) -> Any:
     """Validate and initialize a supported FastEmbed text model."""
 
     from fastembed import TextEmbedding
@@ -55,7 +55,7 @@ def create_embedding_model(model_name: str) -> Any:
         )
 
     try:
-        return TextEmbedding(model_name=model_name)
+        return TextEmbedding(model_name=model_name, cache_dir=cache_dir)
     except Exception as exc:
         raise RetrievalError(f"Failed to initialize embedding model {model_name}: {exc}") from exc
 
@@ -172,6 +172,44 @@ def validate_dense_collection(
         raise RetrievalError(
             f"Collection {collection_name} vector {vector_name} must use cosine distance."
         )
+
+
+def get_indexed_chunk_ids(
+    client: QdrantClient,
+    *,
+    collection_name: str,
+    document_id: str,
+) -> set[str]:
+    """Return payload chunk IDs for one indexed document without reading vectors."""
+
+    chunk_ids: set[str] = set()
+    offset: Any = None
+    try:
+        while True:
+            points, offset = client.scroll(
+                collection_name=collection_name,
+                scroll_filter=_document_filter(document_id),
+                limit=256,
+                offset=offset,
+                with_payload=["chunk_id"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                chunk_id = payload.get("chunk_id")
+                if not isinstance(chunk_id, str) or not chunk_id:
+                    raise RetrievalError(
+                        f"Indexed point {point.id} for {document_id} has no valid chunk_id payload."
+                    )
+                chunk_ids.add(chunk_id)
+            if offset is None:
+                return chunk_ids
+    except RetrievalError:
+        raise
+    except Exception as exc:
+        raise RetrievalError(
+            f"Failed to read indexed chunk IDs for document {document_id}."
+        ) from exc
 
 
 def index_chunks(

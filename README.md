@@ -2,191 +2,132 @@
 
 ## Status
 
-**Phase 3A — Dense indexing and retrieval**
+**Phase 3A.2 — Dense Baseline Closure and Docker Stabilization**
 
-This phase adds multilingual dense embeddings, Qdrant indexing, and ranked dense similarity search on top of the existing batched Docling ingestion flow. It does not generate final answers or call an LLM.
+The repository ingests technical PDF/DOCX documents with Docling, indexes multilingual dense
+embeddings in Qdrant, and evaluates retrieval against manually verified direct-evidence qrels.
+The FastAPI service currently exposes only `GET /api/v1/health`.
 
-## Implemented
+Out of scope for the current phase: sparse/hybrid retrieval, RRF, reranking, LangChain, OpenAI,
+answer generation, citations, abstention, and a query endpoint.
 
-- FastAPI scaffold and `GET /api/v1/health`
-- Typed settings, pytest, Ruff, Docker Compose, and CI
-- Docling PDF/DOCX conversion
-- Native structure-aware chunking with `HierarchicalChunker`
-- Deterministic document and chunk IDs
-- Page provenance, heading breadcrumbs, conservative content types, and metadata normalization
-- Terminal chunk previews and optional UTF-8 JSONL output
-- FastEmbed multilingual passage and query embeddings
-- A shared Qdrant collection with the named cosine vector `dense`
-- Deterministic UUIDv5 point IDs and citation-ready payload metadata
-- Document indexing, safe re-index replacement, and dense search with document filtering
-- CLI commands for indexing and search, with Qdrant in-memory unit tests
+## Requirements and installation
 
-The API still exposes only the health endpoint. LangChain, LLM generation, answer citations, abstention, query APIs, sparse retrieval, BM25, RRF, reranking, and retrieval evaluation metrics are not implemented.
+The supported development/runtime version is **Python 3.11**. Use one interpreter consistently:
 
-## Repository structure
-
-```text
-app/                 FastAPI application, ingestion, models, and dense retrieval
-scripts/             CLI ingestion preview, dense indexing, and dense search
-data/                Raw and evaluation data directories
-tests/               Pytest tests
-artifacts/           Generated metrics, figures, and local preview output
-.github/workflows/   CI workflow
-Dockerfile           API container image
-docker-compose.yml   API and Qdrant services
-pyproject.toml       Project metadata and tool configuration
-```
-
-## Local setup
-
-```bash
+```powershell
 python -m venv .venv
-```
-
-Linux/macOS:
-
-```bash
-source .venv/bin/activate
-```
-
-Windows PowerShell:
-
-```powershell
 .venv\Scripts\Activate.ps1
-```
-
-Install the project and development dependencies:
-
-```bash
+python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+python -m ruff check .
+python -m pytest
 ```
 
-## Ingestion preview
+Extras are separated by responsibility:
 
-Place a PDF or DOCX file under `data/raw/`, then run:
+- `.[retrieval]`: Qdrant client, FastEmbed and dense search.
+- `.[ingestion]`: Docling document parsing.
+- `.[dev]`: test/lint tooling plus retrieval and ingestion dependencies, so the complete unit suite runs.
 
-```bash
-python scripts/ingest_preview.py data/raw/manual.pdf
-```
+`EMBEDDING_CACHE_DIR` is optional locally. In Docker it is set to `/models/fastembed` and backed by
+a shared named volume; model weights are never baked into either image.
 
-Useful options:
+## Ingestion and dense indexing
 
-```bash
-python scripts/ingest_preview.py data/raw/manual.pdf --limit 10
-python scripts/ingest_preview.py data/raw/manual.pdf --limit 10 --output artifacts/ingestion-preview.jsonl
-python scripts/ingest_preview.py data/raw/manual.pdf --batch-size 8 --limit 3
-```
-
-- `--limit` controls how many chunk previews are printed; `0` prints no chunk details.
-- `--preview-chars` defaults to `500` and limits terminal text per preview.
-- `--output` overwrites the target with one `DocumentChunk` JSON object per UTF-8 line and creates missing parent directories.
-- `--page-start` and `--page-end` select an inclusive PDF page range and must be used together.
-- `--batch-size` splits a PDF page range into smaller, sequential conversion runs. A value of `8` is a conservative starting point for the current development environment, not a universal optimum.
-
-Each normalized chunk has this schema:
-
-```json
-{
-  "chunk_id": "manual-a4f832bd71c2_p18_c0003",
-  "document_id": "manual-a4f832bd71c2",
-  "filename": "manual.pdf",
-  "text": "...",
-  "page_numbers": [18],
-  "headings": ["Troubleshooting"],
-  "content_type": "text",
-  "metadata": {
-    "source_path": "data/raw/manual.pdf",
-    "file_extension": ".pdf",
-    "chunk_index": 3,
-    "character_count": 842
-  }
-}
-```
-
-Docling page numbers are copied directly from provenance without adding or subtracting one. If provenance or headings are absent, the corresponding lists remain empty. Content type is only marked as `table`, `list`, or `code` when Docling item labels provide evidence; otherwise it is `text`, `mixed`, or `unknown`.
-
-First runs may take longer because Docling can initialize local model assets. Scanned PDFs without a text layer may require OCR configuration. Table extraction and metadata availability depend on the source document structure.
-
-## Large PDF handling
-
-Docling can accumulate native memory while preprocessing many pages in one conversion run. For digital PDFs with an existing text layer, this project disables OCR and uses memory-conscious Docling batch settings. Page-range batching reduces peak memory by creating a new converter for each range and processing ranges sequentially.
-
-Every range must return Docling `SUCCESS`. The ingestion stops on `PARTIAL_SUCCESS` or `FAILURE`, and JSONL output is written atomically only after all requested ranges have completed. This prevents a partial conversion from looking like a complete artifact.
-
-Windows PowerShell example:
-
-```powershell
-python scripts/ingest_preview.py data/raw/manual.pdf `
-  --page-start 1 `
-  --page-end 21 `
-  --batch-size 8 `
-  --limit 3 `
-  --output artifacts/manual-batched.jsonl
-```
-
-Batch boundaries are page-aligned, but heading context is not reconstructed across ranges and multi-page tables are not merged across a boundary. Scanned PDFs still require an OCR-enabled mode, which is outside this Phase 2 patch. Suitable batch size depends on available RAM and PDF complexity. Some native backends may still require process isolation even when converters are not reused.
-
-## Dense indexing and retrieval
-
-Start Qdrant:
-
-```powershell
-docker compose up -d qdrant
-```
-
-Index the 21-page manual with memory-conscious PDF batching:
+Place the document under `data/raw/`. The checked retrieval-development baseline is frozen against
+`artifacts/manual-batched.jsonl`: the 21-page manual, batch size 4, document ID
+`manual-77d5dae4c2c5`, and 99 chunks.
 
 ```powershell
 python scripts/index_document.py data/raw/manual.pdf `
   --page-start 1 `
   --page-end 21 `
-  --page-batch-size 8
+  --page-batch-size 4
 ```
 
-If Docling reports `std::bad_alloc` while Docker Desktop is using part of the available RAM, retry with `--page-batch-size 4`. Smaller page batches reduce peak memory, but additional page-range boundaries can change the number of structure-aware chunks; do not assume different batch sizes produce identical chunk counts.
+The index manifest records collection/model compatibility. Indexing parses and embeds before it
+updates Qdrant, upserts new points, then removes stale points for only the indexed document.
+Chunk and point IDs are deterministic. Re-indexing the same frozen input must leave 99 points.
 
-Run dense search:
+Search a specific indexed document:
 
 ```powershell
 python scripts/search_dense.py `
-  "Thuật toán nào được dùng để phát hiện bất thường?" `
-  --limit 5
-```
-
-Filter results to one indexed document when needed:
-
-```powershell
-python scripts/search_dense.py `
-  "ODA-MD hoạt động ở đâu trong mạng?" `
+  "What sensor attributes are used by the algorithm?" `
   --document-id manual-77d5dae4c2c5 `
   --limit 5
 ```
 
-The default model is `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`. The first real indexing or search run needs internet access to download its public model assets; unit tests use a deterministic fake model and never download weights. Heading breadcrumbs are added only to embedding input, while the original chunk text remains unchanged in Qdrant payloads.
+Dense cosine scores are ranking signals, not probabilities.
 
-Re-indexing the same document removes its old points only after parsing and all embeddings succeed, then upserts deterministic replacement IDs. Other documents are not deleted. This MVP sequence is not a database transaction, so an upsert failure after deletion can temporarily leave that document incomplete.
+## Dense retrieval development evaluation
 
-Dense similarity scores are ranking signals, not probabilities. No default score threshold is claimed to be optimal; threshold tuning belongs to later retrieval evaluation. Dense results are ranked source chunks, not final RAG answers.
+`data/eval/dense_smoke.jsonl` is a **30-query retrieval development set**, with 15 Vietnamese and
+15 English factual queries. It is not the held-out final evaluation set planned for Phase 6.
 
-## Test and lint
+Every item has stable `relevant_chunk_ids`. Direct retrieval hits, Hit@k, and MRR use only those
+IDs. Expected phrases are validated against the relevant frozen chunks; pages are diagnostics only,
+so a same-page unrelated chunk never counts as a hit.
 
-```bash
-pytest
-ruff check .
+Run the baseline after Qdrant contains exactly the frozen chunk IDs:
+
+```powershell
+python scripts/evaluate.py `
+  --chunks artifacts/manual-batched.jsonl `
+  --limit 20 `
+  --output artifacts/metrics/dense-baseline.json
 ```
 
-## Docker Compose
+The JSON artifact is the source of truth. It records the chunk-set hash, dataset hash, model/index
+contract, direct-evidence rank per query, Hit@1/3/5, MRR@5, MRR@20, per-language/category metrics,
+critical-query diagnostics, failure cases, and warm-query average/p50/p95 latency. Primary latency
+includes query embedding and Qdrant round trip but excludes model initialization, model download,
+and one warmup query.
 
-```bash
-docker compose config
-docker compose up --build
+Old page-or-phrase smoke metrics are not directly comparable with this direct-evidence baseline.
+
+Verified 2026-08-05 baseline on the frozen 99 chunks: Hit@1 `0.167`, Hit@3 `0.367`, Hit@5 `0.400`,
+MRR@5 `0.269`, MRR@20 `0.298`, p50 latency `15.14 ms`, p95 latency `37.77 ms`, and 18 failure
+cases. See `docs/walkthrough-phase-3a2.md` for the command sequence and interpretation.
+
+## Docker
+
+The default Compose file is production-like: source is not bind-mounted and API reload is off.
+It contains Qdrant, the API runtime, and an on-demand `ingestion` service in the `tools` profile.
+Qdrant is pinned to `qdrant/qdrant:v1.18.3` and its named volume is persistent.
+
+```powershell
+docker compose build api
+docker compose up -d qdrant api
 ```
 
-The API is available at `http://localhost:8000`; Qdrant is exposed on ports `6333` and `6334`. Host-side CLIs use `http://localhost:6333`, while Docker Compose overrides the API container host to `http://qdrant:6333`. The health endpoint remains a liveness check and does not contact Qdrant.
+The API image installs `.[retrieval]` but not Docling. Build and run ingestion only when needed:
 
-## Roadmap
+```powershell
+docker compose --profile tools build ingestion
+docker compose --profile tools run --rm ingestion `
+  python scripts/index_document.py /data/raw/manual.pdf `
+  --page-start 1 --page-end 21 --page-batch-size 4
+```
 
-1. Review and evaluate Phase 3A dense retrieval behavior.
-2. Add an API and final answer contract in a later phase.
-3. Add hybrid retrieval and reranking only after retrieval evaluation.
-4. Add LLM generation, citations, and abstention in a later phase.
+For live reload during development, add the override file:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up api
+```
+
+Normal `docker compose up` reuses the fixed `industrial-rag-api:local` image; it does not create a
+new image unless one is missing or `build`/`--build` is requested. Do not run `docker system prune`
+or `docker volume prune` for this project: the Qdrant and model-cache volumes are intentionally
+preserved.
+
+## Known limitations
+
+- OCR for scanned PDFs is not enabled.
+- Page-range batch boundaries can change structure-aware chunks and heading context; do not compare
+  metrics across different chunk sets.
+- Multi-page tables can be split at batch boundaries.
+- Docling remains a heavy, on-demand ingestion dependency.
+- Dense retrieval quality is frozen as a baseline; Phase 4 will address candidate quality with
+  hybrid retrieval, not with hidden changes to this development set.

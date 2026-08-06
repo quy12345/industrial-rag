@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     qdrant_collection: str = "industrial_manual_chunks"
     dense_vector_name: str = "dense"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_cache_dir: str | None = None
     embedding_batch_size: int = Field(default=16, gt=0)
     retrieval_top_k: int = Field(default=5, gt=0)
     retrieval_score_threshold: float | None = None
@@ -38,6 +39,16 @@ class Settings(BaseSettings):
         if not normalized:
             raise ValueError("must not be empty")
         return normalized
+
+    @field_validator("embedding_cache_dir")
+    @classmethod
+    def normalize_embedding_cache_dir(cls, value: str | None) -> str | None:
+        """Treat blank cache-directory configuration as the library default."""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 @lru_cache

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -14,8 +16,10 @@ from app.retrieval import (
     RetrievalError,
     build_embedding_text,
     build_point_id,
+    create_embedding_model,
     dense_search,
     ensure_dense_collection,
+    get_indexed_chunk_ids,
     index_chunks,
     validate_index_manifest,
     write_index_manifest,
@@ -133,6 +137,29 @@ def test_retrieval_settings_reject_invalid_score_threshold() -> None:
         Settings(retrieval_score_threshold="not-a-number")
 
 
+def test_retrieval_settings_normalize_optional_embedding_cache_directory() -> None:
+    assert Settings(embedding_cache_dir="  /models/cache  ").embedding_cache_dir == "/models/cache"
+    assert Settings(embedding_cache_dir="   ").embedding_cache_dir is None
+
+
+def test_embedding_model_receives_optional_cache_directory(monkeypatch: pytest.MonkeyPatch) -> None:
+    created: dict[str, str | None] = {}
+
+    class FakeTextEmbedding:
+        def __init__(self, *, model_name: str, cache_dir: str | None) -> None:
+            created.update(model_name=model_name, cache_dir=cache_dir)
+
+        @staticmethod
+        def list_supported_models():
+            return [{"model": "test-model"}]
+
+    monkeypatch.setitem(sys.modules, "fastembed", SimpleNamespace(TextEmbedding=FakeTextEmbedding))
+
+    create_embedding_model("test-model", cache_dir="/models/cache")
+
+    assert created == {"model_name": "test-model", "cache_dir": "/models/cache"}
+
+
 def test_ensure_dense_collection_creates_named_cosine_vector() -> None:
     client = QdrantClient(":memory:")
 
@@ -216,6 +243,19 @@ def test_indexing_payload_and_reindex_behavior() -> None:
     assert payloads["a-1"]["source_path"] == "manual-a.pdf"
     assert payloads["a-1"]["character_count"] == len("Sensor monitoring")
     assert "embedding_text" not in payloads["a-1"]
+
+
+def test_get_indexed_chunk_ids_returns_document_payload_ids() -> None:
+    client = QdrantClient(":memory:")
+    model = FakeEmbeddingModel()
+    _index(client, model, [make_chunk("a-1", "Sensor monitoring")])
+    _index(client, model, [make_chunk("b-1", "Database", document_id="manual-b")])
+
+    assert get_indexed_chunk_ids(
+        client,
+        collection_name=COLLECTION,
+        document_id="manual-a",
+    ) == {"a-1"}
 
 
 def test_indexing_rejects_empty_chunks() -> None:

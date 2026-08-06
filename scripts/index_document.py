@@ -35,7 +35,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             page_range=page_range,
             batch_size=args.page_batch_size,
         )
-        embedding_model = create_embedding_model(settings.embedding_model)
+        embedding_model = create_embedding_model(
+            settings.embedding_model,
+            cache_dir=settings.embedding_cache_dir,
+        )
         vector_size = get_embedding_dimension(embedding_model)
         client = create_qdrant_client(settings)
         chunks_indexed = index_chunks(

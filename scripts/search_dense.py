@@ -33,7 +33,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
-        embedding_model = create_embedding_model(settings.embedding_model)
+        embedding_model = create_embedding_model(
+            settings.embedding_model,
+            cache_dir=settings.embedding_cache_dir,
+        )
         vector_size = get_embedding_dimension(embedding_model)
         validate_index_manifest(
             INDEX_MANIFEST_PATH,

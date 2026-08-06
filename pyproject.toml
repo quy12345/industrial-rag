@@ -12,12 +12,18 @@ dependencies = [
     "uvicorn[standard]>=0.30,<1.0",
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
-    "docling>=2.117,<2.118",
-    "qdrant-client[fastembed]",
 ]
 
 [project.optional-dependencies]
+retrieval = [
+    "qdrant-client[fastembed]",
+]
+ingestion = [
+    "docling>=2.117,<2.118",
+]
 dev = [
+    "qdrant-client[fastembed]",
+    "docling>=2.117,<2.118",
     "pytest>=8.0,<9.0",
     "httpx>=0.27,<1.0",
     "ruff>=0.6,<1.0",
@@ -38,5 +44,4 @@ known-first-party = ["app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--basetemp=.pytest-work"
 pythonpath = ["."]
