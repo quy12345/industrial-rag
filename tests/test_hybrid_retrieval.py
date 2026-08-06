@@ -168,13 +168,14 @@ def test_hybrid_schema_creates_dense_sparse_idf_without_touching_v1() -> None:
     ensure_dense_collection(client, collection_name=V1, vector_name=DENSE, vector_size=3)
     client.upsert(V1, [models.PointStruct(id=1, vector={DENSE: [1.0, 0.0, 0.0]})])
 
-    ensure_hybrid_collection(
-        client,
-        collection_name=V2,
-        dense_vector_name=DENSE,
-        dense_vector_size=3,
-        sparse_vector_name=SPARSE,
-    )
+    with pytest.warns(UserWarning, match="Payload indexes have no effect"):
+        ensure_hybrid_collection(
+            client,
+            collection_name=V2,
+            dense_vector_name=DENSE,
+            dense_vector_size=3,
+            sparse_vector_name=SPARSE,
+        )
     collection = client.get_collection(V2)
     assert collection.config.params.vectors[DENSE].size == 3
     assert collection.config.params.sparse_vectors[SPARSE].modifier == models.Modifier.IDF

@@ -1,6 +1,7 @@
 """Application settings loaded from environment variables and .env."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,6 +35,11 @@ class Settings(BaseSettings):
     rrf_k: int = Field(default=60, gt=0)
     retrieval_top_k: int = Field(default=5, gt=0)
     retrieval_score_threshold: float | None = None
+    rerank_model: str = "jinaai/jina-reranker-v2-base-multilingual"
+    rerank_cache_dir: str | None = None
+    rerank_batch_size: int = Field(default=16, gt=0)
+    rerank_candidate_strategy: Literal["sparse", "hybrid", "union"] | None = None
+    rerank_final_limit: int = Field(default=5, gt=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -49,6 +55,7 @@ class Settings(BaseSettings):
         "sparse_vector_name",
         "embedding_model",
         "sparse_model",
+        "rerank_model",
     )
     @classmethod
     def validate_non_empty_name(cls, value: str) -> str:
@@ -59,7 +66,7 @@ class Settings(BaseSettings):
             raise ValueError("must not be empty")
         return normalized
 
-    @field_validator("embedding_cache_dir")
+    @field_validator("embedding_cache_dir", "rerank_cache_dir")
     @classmethod
     def normalize_embedding_cache_dir(cls, value: str | None) -> str | None:
         """Treat blank cache-directory configuration as the library default."""

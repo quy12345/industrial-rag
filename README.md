@@ -2,19 +2,24 @@
 
 ## Status
 
-**Phase 4 — Hybrid Retrieval with Dense + BM25 Sparse + client-side RRF**
+**Phase 5 — Multilingual Cross-Encoder Reranking**
 
-The repository is in **Phase 4.1 — Phase 4 closure and Phase 5 readiness**. It ingests technical PDF/DOCX documents with Docling, indexes multilingual dense
-embeddings in Qdrant, combines dense and BM25 sparse candidates with explicit client-side RRF, and
-evaluates retrieval against manually verified direct-evidence qrels.
+Phase 5 implementation and real-model benchmarking are complete. The project can rerank sparse,
+hybrid-RRF, or dense/sparse-union candidate pools with a multilingual cross-encoder while retaining
+all dense, sparse, fusion, metadata, and direct-evidence diagnostics. Ranking quality passed, but
+the CPU latency gate failed, so Phase 5 is **PARTIAL** and no reranking strategy is the runtime
+default.
 The FastAPI service currently exposes only `GET /api/v1/health`.
 
-Out of scope for the current phase: cross-encoder reranking, LangChain, OpenAI, answer generation,
-citations, abstention, and a query endpoint.
+Out of scope for this phase: LangChain, OpenAI, answer generation, citations, abstention, and a
+query endpoint.
 
 The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, FastEmbed `0.8.0`,
 and Qdrant server `v1.18.3`. The historic dense artifact that records client `1.18.0` is retained
 unchanged; it is a historic measurement, not the dependency declaration used after closure.
+
+For a module-by-module architecture explanation, Qdrant mental model, code-redundancy audit, query
+debugging guide, and interview preparation, see `docs/project-deep-dive.md`.
 
 ## Requirements and installation
 
@@ -176,6 +181,56 @@ development metrics than RRF hybrid. Four cases (`dense_005`, `dense_019`, `dens
 absent from sparse for `dense_008` and `dense_020`. See
 `docs/walkthrough-phase-4-closure.md` for the full diagnosis and reproducible checks.
 
+## Multilingual cross-encoder reranking
+
+Phase 5 uses FastEmbed 0.8.0 `TextCrossEncoder` with
+`jinaai/jina-reranker-v2-base-multilingual`. Candidate text is the heading breadcrumb, two newlines,
+then the unchanged raw chunk text. Scores are ranking signals, not probabilities. The adapter is
+lazy: importing the module does not initialize or download the model, and errors never silently
+fall back to a retrieval ranking.
+
+The model license was verified from the official model metadata as **CC-BY-NC-4.0**. It is suitable
+for this non-commercial benchmark/demo, but must not be assumed suitable for commercial deployment.
+Use another licensed model or obtain appropriate rights before a commercial release.
+
+Run an interactive reranked search with an explicit strategy:
+
+```powershell
+python -m scripts.search_reranked `
+  "What sensor attributes are used by the algorithm?" `
+  --strategy union --document-id manual-77d5dae4c2c5 --limit 5
+```
+
+Run all three real-model evaluations in the existing Python 3.11 ingestion image, without rebuilding
+it. The source tree is bind-mounted and the Compose `fastembed_cache` volume persists the downloaded
+model at runtime:
+
+```powershell
+docker compose up -d qdrant
+docker compose --profile tools run --rm -v "${PWD}:/app" ingestion `
+  python -m scripts.evaluate_reranking --strategy all
+```
+
+To regenerate only the comparison from existing strategy artifacts, with no model initialization:
+
+```powershell
+python -m scripts.evaluate_reranking --comparison-only
+```
+
+Measured on 2026-08-06, Python 3.11.15 CPU runtime, frozen 30 qrels and 99 chunks:
+
+| Candidate pool | Hit@5 | MRR@5 | Hit@20 | MRR@20 | Candidate recall | Warm total p95 |
+|---|---:|---:|---:|---:|---:|---:|
+| Sparse rerank | 0.733 | 0.529 | 0.867 | 0.544 | 0.867 | 9,879.69 ms |
+| Hybrid rerank | **0.767** | **0.546** | 0.867 | 0.556 | 0.867 | 8,465.75 ms |
+| Union rerank | **0.767** | **0.546** | **0.933** | **0.560** | **0.933** | 11,889.45 ms |
+
+All strategies passed the 3/3 bilingual critical-intent, Hit@5, and MRR@5 gates. None passed the
+warm total p95 target of 1.5 seconds. Union is the best observed research strategy, but
+`recommended_default_strategy` remains `null`; keep sparse retrieval as the low-latency rollback.
+See `docs/walkthrough-phase-5.md` for scenario metrics, critical ranks, failure classes, commands,
+and the full validation record.
+
 ## Docker
 
 The default Compose file is production-like: source is not bind-mounted and API reload is off.
@@ -226,4 +281,7 @@ preserved.
 - Dense retrieval remains frozen as the Phase 3A.2 baseline; Phase 4 improves candidates through
   a separate sparse/RRF collection rather than hidden changes to this development set.
 - Hybrid retrieval improves the development-set aggregate, but two critical bilingual intents still
-  miss top 5; Phase 5 reranking must be evaluated against the same frozen qrels.
+  miss top 5 before reranking.
+- Phase 5 reranking meets the measured ranking gates but takes 8.47–11.89 seconds at warm p95 on
+  the tested CPU, so it is not enabled as a runtime default.
+- The selected reranker is licensed CC-BY-NC-4.0 and is not approved here for commercial use.

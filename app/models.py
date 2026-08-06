@@ -60,3 +60,5 @@ class RetrievalCandidate(BaseModel):
     sparse_rank: int | None = Field(default=None, ge=1)
     rrf_score: float | None = None
     rrf_rank: int | None = Field(default=None, ge=1)
+    rerank_score: float | None = None
+    rerank_rank: int | None = Field(default=None, ge=1)

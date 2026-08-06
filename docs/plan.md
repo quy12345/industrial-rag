@@ -1,18 +1,17 @@
 # Industrial Technical Manual RAG — Project Plan
 
-> Phase 4 implementation and benchmark snapshot — 2026-08-06
+> Phase 5 implementation and benchmark snapshot — 2026-08-06
 >
-> Phase 1 through Phase 4 are implemented. The frozen retrieval-development set has 30 manually
+> Phase 1 through Phase 5 are implemented. The frozen retrieval-development set has 30 manually
 > checked queries (15 VI / 15 EN) against the 99-chunk batch-4 artifact with fingerprint
 > `bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be`.
 >
-> Phase 4 static snapshot: Ruff PASS and pytest PASS — 70 tests. Phase 4.1 closure adds offline
-> candidate-pool coverage tests; the latest static validation is Ruff PASS and pytest PASS — 74 tests.
-> Real Docker/Qdrant validation used
-> Python 3.11.15 in the ingestion container: v1 remained at 99 dense points; v2 indexed and
-> re-indexed 99 dense+sparse points. Sparse BM25 is the strongest measured strategy on this set
-> (Hit@5 `0.633`, MRR@20 `0.469`); hybrid RRF improves on dense but trails sparse (Hit@5 `0.533`,
-> MRR@20 `0.398`). The host `.venv` remains Python 3.13.5 and was not overwritten.
+> Phase 5 static validation is Ruff PASS and pytest PASS — 99 tests on Python 3.11.15. Real
+> Docker/Qdrant evaluation preserved v1=99 and v2=99 points and used the existing ingestion image
+> with a source bind mount; no heavy image build was run. Union reranking is the best measured
+> ranking strategy (Hit@5 `0.767`, MRR@5 `0.546`, MRR@20 `0.560`, candidate recall `0.933`), but
+> warm CPU p95 is `11.889 s`, so the overall Phase 5 quality gate is `PARTIAL` and no reranking
+> runtime default is selected. The host `.venv` remains Python 3.13.5 and was not overwritten.
 
 ## 1. Mục tiêu dự án
 
@@ -56,7 +55,7 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 3A.2 | Hoàn thành | Direct-evidence evaluation, 30-query development set, dependency split, Docker stabilization và real Docker/Qdrant validation |
 | Phase 4 | Closed; critical gate partial | Sparse BM25 vectors, collection v2, client-side RRF, strategy evaluator, real benchmark; sparse is currently stronger than hybrid, and 2/3 critical intents miss hybrid top 5 |
 | Phase 4.1 | Implementation complete; ingestion Docker closure cancelled | Canonical Qdrant client 1.19.x, frozen candidate-pool audit, Phase 5 readiness artifact, API baked-image validation và documented external Docker deviation |
-| Phase 5 | Sẵn sàng bắt đầu có điều kiện | Multilingual cross-encoder reranking để xử lý critical top-5 misses mà không thay qrels/chunks |
+| Phase 5 | Implementation complete; quality PARTIAL | Ba multilingual reranking strategies đã benchmark; ranking gates và critical 3/3 PASS, CPU latency FAIL, không đặt runtime default |
 | Phase 3B | Tạm hoãn | Query API, LangChain, OpenAI, citations và abstention |
 | Phase 6 | Chưa bắt đầu | End-to-end evaluation và production hardening |
 
@@ -71,7 +70,7 @@ Phase 3B giữ tên theo roadmap lịch sử nhưng được triển khai sau Ph
 
 ---
 
-## 3. Kết quả thực tế đã đạt qua Phase 4
+## 3. Kết quả thực tế đã đạt qua Phase 5
 
 | Phase | Kết quả đã xác nhận |
 |---|---|
@@ -81,6 +80,8 @@ Phase 3B giữ tên theo roadmap lịch sử nhưng được triển khai sau Ph
 | Phase 3A.1 | Stable chunk IDs, deterministic UUIDv5 point IDs, safe re-index, dense manifest và frozen 99-chunk contract được chốt. |
 | Phase 3A.2 | Direct-evidence qrels 30 câu, evaluator direct hit, dependency/Docker split, Qdrant v1 99 points và dense baseline immutable được xác nhận. |
 | Phase 4 | V2 dense+sparse/IDF, BM25 `Qdrant/bm25`, client-side RRF, manifest v2, sparse/hybrid CLIs và evaluator strategy đã hoàn tất; re-index v2 vẫn 99 points. |
+| Phase 4.1 | Candidate-pool audit và readiness artifact chốt dense/sparse/hybrid/union coverage mà không thay frozen contract. |
+| Phase 5 | Lazy multilingual cross-encoder, ba candidate pools, strict indexed-score validation, reranked search/evaluation CLI và real 30-query benchmark đã hoàn tất. |
 
 Kết quả benchmark trên cùng 30 qrels/frozen chunks:
 
@@ -93,15 +94,13 @@ Kết quả benchmark trên cùng 30 qrels/frozen chunks:
 
 Sparse BM25 hiện là retrieval baseline mạnh nhất cho manual tiếng Việt và development set này.
 Hybrid RRF vẫn tốt hơn dense, nhưng không được mô tả là tốt hơn sparse. Hai trong ba bilingual
-critical intents vẫn chưa có direct evidence trong hybrid top 5; đây là failure signal đầu vào cho
-Phase 5, không phải lý do thay qrels, chunks hay dense model.
+critical intents chưa có direct evidence trong hybrid top 5 trước reranking; Phase 5 đã xử lý được
+critical gate 3/3 trên cả ba pool mà không thay qrels, chunks hay dense model, nhưng chưa đạt latency.
 
 ## 4. Tóm tắt các phase tiếp theo (scope giữ nguyên)
 
-- **Phase 5:** multilingual cross-encoder reranking trên frozen candidate pool để cải thiện thứ hạng
-  direct evidence, đặc biệt các critical failures; vẫn benchmark dense/sparse/hybrid/rerank trên cùng qrels.
-- **Phase 3B:** chỉ sau retrieval/reranking đủ tốt; thêm query API, grounded generation, citations và
-  abstention với LangChain/OpenAI theo thiết kế hiện có.
+- **Phase 3B:** chỉ bắt đầu sau quyết định xử lý Phase 5 latency/license; thêm query API, grounded
+  generation, citations và abstention với LangChain/OpenAI theo thiết kế hiện có.
 - **Phase 6:** held-out final evaluation, hardening và production readiness; không dùng development
   set hiện tại làm số liệu final.
 
@@ -553,40 +552,62 @@ See `docs/walkthrough-phase-4-closure.md` for the complete command and Docker va
 
 ## Phase 5 — Multilingual cross-encoder reranking
 
-### Mục tiêu
+> Implemented and benchmarked on 2026-08-06. Correctness/static validation PASS; overall quality
+> `PARTIAL` because the ranking gates pass but no strategy meets the CPU p95 latency gate. No
+> reranking runtime default is configured.
 
-Rerank hybrid candidate pool bằng query-document joint scoring để đưa evidence trực tiếp lên đầu.
+### Implemented contract
 
-### Thiết kế
+- FastEmbed 0.8.0 `TextCrossEncoder` with
+  `jinaai/jina-reranker-v2-base-multilingual`; initialization is lazy and never occurs on import.
+- Official model metadata and FastEmbed registry both report `CC-BY-NC-4.0`, ONNX about 1.11 GB,
+  and 1K/sliding-window context. This is a non-commercial benchmark/demo model, not an approved
+  commercial deployment dependency.
+- Candidate text format `heading_content_v1`: breadcrumb joined with ` > `, two newlines, then raw
+  chunk text; the raw payload is never rewritten.
+- Strategies are explicit: sparse v2 top 20; hybrid v2 dense@20 + sparse@20 → RRF k=60 → top 20;
+  union v1 dense@20 ∪ v2 sparse@20 with stable-ID de-duplication and no pre-rerank truncation.
+- Full pool is returned. Display `--limit` is applied only after reranking. Final ordering is score
+  descending, previous rank ascending, then chunk ID.
+- Missing/duplicate/out-of-range model indices, wrong output count, non-finite score, invalid input,
+  or inference exception raises `RerankingError`; there is no silent fallback.
+- Dense, sparse, RRF/union, rerank ranks and scores plus metadata remain available for diagnostics.
 
-- Dùng FastEmbed `TextCrossEncoder`.
-- Model: `jinaai/jina-reranker-v2-base-multilingual`, có trong FastEmbed 0.8.
-- Input gồm query và candidate text có heading breadcrumb.
-- Rerank 20 hybrid candidates, trả final top 5.
-- Không thay đổi chunk raw text hoặc payload.
-- `RetrievalCandidate` bổ sung optional rerank score/rank.
-- Giữ dense, sparse, RRF và rerank scores để benchmark/debug.
-- Rerank score không được mô tả là probability.
-- Model dùng persistent FastEmbed cache, không bake vào image.
-- Reranker failure trả lỗi rõ ràng, không âm thầm fallback sang dense.
+### Real benchmark
 
-### Tests
+Frozen input remained 30 qrels, 15 VI/15 EN, 99 chunks, hash
+`bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be`.
 
-- Candidate order theo fake cross-encoder scores.
-- Deterministic ties.
-- Candidate metadata và citation fields không bị mất.
-- Empty candidate list và model trả sai số lượng scores.
-- Reranker exception handling.
-- Document filter vẫn được giữ từ retrieval stage.
-- Unit tests không tải model thật.
+| Strategy | Hit@5 | MRR@5 | Hit@20 | MRR@20 | Candidate recall | Warm total p95 |
+|---|---:|---:|---:|---:|---:|---:|
+| Sparse rerank | 0.733 | 0.529 | 0.867 | 0.544 | 0.867 | 9,879.69 ms |
+| Hybrid rerank | 0.767 | 0.546 | 0.867 | 0.556 | 0.867 | 8,465.75 ms |
+| Union rerank | 0.767 | 0.546 | 0.933 | 0.560 | 0.933 | 11,889.45 ms |
 
-### Acceptance gate
+All three strategies recover 3/3 bilingual critical intent pairs in top 5 and pass Hit@5 ≥ 0.633
+and MRR@5 ≥ 0.485. Union is the best observed research strategy because it preserves the 0.933
+candidate recall and highest MRR@20. Every strategy fails warm total p95 < 1.5 seconds, therefore
+`recommended_default_strategy=null`; sparse retrieval remains the operational rollback.
 
-- Critical direct-evidence top-5 đạt 3/3.
-- Hit@5 không giảm so với hybrid.
-- Hit@1 hoặc MRR cải thiện ít nhất 10% tương đối so với hybrid.
-- p95 hybrid + reranking dưới 1.5 giây trên CPU local.
-- Real-model integration smoke pass trên 99 chunks.
+Union still has unrecoverable candidate misses `dense_014` and `dense_017`. Its top-5 reranker misses
+are `dense_007`, `dense_008`, `dense_018`, `dense_021`, and `dense_022`; `dense_008` and `dense_018`
+remain present but rank 18. Results are development-set evidence and are not a held-out Phase 6 test.
+
+### Validation and artifacts
+
+- Python 3.11.15 container: Ruff PASS; pytest PASS — 99 tests, one known third-party
+  Starlette/TestClient warning.
+- Real VI search, EN→VI search, six critical queries, validation-error smoke, and all 30 queries ×
+  three strategies PASS against live Qdrant.
+- Runtime artifacts are additive and ignored by Git:
+  `phase-5-candidate-audit.json`, `rerank-sparse.json`, `rerank-hybrid.json`,
+  `rerank-union.json`, and `phase-5-comparison.json`.
+- Model download happened at runtime in the shared FastEmbed cache, not in Docker build. The heavy
+  ingestion rebuild remains deferred to the user:
+  `docker compose --progress plain --profile tools build ingestion`.
+
+See `docs/walkthrough-phase-5.md` for commands, per-scenario metrics, critical ranks, latency
+methodology, warnings, rollback, and remaining gates.
 
 ---
 
