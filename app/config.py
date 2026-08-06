@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime settings for the application and dense retrieval."""
+    """Runtime settings for the application, dense retrieval, and hybrid retrieval."""
 
     app_name: str = "Industrial Technical Manual RAG"
     app_version: str = "0.1.0"
@@ -17,9 +17,21 @@ class Settings(BaseSettings):
     qdrant_port: int = 6333
     qdrant_collection: str = "industrial_manual_chunks"
     dense_vector_name: str = "dense"
+    qdrant_hybrid_collection: str = "industrial_manual_chunks_v2"
+    sparse_vector_name: str = "sparse"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embedding_cache_dir: str | None = None
     embedding_batch_size: int = Field(default=16, gt=0)
+    sparse_model: str = "Qdrant/bm25"
+    sparse_embedding_batch_size: int = Field(default=64, gt=0)
+    bm25_disable_stemmer: bool = True
+    bm25_k: float = Field(default=1.2, gt=0)
+    bm25_b: float = Field(default=0.75, ge=0, le=1)
+    bm25_avg_len: float | None = Field(default=None, gt=0)
+    dense_candidate_limit: int = Field(default=20, ge=5)
+    sparse_candidate_limit: int = Field(default=20, ge=5)
+    hybrid_final_limit: int = Field(default=5, gt=0)
+    rrf_k: int = Field(default=60, gt=0)
     retrieval_top_k: int = Field(default=5, gt=0)
     retrieval_score_threshold: float | None = None
 
@@ -30,7 +42,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("qdrant_collection", "dense_vector_name", "embedding_model")
+    @field_validator(
+        "qdrant_collection",
+        "dense_vector_name",
+        "qdrant_hybrid_collection",
+        "sparse_vector_name",
+        "embedding_model",
+        "sparse_model",
+    )
     @classmethod
     def validate_non_empty_name(cls, value: str) -> str:
         """Reject empty names while normalizing surrounding whitespace."""

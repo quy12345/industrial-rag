@@ -1,6 +1,6 @@
 # Industrial Technical Manual RAG — Project Plan
 
-> Phase 3A.2 implementation snapshot — 2026-08-05
+> Phase 4 implementation snapshot — 2026-08-06
 >
 > Code, direct-evidence qrels, unit tests, dependency split, Docker targets and Compose profiles
 > are implemented. The frozen retrieval-development set has 30 manually checked queries (15 VI / 15
@@ -57,9 +57,9 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 2 | Hoàn thành | Docling ingestion, structure-aware chunking, batching và atomic JSONL |
 | Phase 3A | Hoàn thành | Dense embedding, Qdrant indexing và dense search |
 | Phase 3A.1 | Hoàn thành | Stable chunk IDs, safe re-index, manifest và smoke evaluation |
-| Phase 3A.2 | Implementation complete; integration pending | Direct-evidence evaluation, 30-query development set, dependency split and Docker stabilization; real Docker/Qdrant validation pending engine availability |
-| Phase 4 | Chưa bắt đầu | Sparse vectors, hybrid retrieval và explicit RRF |
-| Phase 5 | Chưa bắt đầu | Multilingual cross-encoder reranking |
+| Phase 3A.2 | Hoàn thành | Direct-evidence evaluation, 30-query development set, dependency split, Docker stabilization và real Docker/Qdrant validation |
+| Phase 4 | Implementation complete; quality gate partial | Sparse BM25 vectors, collection v2, client-side RRF, strategy evaluator, real benchmark; aggregate targets pass but 2/3 critical intents miss top 5 |
+| Phase 5 | Sẵn sàng bắt đầu có điều kiện | Multilingual cross-encoder reranking để xử lý critical top-5 misses mà không thay qrels/chunks |
 | Phase 3B | Tạm hoãn | Query API, LangChain, OpenAI, citations và abstention |
 | Phase 6 | Chưa bắt đầu | End-to-end evaluation và production hardening |
 
@@ -367,7 +367,10 @@ docker compose --profile tools run --rm ingestion `
 
 ---
 
-## Phase 4 — Hybrid retrieval and RRF
+## Phase 4 — Hybrid retrieval and RRF (design record and implementation result)
+
+> Implemented and benchmarked on 2026-08-06. The collection v1 and immutable dense baseline remain
+> separate from v2. See `docs/walkthrough-phase-4.md` for commands, artifacts, and diagnostics.
 
 ### Mục tiêu
 
@@ -432,6 +435,35 @@ reranker candidate pool: 20
 - MRR không thấp hơn dense baseline.
 - Index/re-index, document isolation và manifest validation pass.
 - p95 hybrid query dưới 300 ms, không tính initial model load.
+
+### Kết quả thực tế 2026-08-06
+
+- FastEmbed `0.8.0` API được xác minh: `SparseTextEmbedding`, `passage_embed`, `query_embed`, và
+  `Qdrant/bm25` đều có mặt. BM25 chạy `disable_stemmer=true`, `k=1.2`, `b=0.75`, và
+  `avg_len=72.838384` tính bằng đúng FastEmbed tokenizer/preprocessing trên frozen 99 chunks.
+- Collection v2 `industrial_manual_chunks_v2` có 99 points sau index và vẫn 99 sau re-index; mỗi
+  point có named dense vector 384/cosine, named sparse vector/IDF, stable UUIDv5 ID, và keyword
+  index `document_id`. Collection v1 `industrial_manual_chunks` vẫn giữ schema dense-only và 99
+  points.
+- Baseline artifacts tách riêng: `dense-baseline.json` không bị overwrite; additive dense closure,
+  sparse và hybrid nằm lần lượt ở `dense-baseline-closure.json`, `sparse-baseline.json`, và
+  `hybrid-baseline.json`.
+
+| Metric | Dense | Sparse | Hybrid | Hybrid − Dense |
+|---|---:|---:|---:|---:|
+| Hit@1 | 0.167 | 0.333 | 0.267 | +0.100 |
+| Hit@3 | 0.367 | 0.500 | 0.400 | +0.033 |
+| Hit@5 | 0.400 | 0.633 | 0.533 | +0.133 |
+| Hit@20 | 0.767 | 0.867 | 0.867 | +0.100 |
+| MRR@5 | 0.269 | 0.441 | 0.365 | +0.096 |
+| MRR@20 | 0.298 | 0.469 | 0.398 | +0.100 |
+| p95 | 35.40 ms | 2.78 ms | 26.16 ms | -9.24 ms |
+
+- Hybrid Hit@5, MRR@20, Hit@20/candidate recall, and p95 targets pass. The critical-intent top-5
+  gate is partial: only the first bilingual intent is top 5; the other two pairs have ranks
+  `8/9` and `8/16` (VI/EN). Do not alter qrels, chunks, or the dense model to hide this result.
+- Unit suite: 70 passed. The integration run used Python 3.11.15 in the ingestion container;
+  host `.venv` remains Python 3.13.5. The next allowed improvement is Phase 5 reranking.
 
 ---
 
