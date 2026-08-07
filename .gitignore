@@ -21,6 +21,8 @@ data/raw/*
 data/eval/*
 !data/eval/.gitkeep
 !data/eval/dense_smoke.jsonl
+!data/eval/phase7/
+!data/eval/phase7/*.jsonl
 artifacts/metrics/*
 !artifacts/metrics/.gitkeep
 artifacts/figures/*
