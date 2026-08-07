@@ -1,17 +1,18 @@
 # Industrial Technical Manual RAG — Project Plan
 
-> Phase 5 implementation and benchmark snapshot — 2026-08-06
+> Phase 6 implementation and correctness snapshot — 2026-08-06
 >
-> Phase 1 through Phase 5 are implemented. The frozen retrieval-development set has 30 manually
+> Phase 1 through Phase 6 are implemented. The frozen retrieval-development set has 30 manually
 > checked queries (15 VI / 15 EN) against the 99-chunk batch-4 artifact with fingerprint
 > `bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be`.
 >
-> Phase 5 static validation is Ruff PASS and pytest PASS — 99 tests on Python 3.11.15. Real
-> Docker/Qdrant evaluation preserved v1=99 and v2=99 points and used the existing ingestion image
-> with a source bind mount; no heavy image build was run. Union reranking is the best measured
-> ranking strategy (Hit@5 `0.767`, MRR@5 `0.546`, MRR@20 `0.560`, candidate recall `0.933`), but
-> warm CPU p95 is `11.889 s`, so the overall Phase 5 quality gate is `PARTIAL` and no reranking
-> runtime default is selected. The host `.venv` remains Python 3.13.5 and was not overwritten.
+> Phase 6 static validation is Ruff PASS and pytest PASS — 160 tests on Python 3.11.15. The API
+> image contains retrieval + LLM dependencies without Docling/model weights and measures
+> 146,177,894 bytes. Union+rerank is now the accuracy-first query runtime and sparse/no-rerank is
+> rollback. Real OpenAI smoke is `NOT RUN — API key unavailable`; correctness is proven offline and
+> through Docker/Qdrant, not claimed for the real provider. The host `.venv` remains Python 3.13.5.
+> Additive Gemini routing and the UTF-8 response regression later raised the local suite to 162 tests and passed
+> Python 3.11 adapter construction; real Gemini generation remains `NOT RUN` without a provider key.
 
 ## 1. Mục tiêu dự án
 
@@ -56,21 +57,22 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 4 | Closed; critical gate partial | Sparse BM25 vectors, collection v2, client-side RRF, strategy evaluator, real benchmark; sparse is currently stronger than hybrid, and 2/3 critical intents miss hybrid top 5 |
 | Phase 4.1 | Implementation complete; ingestion Docker closure cancelled | Canonical Qdrant client 1.19.x, frozen candidate-pool audit, Phase 5 readiness artifact, API baked-image validation và documented external Docker deviation |
 | Phase 5 | Implementation complete; quality PARTIAL | Ba multilingual reranking strategies đã benchmark; ranking gates và critical 3/3 PASS, CPU latency FAIL, không đặt runtime default |
-| Phase 3B | Tạm hoãn | Query API, LangChain, OpenAI, citations và abstention |
-| Phase 6 | Chưa bắt đầu | End-to-end evaluation và production hardening |
+| Phase 5.1 | Deferred | Reranker optimization/quantization/license replacement không nằm trong Phase 6 |
+| Phase 6 | Implementation/offline/Docker correctness complete; real provider NOT RUN | Query API, evidence gate, Responses structured generation, citations, abstention, sparse rollback |
+| Phase 7 | Chưa bắt đầu | Held-out end-to-end evaluation, real industrial corpus và production hardening |
 
 Thứ tự triển khai đã chốt:
 
 ```text
-Phase 3A.2 → Phase 4 → Phase 4.1 closure → Phase 5 → Phase 3B → Phase 6
+Phase 3A.2 → Phase 4 → Phase 4.1 closure → Phase 5 → Phase 6 → Phase 7
 ```
 
-Phase 3B giữ tên theo roadmap lịch sử nhưng được triển khai sau Phase 4–5, vì retrieval phải
-đủ tốt trước khi đưa evidence vào LLM.
+Phase 6 trước đây được gọi là Phase 3B. Tên lịch sử chỉ được giữ tại đây; roadmap hiện hành dùng
+Phase 6 cho query/generation và Phase 7 cho final evaluation/hardening.
 
 ---
 
-## 3. Kết quả thực tế đã đạt qua Phase 5
+## 3. Kết quả thực tế đã đạt qua Phase 6
 
 | Phase | Kết quả đã xác nhận |
 |---|---|
@@ -82,6 +84,7 @@ Phase 3B giữ tên theo roadmap lịch sử nhưng được triển khai sau Ph
 | Phase 4 | V2 dense+sparse/IDF, BM25 `Qdrant/bm25`, client-side RRF, manifest v2, sparse/hybrid CLIs và evaluator strategy đã hoàn tất; re-index v2 vẫn 99 points. |
 | Phase 4.1 | Candidate-pool audit và readiness artifact chốt dense/sparse/hybrid/union coverage mà không thay frozen contract. |
 | Phase 5 | Lazy multilingual cross-encoder, ba candidate pools, strict indexed-score validation, reranked search/evaluation CLI và real 30-query benchmark đã hoàn tất. |
+| Phase 6 | `POST /api/v1/query`, frozen runtime validation, union reranker default, sparse rollback, evidence gate, typed Responses generation, deterministic citations và abstention đã hoàn tất. |
 
 Kết quả benchmark trên cùng 30 qrels/frozen chunks:
 
@@ -97,11 +100,11 @@ Hybrid RRF vẫn tốt hơn dense, nhưng không được mô tả là tốt hơ
 critical intents chưa có direct evidence trong hybrid top 5 trước reranking; Phase 5 đã xử lý được
 critical gate 3/3 trên cả ba pool mà không thay qrels, chunks hay dense model, nhưng chưa đạt latency.
 
-## 4. Tóm tắt các phase tiếp theo (scope giữ nguyên)
+## 4. Tóm tắt các phase tiếp theo
 
-- **Phase 3B:** chỉ bắt đầu sau quyết định xử lý Phase 5 latency/license; thêm query API, grounded
-  generation, citations và abstention với LangChain/OpenAI theo thiết kế hiện có.
-- **Phase 6:** held-out final evaluation, hardening và production readiness; không dùng development
+- **Phase 5.1:** tiếp tục deferred; chỉ mở lại khi chọn hướng tối ưu CPU, quantization hoặc model có
+  license thương mại phù hợp.
+- **Phase 7:** held-out final evaluation, hardening và production readiness; không dùng development
   set hiện tại làm số liệu final.
 
 Chi tiết/acceptance criteria của các phase sau bên dưới được giữ nguyên.
@@ -611,108 +614,59 @@ methodology, warnings, rollback, and remaining gates.
 
 ---
 
-## Phase 3B — Query API, LangChain, OpenAI, citations and abstention
+## Phase 6 — Query API, grounded generation, citations and abstention
 
-Phase này chỉ bắt đầu khi Phase 4 và Phase 5 qua acceptance gate.
+> Implemented 2026-08-06. Offline/Docker correctness PASS; real OpenAI smoke `NOT RUN` because no
+> API key was configured. The system is not described as production-ready.
 
-### Mục tiêu
+### Implemented contract
 
-Sinh câu trả lời grounded từ reranked evidence, trả citation kiểm chứng được và từ chối khi evidence
-không đủ.
+- `POST /api/v1/query` accepts a stripped non-empty question, optional non-empty `document_id`, and
+  `top_k` 1–10/default 5. Public citations contain trusted chunk/document/filename/page/heading/text
+  excerpt metadata; retrieval scores are not exposed.
+- Default runtime is v1 dense@20 ∪ v2 sparse@20 → full Jina multilingual rerank → final top-k.
+  `RETRIEVAL_STRATEGY=sparse` plus `RERANK_ENABLED=false` is the only rollback combination.
+- Runtime is lazy and artifact-independent. It checks the 99-point collection counts, both schemas,
+  stable chunk-ID hash, frozen model names, dimensions, BM25 settings, and candidate limits directly
+  against Qdrant. Missing generation-provider configuration is reported before models load.
+- Evidence is labeled `S1…Sn`, bounded to 24,000 characters, and enclosed as untrusted document
+  data. The system prompt prohibits outside knowledge/document instructions and preserves technical
+  numbers, units, and identifiers.
+- `GeneratedAnswer(answer, source_ids, insufficient_evidence)` is provider-native strict structured
+  output through LangChain/OpenAI Responses. Configuration is `gpt-5.6-terra`, reasoning `low`, 800
+  output tokens, 60-second timeout, one provider retry, and mandatory `store=false`.
+- An additive provider switch supports `gemini-3.5-flash-lite` through Google's OpenAI-compatible
+  Chat Completions endpoint. It keeps the same schema/citation gates and does not add the Google SDK;
+  real Gemini smoke remains pending until a Gemini key is configured.
+- The gate abstains on no candidates, invalid metadata, or an explicitly configured score threshold.
+  Threshold defaults to `None`; no score is described as a probability or calibrated confidence.
+- Source IDs are referentially validated. Unknown/out-of-context IDs, missing citations, empty
+  answers, or contradictory abstention output receive at most one correction using the same evidence
+  without re-retrieval/reranking. Final citation metadata comes only from retrieved payloads.
+- Valid abstentions are HTTP 200. Retrieval/reranker/provider dependency failures are 503, provider
+  timeout is 504, validation is 422, and unexpected failures are sanitized 500 responses.
 
-### Dependencies and provider
+### Measured validation
 
-- `langchain-core` và `langchain-openai`.
-- OpenAI Responses API thông qua LangChain.
-- Default `OPENAI_MODEL=gpt-5.6-terra`; cho phép override bằng môi trường.
-- Default reasoning effort: `low`.
-- Không dùng agent, tools, LangChain retriever, OpenAI file search hoặc conversation memory.
-- Retrieval, RRF, reranking, citations và evaluation vẫn là code explicit của project.
+- Python 3.11.15: Ruff PASS; pytest PASS — 160 tests, one known Starlette/TestClient warning.
+- API image build PASS in 1m15s; size `146,177,894` bytes. Python 3.11.15,
+  `langchain-core 1.5.3`, `langchain-openai 1.4.1`, and `openai 2.53.0` are present; Docling and baked
+  model files are absent.
+- Docker health 200; query without key 503 `llm_not_configured`; no raw question/evidence in logs.
+- Real union runtime: 23 candidates, retrieval 32.20 ms, rerank 13,897.50 ms. Sparse rollback:
+  14 candidates, retrieval 5.63 ms, rerank 0 ms. These are smoke measurements, not a latency
+  benchmark replacing Phase 5 p95.
+- Qdrant v1/v2 remain 99 points with hash
+  `bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be`.
+- `artifacts/metrics/phase-6-query-smoke.json` records `not_run/api_key_unavailable`; no real answer,
+  prompt, evidence, key, or provider response is stored.
 
-### API contract
-
-Endpoint:
-
-```text
-POST /api/v1/query
-```
-
-Request:
-
-```text
-question: non-empty string
-document_id: optional string
-top_k: optional integer, 1–10, default 5
-```
-
-Response:
-
-```text
-answer: string
-abstained: boolean
-abstention_reason: optional string
-citations: list[Citation]
-```
-
-Citation:
-
-```text
-chunk_id
-document_id
-filename
-page_numbers
-headings
-excerpt
-```
-
-### Query flow
-
-```text
-validate request
-→ hybrid retrieval
-→ RRF
-→ cross-encoder rerank
-→ evidence gate
-→ labeled evidence blocks
-→ LangChain/OpenAI structured generation
-→ citation ID validation
-→ deterministic citation builder
-→ QueryResponse
-```
-
-### Prompt, citation and abstention rules
-
-- Answer bằng ngôn ngữ của câu hỏi và chỉ dùng supplied evidence blocks.
-- Non-abstained answer phải cite ít nhất một source ID.
-- Model output dùng typed structured output; không parse free-form citation text.
-- Citation object build từ Qdrant payload, không nhận filename/page do LLM tự tạo.
-- Excerpt lấy từ chunk text và bị giới hạn độ dài.
-- Không gọi LLM nếu retrieval không có result hoặc evidence gate không đạt threshold đã tune.
-- LLM có thể trả `insufficient_evidence`.
-- Unknown source ID hoặc answer không có citation gây validation failure.
-- Cho phép đúng một correction retry; nếu vẫn sai thì abstain với `citation_validation_failed`.
-- Citation không được trỏ tới chunk ngoài retrieved context.
-
-### HTTP behavior
-
-- Invalid request: 422.
-- Qdrant hoặc OpenAI unavailable: 503.
-- Valid abstention: 200.
-- Không log API key hoặc toàn bộ evidence text.
-
-### Tests
-
-- Request/response schema, empty question và invalid top-k.
-- Grounded answer với valid citations.
-- Retrieval-gate abstention không gọi LLM.
-- LLM-declared abstention.
-- Invalid citation correction retry và fallback abstention.
-- Qdrant/OpenAI failure mapping.
-- Fake LLM trong unit tests; không cần API key hoặc internet.
+See `docs/walkthrough-phase-6.md` for API examples, error/abstention tables, Docker commands,
+structured-output details, validation evidence, and rollback.
 
 ---
 
-## Phase 6 — End-to-end evaluation and production hardening
+## Phase 7 — End-to-end evaluation, real industrial corpus and production hardening
 
 ### Evaluation dataset
 
@@ -752,6 +706,8 @@ Unsupported citation IDs: 0
 - Migration/rollback procedure cho collection v2.
 - CI chỉ chạy fake models và in-memory Qdrant.
 - Real Qdrant, FastEmbed và OpenAI tests dùng integration marker riêng.
+- Calibrate evidence/abstention policy from answerable and truly unanswerable held-out data.
+- Resolve reranker CPU latency and non-commercial license before commercial deployment.
 
 ---
 

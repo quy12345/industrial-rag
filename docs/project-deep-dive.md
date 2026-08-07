@@ -5,8 +5,7 @@ phỏng vấn. Nội dung bám theo code hiện tại, không mô tả những c
 
 ## 1. Project này thực sự đang làm gì?
 
-Tên repository là `industrial-rag`, nhưng trạng thái hiện tại chưa phải một hệ thống RAG end-to-end.
-Project đã hoàn thành phần chuẩn bị dữ liệu, retrieval và reranking:
+Repository hiện có một RAG query path end-to-end ở mức correctness/demo, nhưng chưa production-ready:
 
 1. Đọc PDF/DOCX bằng Docling.
 2. Chia tài liệu thành các chunk có cấu trúc và metadata trang/heading.
@@ -14,22 +13,17 @@ Project đã hoàn thành phần chuẩn bị dữ liệu, retrieval và reranki
 4. Lưu vector cùng payload vào Qdrant.
 5. Tìm candidate bằng dense, sparse hoặc hybrid RRF.
 6. Có thể dùng multilingual cross-encoder để rerank candidate.
-7. Đo chất lượng bằng qrels trực tiếp và lưu artifact JSON.
+7. Gate evidence trước khi gửi dữ liệu ra provider.
+8. Dùng OpenAI Responses hoặc Gemini OpenAI-compatible structured output để sinh answer và danh sách source IDs.
+9. Validate source IDs và dựng citation từ trusted Qdrant payload.
+10. Trả grounded answer hoặc explicit abstention qua `POST /api/v1/query`.
+11. Đo retrieval/reranking bằng qrels trực tiếp và lưu artifacts JSON.
 
-Project chưa có:
+Cách trình bày chính xác khi phỏng vấn là:
 
-- API nhận câu hỏi;
-- LLM sinh câu trả lời;
-- citation trong response;
-- abstention khi thiếu evidence;
-- LangChain/OpenAI integration.
-
-FastAPI hiện chỉ có `GET /api/v1/health`. `app/generation.py` chỉ là placeholder. Cách trình bày chính
-xác khi phỏng vấn là:
-
-> Đây là retrieval foundation của một hệ thống RAG tài liệu kỹ thuật. Tôi ưu tiên chứng minh chất
-> lượng ingestion, stable indexing, direct-evidence retrieval và reranking trước khi nối LLM, vì LLM
-> không thể sửa được evidence sai hoặc không được retrieve.
+> Đây là RAG tài liệu kỹ thuật có ingestion, immutable retrieval baselines, multilingual reranking,
+> grounded structured generation và trusted citations. Tôi xây retrieval/evaluation trước rồi mới
+> nối LLM, vì một câu trả lời trôi chảy không thể sửa evidence sai hoặc không được retrieve.
 
 Đây là một quyết định kỹ thuật hợp lý: retrieval sai nhưng câu trả lời nghe trôi chảy là failure nguy
 hiểm đối với tài liệu công nghiệp.
@@ -146,7 +140,7 @@ DocumentChunk[]
                                                ↓
                                   Qdrant v1 / v2 points
 
-ONLINE-LIKE SEARCH CLI / FUTURE QUERY API
+ONLINE QUERY API / SEARCH CLIs
 
 question
     ├── query dense embedding → Qdrant dense top 20 ───┐
@@ -159,13 +153,17 @@ question
                                                                   ↓
                                                      final ranked chunks
                                                                   ↓
-                                         future LLM answer + citations
+                                               evidence gate + S1…Sn
+                                                                  ↓
+                                    provider structured grounded answer
+                                                                  ↓
+                                   validate IDs → trusted citations/abstain
 ```
 
 Có hai loại flow cần phân biệt:
 
 - Ingestion/indexing là offline hoặc on-demand, nặng và chỉ chạy khi tài liệu thay đổi.
-- Search/reranking là query-time, chạy mỗi khi người dùng hỏi.
+- Retrieval/reranking/generation là query-time, chạy mỗi khi người dùng hỏi.
 
 ## 4. Data contract quan trọng nhất
 
@@ -458,14 +456,45 @@ rerank score giảm dần
 | Union rerank | 0.767 | 0.546 | 0.933 | 11.889 s |
 
 Reranking cải thiện quality và đạt critical bilingual intents 3/3, nhưng latency fail mục tiêu 1.5
-giây. Vì vậy `union` chỉ là best observed research strategy; runtime default vẫn `null`, và sparse là
-rollback thực tế.
+giây. Phase 6 chọn `union` làm accuracy-first API default và ghi rõ trade-off; sparse/no-rerank là
+rollback khi latency quan trọng hơn quality.
 
 Một câu trả lời phỏng vấn tốt:
 
-> Cross-encoder cải thiện ranking nhưng inference CPU quá chậm. Tôi không bật mặc định chỉ vì metric
-> đẹp; comparison artifact để quality `PARTIAL`. Bước tiếp theo là profile, quantization/model nhỏ
-> hơn hoặc batching/concurrency benchmark, đồng thời xử lý license thương mại.
+> Cross-encoder cải thiện ranking nhưng inference CPU quá chậm. API demo chọn union vì accuracy,
+> đồng thời có sparse rollback và không gọi hệ thống production-ready. Bước tiếp theo là profile,
+> quantization/model nhỏ hơn hoặc batching/concurrency benchmark, đồng thời xử lý license thương mại.
+
+### 8.5 Query API, evidence gate và trusted citations
+
+`QueryService` giữ flow ngoài FastAPI route:
+
+```text
+request validation
+→ lazy frozen runtime check
+→ retrieve/rerank
+→ cut final top_k
+→ metadata/score evidence gate
+→ S1…Sn untrusted evidence blocks
+→ strict GeneratedAnswer
+→ source-ID validation; tối đa một correction
+→ citation metadata từ RetrievalCandidate
+```
+
+Điểm quan trọng để giải thích khi phỏng vấn:
+
+- LLM chỉ được trả `answer`, `source_ids`, `insufficient_evidence`; nó không được tự tạo page hoặc
+  filename.
+- `S1` là label tạm cho request hiện tại. Backend giữ map `S1 → RetrievalCandidate` và chỉ map label
+  đã cung cấp.
+- No candidates/metadata invalid/score gate fail thì không gọi model. Threshold mặc định `None` vì
+  chưa có held-out unanswerable set để calibrate.
+- Unknown source ID hoặc grounded answer không citation bị reject. Correction retry dùng cùng
+  evidence, không retrieve/rerank lần hai.
+- Citation referential validity có nghĩa ID tồn tại trong evidence. Source có thực sự support từng
+  claim là semantic correctness và phải đo ở Phase 7.
+- Route chạy service sync trong threadpool. Model/retriever được lazy-cache, không khởi tạo theo mỗi
+  request; health không cần API key hay model load.
 
 ## 9. Evaluation: project biết kết quả đúng bằng cách nào?
 
@@ -505,7 +534,7 @@ p95 = 95% query có latency không vượt quá giá trị này
 ```
 
 Development set hiện có 30 câu, 15 VI và 15 EN→VI. Nó dùng để phát triển/tuning, không phải held-out
-Phase 6 final test set. Nói metric mà không nói đây là development set sẽ dễ gây hiểu nhầm.
+Phase 7 final test set. Nói metric mà không nói đây là development set sẽ dễ gây hiểu nhầm.
 
 ### Vì sao artifact lớn?
 
@@ -518,18 +547,22 @@ class và latency stages. Điều này cho phép điều tra một metric thay v
 |---|---|---|---|
 | `app/__init__.py` | Đánh dấu/document package | Python import system | Giữ; không phải module thừa |
 | `app/config.py` | Settings từ env/.env, validation và default contracts | API và mọi CLI | Giữ; single source of configuration |
-| `app/models.py` | Pydantic contracts cho health/chunk/result/candidate | Toàn bộ layers | Giữ; shared domain model |
-| `app/main.py` | FastAPI app và health route | Uvicorn/API image | Giữ; hiện cố ý rất nhỏ |
+| `app/models.py` | Pydantic contracts cho health/chunk/result/candidate/query/citation | Toàn bộ layers | Giữ; shared domain model |
+| `app/main.py` | FastAPI app, health và query router | Uvicorn/API image | Giữ; composition root mỏng |
 | `app/ingestion.py` | Docling conversion, page batching, stable IDs, normalization, JSONL | Preview/index CLIs | Giữ; ingestion core |
 | `app/retrieval.py` | Dense model, Qdrant v1 schema/index/search/manifest | Dense, hybrid và rerank flows | Giữ; dense retrieval core |
 | `app/hybrid_retrieval.py` | BM25, Qdrant v2, sparse search, RRF, manifest | Hybrid/audit/rerank CLIs | Giữ; hybrid core |
 | `app/evaluation.py` | Typed qrels, frozen validation, direct metrics | Evaluators/audit/rerank | Giữ; correctness boundary |
 | `app/candidate_audit.py` | Candidate coverage, union, RRF diagnosis | Audit và reranking | Giữ; không trùng evaluator |
-| `app/reranking.py` | Lazy cross-encoder, pool preparation, rerank, latency/failures | Phase 5 CLIs | Giữ; reranking core |
-| `app/generation.py` | Một dòng placeholder cho Phase 3B | Không ai import | Thừa ở runtime hiện tại; có thể xóa hoặc giữ làm roadmap marker |
+| `app/reranking.py` | Lazy cross-encoder, pool preparation, rerank, latency/failures | Phase 5 CLIs và API runtime | Giữ; reranking core |
+| `app/retrieval_runtime.py` | Frozen live-Qdrant checks, union/sparse composition, lazy cache | QueryService và Phase 5 wrapper | Giữ; production composition boundary |
+| `app/generation.py` | Evidence blocks, prompt, strict Responses adapter và token usage | QueryService | Giữ; LLM boundary |
+| `app/citations.py` | Source-ID validation và deterministic trusted citations | QueryService | Giữ; grounding boundary |
+| `app/query_service.py` | Retrieve/gate/generate/retry/respond orchestration | Query route và smoke CLI | Giữ; application service |
+| `app/api/query.py` | Threadpool handoff và HTTP error mapping | FastAPI | Giữ; route không chứa business logic |
 
-Điểm dependency tốt: `app.main` chỉ import config/models, không eager-import Docling, Qdrant hoặc
-FastEmbed. Health endpoint vẫn chạy khi Docling không được cài.
+Điểm dependency tốt: import/startup không tạo FastEmbed/OpenAI model và không import Docling. Health
+endpoint vẫn chạy khi Docling hoặc API key không có; heavy runtime chỉ được dựng sau query hợp lệ.
 
 ## 11. Ý nghĩa từng script
 
@@ -549,10 +582,13 @@ nên ở `app/`, còn argument parsing, print và artifact output ở `scripts/`
 | `rerank_runtime.py` | Dùng chung cách dựng/validate runtime Phase 5 | Không phải user CLI; composition helper |
 | `search_reranked.py` | Debug một query qua reranker | Read-only Qdrant + model inference |
 | `evaluate_reranking.py` | Benchmark ba rerank strategy | Ghi strategy reports và comparison |
+| `validate_query_runtime.py` | Smoke frozen union/sparse runtime | Read-only Qdrant/model; không gọi OpenAI |
+| `query_smoke.py` | Bounded real-provider smoke | Ghi sanitized Phase 6 JSON hoặc `not_run` |
+| `validate_phase6.sh` | Canonical Python 3.11 one-shot check | Cài dev deps rồi chạy Ruff/pytest |
 
 Ba search CLI nhìn giống nhau nhưng đang có giá trị chẩn đoán: mỗi CLI cô lập đúng contract của phase.
-Khi xây query API, có thể hợp nhất chúng sau một `RetrievalService`, nhưng xóa sớm sẽ làm regression
-và interview demo khó quan sát hơn.
+Query API tái sử dụng core functions qua `retrieval_runtime`; xóa các CLI sẽ làm regression và
+interview demo khó quan sát hơn.
 
 ## 12. Tests đang bảo vệ điều gì?
 
@@ -565,16 +601,23 @@ và interview demo khó quan sát hơn.
 | `test_evaluate.py` | Strict qrels, direct-evidence metrics, same-page false-positive prevention |
 | `test_candidate_audit.py` | Union dedup, coverage và RRF diagnosis |
 | `test_reranking.py` | Indexed model output, ordering, failures, pool construction, no eager model |
+| `test_retrieval_runtime.py` | Lazy composition, frozen settings/hash, no retrieval/rerank fallback |
+| `test_generation.py` | Evidence security/bounds, Responses kwargs, structured output, refusal/errors |
+| `test_citations.py` | Referential validity, ordering, Unicode excerpt và trusted metadata |
+| `test_query_service.py` | Gate, retry, abstention, timings, no sensitive logs |
+| `test_query_api.py` | Request contract và sanitized HTTP mappings |
 
-Default tests dùng fake embedding/cross-encoder và local in-memory Qdrant. Chúng không được tải model,
-gọi Docker, gọi Qdrant thật hoặc cần API key. Real model benchmark là explicit integration command.
+Default tests dùng fake embedding/cross-encoder/generator và local in-memory Qdrant. Chúng không tải
+model, gọi Docker/Qdrant/provider thật hoặc cần API key. Phase 6 canonical Python 3.11 suite có 160
+tests; provider/UTF-8 delta đưa local suite lên 162 và adapter Gemini đã được construct trong API
+image Python 3.11. Real model/provider smokes là explicit integration commands.
 
 ## 13. Docker và dependency split
 
 ### Base/API dependencies
 
 - FastAPI, Uvicorn, Pydantic settings.
-- API target cài thêm retrieval dependencies.
+- API target cài thêm retrieval và LLM dependencies.
 - Không cài Docling.
 
 ### Retrieval dependencies
@@ -587,12 +630,18 @@ gọi Docker, gọi Qdrant thật hoặc cần API key. Real model benchmark là
 - Docling và các OS shared libraries cho PDF/image processing.
 - Ingestion target kế thừa retrieval runtime.
 
+### LLM dependencies
+
+- `langchain-core` cho prompt/typed runnable contract.
+- `langchain-openai` cho Responses API; không cài full LangChain meta-package.
+- Chỉ API/dev nhận extra này; ingestion target không nhận.
+
 ### Compose services
 
 | Service | Vai trò | Khởi động mặc định? |
 |---|---|---|
 | `qdrant` | Persistent vector/search database | Có |
-| `api` | FastAPI health/future query runtime | Có |
+| `api` | FastAPI health + grounded query runtime | Có |
 | `ingestion` | Tool nặng chạy on-demand | Không; profile `tools` |
 
 Named volumes:
@@ -602,22 +651,20 @@ Named volumes:
 
 `data/raw` được bind read-only vào ingestion. Raw manual và artifacts không được bake vào image.
 
-Nuance hiện tại: API image đã chứa retrieval dependencies nhưng health endpoint chưa dùng retrieval.
-Đây là future-ready overhead. Nếu chỉ deploy health endpoint thì dependencies đó là thừa; nếu Phase
-3B sắp thêm query API thì giữ target hiện tại tránh một lần tái cấu trúc image.
+API image chứa retrieval + LLM dependencies vì query endpoint dùng cả hai, nhưng health không tạo
+model. Shared FastEmbed volume chỉ được mount runtime; image inspection xác nhận không bake weights.
 
 ## 14. Audit code thừa và duplication
 
-### 14.1 Thừa thật ở runtime hiện tại
+### 14.1 Item chưa nằm trên Phase 6 runtime path
 
 | Item | Bằng chứng | Khuyến nghị |
 |---|---|---|
-| `app/generation.py` | Chỉ có docstring, không có import/caller | Có thể xóa; hoặc giữ có chú thích Phase 3B |
-| `rerank_candidate_strategy` | Chỉ được khai báo/test, CLI vẫn bắt strategy rõ ràng | Wire vào future service hoặc xóa khi chốt contract |
-| `rerank_final_limit` | Chưa được đọc; reranked CLI hardcode default 5 | Dùng làm CLI/service default hoặc bỏ để tránh config giả |
+| `rerank_candidate_strategy` | Phase 5 CLI vẫn bắt strategy rõ ràng; API dùng `retrieval_strategy` | Giữ compatibility rồi deprecate có tài liệu |
+| `rerank_final_limit` | Phase 5 experiment setting; API dùng request `top_k` | Giữ compatibility hoặc bỏ trong cleanup riêng |
 
-Không nên xóa ngay trong Phase 5 branch nếu chưa quyết định public config của Phase 3B. Unused setting
-nguy hiểm hơn placeholder vì người vận hành có thể tưởng thay env sẽ có tác dụng.
+Không còn placeholder module nào trên query path. Hai setting cũ không điều khiển API; người vận hành
+phải dùng `RETRIEVAL_STRATEGY`, `RERANK_ENABLED` và request `top_k`.
 
 Các script `generate_phase5_readiness.py` và `audit_candidate_pools.py` không nằm trên query runtime
 path sau khi Phase 5 hoàn tất. Chúng là phase-specific reproducibility tools, không phải dead code.
@@ -692,12 +739,15 @@ Không nên xóa helper; nên đổi ownership/public boundary ở phase cleanup
 10. Docling dependency không bị kéo vào API import path.
 11. Runtime artifacts lưu đủ fingerprint, metrics, per-query failures và latency methodology.
 12. Kết quả xấu được giữ trung thực: hybrid kém sparse và reranker fail latency vẫn được báo cáo.
+13. Evidence gate chạy trước provider; source IDs được validate và citation metadata không do LLM tạo.
+14. Missing key không làm hỏng health và không kích hoạt model download.
 
 ## 16. Điểm yếu và việc cần làm trước production
 
-1. Chưa có query API/generation/citation/abstention nên chưa phải complete RAG.
-2. Chỉ benchmark một manual 21 trang và development set 30 câu.
-3. Chưa có held-out final evaluation.
+1. Query API đã có nhưng real Responses smoke chưa chạy vì thiếu API key.
+2. Chỉ benchmark một PDF nghiên cứu tiếng Việt 21 trang và development set 30 câu; chưa phải corpus
+   manual công nghiệp đại diện.
+3. Chưa có held-out Phase 7 end-to-end evaluation hoặc calibrated unanswerable set.
 4. OCR tắt; scanned PDF không hoạt động.
 5. Page batching làm mất heading/table continuity qua boundary.
 6. Re-index chưa có collection alias/staging transaction.
@@ -705,7 +755,7 @@ Không nên xóa helper; nên đổi ownership/public boundary ở phase cleanup
 8. Chưa có authentication, rate limit, background jobs hoặc multi-tenant isolation.
 9. API health chưa kiểm tra Qdrant/model readiness sâu.
 10. Chưa có observability production: structured logs, traces, metrics exporter.
-11. Config có hai rerank field chưa wiring.
+11. Hai Phase 5 rerank settings cũ không nằm trên API path và cần cleanup/deprecation sau.
 12. Một số shared helpers đang lặp hoặc bị import dưới tên private.
 13. Qdrant `depends_on` chưa phải readiness health gate; service có thể start trước khi Qdrant ready.
 14. Chưa có concurrency/load benchmark hoặc memory budget cho model.
@@ -756,7 +806,7 @@ Tự tính một ví dụ RRF với dense rank 2 và sparse rank 5:
 Mở một dòng `data/eval/dense_smoke.jsonl`, tìm `relevant_chunk_ids` trong
 `artifacts/manual-batched.jsonl`, rồi đọc `direct_evidence_rank` và `evaluate_cases`.
 
-### 60–75 phút: reranking
+### 60–70 phút: reranking
 
 Đọc `candidate_audit.py`, `reranking.py` và `rerank_runtime.py`. Phân biệt:
 
@@ -765,14 +815,19 @@ Mở một dòng `data/eval/dense_smoke.jsonl`, tìm `relevant_chunk_ids` trong
 - evidence hit;
 - union coverage với final ranking.
 
-### 75–90 phút: integration và tests
+### 70–82 phút: query/generation/citations
+
+Đọc `retrieval_runtime.py`, `query_service.py`, `generation.py`, `citations.py`, rồi
+`api/query.py`. Trace một valid source ID và một unknown source qua correction retry.
+
+### 82–90 phút: integration và tests
 
 Đọc Dockerfile/Compose, sau đó mapping mỗi module với test file tương ứng. Mở comparison artifact để
 liên hệ code với số đo thật.
 
 ## 18. Cách trace một query khi có lỗi
 
-Giả sử query trả evidence sai:
+Giả sử query trả answer hoặc evidence sai:
 
 1. Xác nhận `document_id` filter đúng.
 2. Chạy `search_dense.py`, ghi dense IDs/ranks.
@@ -783,7 +838,9 @@ Giả sử query trả evidence sai:
 7. Mở payload để kiểm tra pages/headings/text.
 8. Kiểm tra manifest có khớp model/schema/frozen hash không.
 9. Không dùng page match để tự kết luận hit.
-10. Chạy evaluator để lưu failure trong artifact thay vì sửa qrel theo output.
+10. Nếu candidate đúng nhưng answer sai, kiểm tra gate, evidence labels và structured source IDs.
+11. Unknown/missing source phải bị correction hoặc abstain; page/filename phải đến từ payload.
+12. Chạy evaluator/smoke để lưu failure trong artifact thay vì sửa qrel theo output.
 
 ## 19. Các câu hỏi phỏng vấn và câu trả lời gợi ý
 
@@ -822,8 +879,9 @@ Giả sử query trả evidence sai:
 ### “Kết quả nào không đạt và bạn xử lý sao?”
 
 > Phase 4 hybrid kém sparse ở top rank. Phase 5 reranker cải thiện Hit@5/MRR và critical 3/3 nhưng
-> CPU p95 8–12 giây, vượt gate 1.5 giây. Tôi giữ default là null và rollback về sparse thay vì bật
-> một model chậm. Model còn có license non-commercial.
+> CPU p95 8–12 giây, vượt gate 1.5 giây. Phase 6 dùng union làm accuracy-first demo default nhưng
+> giữ sparse/no-rerank rollback và không gọi đó là production-ready. Model còn có license
+> non-commercial.
 
 ### “Nếu mở rộng lên hàng triệu chunks?”
 
@@ -838,12 +896,14 @@ Giả sử query trả evidence sai:
 
 ### “Project có phải production-ready RAG chưa?”
 
-> Chưa. Retrieval foundation khá chặt, nhưng thiếu query/generation API, held-out evaluation,
-> citation/abstention, commercial reranker decision, latency optimization, auth và observability.
+> Chưa. Query/generation/citation/abstention đã có, nhưng real provider chưa smoke vì thiếu key và
+> vẫn thiếu
+> held-out semantic citation/abstention evaluation, real industrial corpus, commercial reranker
+> decision, latency optimization, auth và production observability.
 
 ## 20. Bài trình bày project trong 90 giây
 
-> Tôi xây dựng retrieval foundation cho hệ thống hỏi đáp manual công nghiệp song ngữ. PDF được
+> Tôi xây dựng RAG query pipeline cho tài liệu kỹ thuật song ngữ. PDF được
 > Docling parse và hierarchical chunk, mỗi chunk có stable content-based ID, page và heading metadata.
 > Tôi index dense multilingual vectors vào Qdrant v1; sau đó thêm collection v2 chứa cả dense và
 > BM25 sparse vectors mà không phá baseline cũ. Dense và sparse được fusion client-side bằng RRF,
@@ -851,9 +911,11 @@ Giả sử query trả evidence sai:
 > chunk ID được tính Hit/MRR, page chỉ là diagnostics. Benchmark cho thấy sparse mạnh hơn hybrid,
 > nên tôi không giả định hybrid luôn tốt. Tôi audit candidate recall rồi thử multilingual
 > cross-encoder trên sparse, hybrid và union pools. Reranking đạt critical intents 3/3 và Hit@5 0.767,
-> nhưng CPU p95 8–12 giây và model có license non-commercial, vì vậy tôi để quality PARTIAL và không
-> đặt runtime default. Project hiện chưa nối LLM; bước tiếp theo là giải quyết latency/license trước
-> khi thêm grounded generation, citations và abstention.
+> nhưng CPU p95 8–12 giây và model có license non-commercial. Query API dùng union accuracy-first,
+> gate evidence, gọi generation provider với strict structured output, validate source IDs và dựng
+> citation từ Qdrant payload; sparse/no-rerank là rollback. Offline/Docker correctness pass 160 tests,
+> còn real OpenAI smoke chưa chạy vì thiếu key. Phase 7 phải đo semantic citations, abstention trên
+> held-out set và giải quyết latency/license trước production.
 
 ## 21. Checklist tự kiểm tra kiến thức
 
@@ -869,8 +931,10 @@ Bạn nên trả lời được mà không mở code:
 - Qrel nào mới được tính direct hit?
 - Safe re-index bảo vệ được gì và chưa atomic ở điểm nào?
 - Model cache khác Qdrant volume và artifacts thế nào?
-- Module nào thực sự chưa dùng?
-- Vì sao project chưa phải complete RAG?
+- Module nào không nằm trên Phase 6 runtime path?
+- LLM được phép điều khiển field nào, field citation nào phải do backend dựng?
+- Evidence gate và correction retry ngăn failure nào?
+- Vì sao project đã có complete query flow nhưng vẫn chưa production-ready?
 - Metric nào đạt, latency/license nào chưa đạt?
 - Bạn sẽ làm gì trước khi đưa project vào production?
 

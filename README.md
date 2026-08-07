@@ -2,17 +2,19 @@
 
 ## Status
 
-**Phase 5 — Multilingual Cross-Encoder Reranking**
+**Phase 6 — Query API, Grounded Generation, Citations and Abstention**
 
-Phase 5 implementation and real-model benchmarking are complete. The project can rerank sparse,
-hybrid-RRF, or dense/sparse-union candidate pools with a multilingual cross-encoder while retaining
-all dense, sparse, fusion, metadata, and direct-evidence diagnostics. Ranking quality passed, but
-the CPU latency gate failed, so Phase 5 is **PARTIAL** and no reranking strategy is the runtime
-default.
-The FastAPI service currently exposes only `GET /api/v1/health`.
+Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
+`GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
+multilingual cross-encoder reranking, an evidence gate, OpenAI/Gemini structured generation,
+referential citation validation, and deterministic citations built from Qdrant payloads. Sparse
+top-20 without reranking remains the explicit operational rollback.
 
-Out of scope for this phase: LangChain, OpenAI, answer generation, citations, abstention, and a
-query endpoint.
+An interactive Gemini request has returned an answer through the full API path. The sanitized,
+bounded provider smoke artifact is still not recorded, and the OpenAI path is not run. This is not
+called production-ready: semantic citation evaluation, unanswerable calibration, a real industrial
+corpus, and production hardening remain Phase 7 work. Phase 5.1 reranker optimization remains
+deferred.
 
 The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, FastEmbed `0.8.0`,
 and Qdrant server `v1.18.3`. The historic dense artifact that records client `1.18.0` is retained
@@ -38,10 +40,162 @@ Extras are separated by responsibility:
 
 - `.[retrieval]`: Qdrant client, FastEmbed, dense retrieval, sparse BM25, and RRF.
 - `.[ingestion]`: Docling document parsing.
-- `.[dev]`: test/lint tooling plus retrieval and ingestion dependencies, so the complete unit suite runs.
+- `.[llm]`: `langchain-core` and `langchain-openai` for Responses structured generation.
+- `.[dev]`: test/lint tooling plus retrieval, ingestion, and LLM dependencies.
 
 `EMBEDDING_CACHE_DIR` is optional locally. In Docker it is set to `/models/fastembed` and backed by
 a shared named volume; model weights are never baked into either image.
+
+## Quickstart: khởi động, test, chạy demo và dừng
+
+Các lệnh Docker được chạy tại repository root. Không cần activate `.venv` để build hoặc chạy
+container:
+
+```powershell
+cd D:\Git\industrial-rag
+```
+
+### 1. Cấu hình provider
+
+Tạo hoặc cập nhật `.env`. Ví dụ dùng Gemini OpenAI-compatible:
+
+```text
+GENERATION_PROVIDER=gemini
+GEMINI_API_KEY=YOUR_NEW_GEMINI_API_KEY
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+GEMINI_REASONING_EFFORT=minimal
+
+OPENAI_MAX_OUTPUT_TOKENS=800
+OPENAI_TIMEOUT_SECONDS=60
+OPENAI_MAX_RETRIES=1
+OPENAI_STORE=false
+
+RETRIEVAL_STRATEGY=union
+RERANK_ENABLED=true
+```
+
+Không commit `.env`, không ghi key vào Dockerfile/source và không dán key vào terminal output hoặc
+chat. Nếu key từng xuất hiện trong log, phải revoke và tạo key mới trước khi tiếp tục.
+
+### 2. Build và khởi động
+
+Build riêng API sau lần checkout đầu tiên hoặc sau khi source/Dockerfile/dependencies thay đổi:
+
+```powershell
+docker compose --progress plain build api
+```
+
+Không cần build ingestion để chạy query API. Khởi động Qdrant và API:
+
+```powershell
+docker compose up -d qdrant api
+docker compose ps
+```
+
+Kiểm tra health và UTF-8 response header:
+
+```powershell
+$health = Invoke-WebRequest -UseBasicParsing http://localhost:8000/api/v1/health
+$health.StatusCode
+$health.Headers["Content-Type"]
+```
+
+Kết quả mong đợi là HTTP `200` và `application/json; charset=utf-8`.
+
+### 3. Chạy unit tests
+
+Local tests cần cùng một interpreter Python 3.11; activate `.venv` chỉ cần cho workflow local này,
+không ảnh hưởng Docker:
+
+```powershell
+python --version
+python -m pip install -e ".[dev]"
+python -m ruff check .
+python -m pytest -q --basetemp ".pytest-tmp-$PID"
+```
+
+`python --version` phải là 3.11.x. Test suite tự bỏ qua repository `.env` và các biến settings của
+shell, nên không gọi provider thật hoặc đưa API key vào assertion output. Nếu Windows báo
+`PermissionError: [WinError 5]`, dùng một tên `--basetemp` mới nằm trong workspace; không cần chạy
+toàn bộ terminal bằng Administrator chỉ để che lỗi ACL của thư mục temp cũ.
+
+Kiểm tra Compose mà không khởi động service:
+
+```powershell
+docker compose config --quiet
+```
+
+### 4. Chạy query demo
+
+Windows PowerShell 5.1 nên gửi request bằng UTF-8 bytes và lưu kết quả vào biến để tránh table
+formatter cắt ngắn answer:
+
+```powershell
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
+$body = @{
+    question = "Thuật toán nào được sử dụng để phát hiện dữ liệu cảm biến bất thường?"
+    document_id = "manual-77d5dae4c2c5"
+    top_k = 5
+} | ConvertTo-Json
+
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+
+$result = Invoke-RestMethod http://localhost:8000/api/v1/query `
+    -Method Post `
+    -ContentType "application/json; charset=utf-8" `
+    -Body $bytes
+
+$result.answer
+$result.citations | Format-List *
+$result | ConvertTo-Json -Depth 10
+```
+
+Request đầu tiên có thể chậm vì runtime phải khởi tạo dense model và multilingual reranker. Xem log
+service mà không in secret/prompt/evidence:
+
+```powershell
+docker compose logs --tail 100 api
+```
+
+### 5. Sau khi chỉnh sửa
+
+| Thay đổi | Lệnh cần chạy |
+|---|---|
+| Chỉ sửa `.env` hoặc API key | `docker compose up -d --force-recreate api` |
+| Sửa `app/`, Dockerfile hoặc dependencies | `docker compose build api` rồi `docker compose up -d --force-recreate api` |
+| Sửa Python source khi đang dùng dev override | Compose tự reload; dependency change vẫn phải rebuild API |
+| Sửa ingestion code/dependencies | Chỉ build ingestion thủ công khi thực sự cần ingestion |
+
+Dev mode bind-mount source và bật Uvicorn reload:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d qdrant api
+```
+
+### 6. Dừng an toàn
+
+Dừng hằng ngày nhưng giữ container, collection, Qdrant storage và model cache:
+
+```powershell
+docker compose stop api qdrant
+```
+
+Khởi động lại các container đã dừng:
+
+```powershell
+docker compose start qdrant api
+```
+
+Nếu muốn xóa container/network của Compose nhưng vẫn giữ named volumes:
+
+```powershell
+docker compose down
+```
+
+Không dùng `docker compose down -v`, `docker system prune` hoặc `docker volume prune`; các lệnh đó có
+thể xóa Qdrant collection hoặc FastEmbed model cache cần giữ lại.
 
 ## Ingestion and dense indexing
 
@@ -74,7 +228,7 @@ Dense cosine scores are ranking signals, not probabilities.
 ## Retrieval development evaluation
 
 `data/eval/dense_smoke.jsonl` is a **30-query retrieval development set**, with 15 Vietnamese and
-15 English factual queries. It is not the held-out final evaluation set planned for Phase 6.
+15 English factual queries. It is not the held-out final evaluation set planned for Phase 7.
 
 Every item has stable `relevant_chunk_ids`. Direct retrieval hits, Hit@k, and MRR use only those
 IDs. Expected phrases are validated against the relevant frozen chunks; pages are diagnostics only,
@@ -155,8 +309,8 @@ The 2026-08-06 Python 3.11 container run measured the following development-set 
 
 Hybrid clears the Hit@5, MRR@20, Hit@20, and p95 targets, but only one of the three bilingual
 critical intents has direct evidence in top 5. See `docs/walkthrough-phase-4.md` for per-language,
-scenario, critical, and failure diagnostics. This remains a retrieval-development set, not Phase 6
-final evaluation.
+scenario, critical, and failure diagnostics. This remains a retrieval-development set, not the
+held-out Phase 7 end-to-end evaluation.
 
 ## Phase 5 candidate-pool handoff
 
@@ -227,9 +381,112 @@ Measured on 2026-08-06, Python 3.11.15 CPU runtime, frozen 30 qrels and 99 chunk
 
 All strategies passed the 3/3 bilingual critical-intent, Hit@5, and MRR@5 gates. None passed the
 warm total p95 target of 1.5 seconds. Union is the best observed research strategy, but
-`recommended_default_strategy` remains `null`; keep sparse retrieval as the low-latency rollback.
+the historical Phase 5 artifact keeps `recommended_default_strategy=null`. Phase 6 explicitly
+selects union as its accuracy-first API path and keeps sparse as the low-latency rollback.
 See `docs/walkthrough-phase-5.md` for scenario metrics, critical ranks, failure classes, commands,
 and the full validation record.
+
+## Grounded query API
+
+Phase 6 deliberately keeps retrieval, reranking, evidence gating, and citation validation in
+project code. LangChain is used only to orchestrate the prompt, invoke the selected generation
+provider, and parse the provider-native `GeneratedAnswer` schema:
+
+```text
+question
+→ dense v1 top 20 ∪ sparse v2 top 20
+→ Jina multilingual rerank
+→ final top_k evidence
+→ evidence gate
+→ strict structured output (OpenAI Responses or Gemini Chat Completions)
+→ source-ID validation and at most one correction
+→ trusted Qdrant citation metadata
+```
+
+Default configuration:
+
+```text
+RETRIEVAL_STRATEGY=union
+RERANK_ENABLED=true
+GENERATION_PROVIDER=openai
+OPENAI_MODEL=gpt-5.6-terra
+OPENAI_REASONING_EFFORT=low
+OPENAI_MAX_OUTPUT_TOKENS=800
+OPENAI_TIMEOUT_SECONDS=60
+OPENAI_MAX_RETRIES=1
+OPENAI_STORE=false
+```
+
+Set `OPENAI_API_KEY` in the local `.env`; never put it in source, Dockerfile, commands, or chat.
+Health remains available without the key. A query then returns sanitized HTTP 503
+`llm_not_configured` before loading retrieval models.
+
+Gemini is supported through Google's OpenAI-compatible Chat Completions endpoint; no Google SDK is
+required. Use a Gemini key from Google AI Studio and keep the OpenAI key unset:
+
+```text
+GENERATION_PROVIDER=gemini
+GEMINI_API_KEY=<YOUR_GEMINI_API_KEY>
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+GEMINI_REASONING_EFFORT=minimal
+OPENAI_MAX_OUTPUT_TOKENS=800
+OPENAI_TIMEOUT_SECONDS=60
+OPENAI_MAX_RETRIES=1
+OPENAI_STORE=false
+
+RETRIEVAL_STRATEGY=union
+RERANK_ENABLED=true
+```
+
+The base URL is essential: without it, an OpenAI-compatible client would send the Gemini key to the
+OpenAI endpoint. Gemini compatibility currently uses Chat Completions, not the OpenAI Responses
+path used by the OpenAI provider. Structured output and the project's citation validator remain
+active in both modes. Google's data-use terms depend on the Gemini billing tier; `OPENAI_STORE=false`
+does not control Google's retention or model-improvement policy.
+
+References: [Google OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai) and
+[Gemini 3.5 Flash-Lite model card](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite).
+
+PowerShell request:
+
+```powershell
+$body = @{ question = "Thuật toán nào phát hiện dữ liệu cảm biến bất thường?"; top_k = 5 } |
+  ConvertTo-Json
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+Invoke-RestMethod http://localhost:8000/api/v1/query `
+  -Method Post -ContentType "application/json; charset=utf-8" -Body $bytes
+```
+
+On Windows PowerShell 5.1, assign the result and use `ConvertTo-Json` instead of its default table
+formatter so long answers and nested citations are not abbreviated:
+
+```powershell
+$result = Invoke-RestMethod http://localhost:8000/api/v1/query `
+  -Method Post -ContentType "application/json; charset=utf-8" -Body $bytes
+$result | ConvertTo-Json -Depth 10
+```
+
+The API explicitly returns `application/json; charset=utf-8` for compatibility with that legacy
+client. PowerShell 7 also handles UTF-8 JSON correctly.
+
+Request fields are `question`, optional `document_id`, and `top_k` from 1–10. A successful response
+contains `answer`, `abstained`, optional `abstention_reason`, and a citation list. Citation filename,
+pages, headings, and excerpt come from trusted retrieved payloads, never from model-generated
+metadata. Valid no-evidence/model/refusal/citation-validation abstentions return HTTP 200; Qdrant,
+reranker, and provider dependency failures return 503, provider timeouts return 504, and malformed
+requests return 422.
+
+Explicit low-latency rollback:
+
+```text
+RETRIEVAL_STRATEGY=sparse
+RERANK_ENABLED=false
+```
+
+The optional evidence score threshold defaults to `None`: reranker/BM25 scores are ranking signals,
+not probabilities, and no threshold is claimed as calibrated. See `docs/walkthrough-phase-6.md` for
+the prompt-injection boundary, citation contract, retry behavior, smoke status, and reproduction.
 
 ## Docker
 
@@ -242,7 +499,8 @@ docker compose --progress plain build api
 docker compose up -d qdrant api
 ```
 
-The API image installs `.[retrieval]` but not Docling. Build and run ingestion only when needed:
+The API image installs base + `.[retrieval]` + `.[llm]`, but not Docling. Build and run ingestion
+only when needed:
 
 ```powershell
 docker compose --progress plain --profile tools build ingestion
@@ -251,14 +509,14 @@ docker compose --profile tools run --rm ingestion `
   --page-start 1 --page-end 21 --page-batch-size 4
 ```
 
-Phase 4.1 baked-image validation passed for the API target: Python 3.11.15, qdrant-client 1.19.0,
-FastEmbed 0.8.0, no importable Docling, an empty pre-runtime model-cache directory, `/health`, and
-API-to-Qdrant checks for both 99-point collections. `docker image ls` measured the API at 544 MB and
-the prior ingestion image at 9.57 GB. The fresh ingestion rebuild was deliberately cancelled while
-downloading the 526.6 MB `torch` wheel after a prolonged external package-registry transfer. Do not
-claim its new baked-source validation passes until a future build completes. The existing ingestion
-image was used only with an explicit source mount for real integration evaluation, which is not
-baked-image evidence.
+The Phase 6 API build completed in 1m15s. Docker inspection measured `146,177,894` bytes
+(146.18 MB decimal); Python is 3.11.15, `langchain-core` is 1.5.3, `langchain-openai` is 1.4.1,
+and `openai` is 2.53.0. Docling is not importable and the unmounted baked cache contains zero model
+files. Health returned 200 and a configured-without-key query returned sanitized 503. The existing
+shared runtime cache remains 1.3 GB; it is a named volume, not part of the image.
+
+No Phase 6 ingestion build was run. The prior ingestion image remains available for on-demand tools;
+its fresh rebuild remains a manual/deferred task after the earlier external package-download delay.
 
 For live reload during development, add the override file:
 
@@ -282,6 +540,11 @@ preserved.
   a separate sparse/RRF collection rather than hidden changes to this development set.
 - Hybrid retrieval improves the development-set aggregate, but two critical bilingual intents still
   miss top 5 before reranking.
-- Phase 5 reranking meets the measured ranking gates but takes 8.47–11.89 seconds at warm p95 on
-  the tested CPU, so it is not enabled as a runtime default.
+- Accuracy-first union reranking is now the Phase 6 default, but it remains slow on CPU: the Phase 5
+  warm p95 was 11.89 seconds and the Phase 6 real smoke measured 13.90 seconds for one rerank. Sparse
+  rollback measured 5.63 ms retrieval with no reranker.
 - The selected reranker is licensed CC-BY-NC-4.0 and is not approved here for commercial use.
+- Gemini has returned an answer in an interactive request, but the sanitized bounded provider smoke
+  artifact is still pending; the OpenAI path remains untested. Offline structured-output, provider
+  routing, and HTTP behavior are covered by fakes.
+- Referential citation IDs are validated in Phase 6, but semantic claim support is a Phase 7 metric.

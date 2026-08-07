@@ -157,13 +157,12 @@ volume, not an image layer.
 | Union candidate recall | ≥ 0.933 | PASS: 0.933 |
 | Warm total CPU p95 | < 1.5 s | FAIL: 8.466–11.889 s |
 
-Union is the best observed research strategy under the locked selection order, but the comparison
-artifact intentionally stores `recommended_default_strategy: null` and `quality_gate: PARTIAL`.
-Rollback is immediate because the API has no query/rerank endpoint and settings do not select a
-default: continue using the Phase 4 sparse CLI/baseline. Errors also never trigger an implicit
-fallback, which keeps failures observable.
+Union is the best observed research strategy under the locked selection order, but the historical
+comparison artifact intentionally stores `recommended_default_strategy: null` and
+`quality_gate: PARTIAL`. Phase 6 later selected union as an accuracy-first API runtime and added
+sparse/no-rerank as explicit rollback. Errors never trigger an implicit fallback.
 
-Before Phase 3B/Phase 6, choose one of these explicit follow-ups: optimize/quantize/profile the
+Before production hardening, choose one of these explicit follow-ups: optimize/quantize/profile the
 reranker while keeping the frozen benchmark, choose a commercially compatible model and rerun all
 gates, or accept sparse retrieval without a reranker. Do not report this development set as a
 held-out final result.

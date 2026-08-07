@@ -12,3 +12,7 @@
   in unit tests or Docker builds.
 - Update README and `docs/` when a public retrieval contract changes. Do not commit, push, or merge
   unless the user explicitly asks.
+- Query generation only runs after the evidence gate. Never return unvalidated model citations or
+  log API keys, full prompts, questions, or evidence content.
+- Pytest must ignore the repository `.env` and matching process settings so local credentials cannot
+  alter deterministic tests or appear in assertion output.
