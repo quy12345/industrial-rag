@@ -34,9 +34,7 @@ class FrozenRetrievalContract:
 
     document_id: str = "manual-77d5dae4c2c5"
     chunk_count: int = 99
-    chunk_ids_sha256: str = (
-        "bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be"
-    )
+    chunk_ids_sha256: str = "bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be"
     dense_collection: str = "industrial_manual_chunks"
     hybrid_collection: str = "industrial_manual_chunks_v2"
     dense_vector_name: str = "dense"
@@ -52,9 +50,31 @@ class FrozenRetrievalContract:
     bm25_b: float = 0.75
     bm25_avg_len: float = 72.83838383838383
     bm25_disable_stemmer: bool = True
+    document_ids: tuple[str, ...] = ()
+
+    @property
+    def indexed_document_ids(self) -> tuple[str, ...]:
+        """Return the documents whose stable IDs form this frozen corpus."""
+
+        return self.document_ids or (self.document_id,)
 
 
 PHASE6_RETRIEVAL_CONTRACT = FrozenRetrievalContract()
+
+# Separate Phase 7 corpus.  These values intentionally live in package code rather
+# than in ``artifacts/`` so the runtime can verify Qdrant without a host checkout.
+PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
+    document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
+    document_ids=(
+        "atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
+        "atv320-programming-manual-en-nve41295-06-f5e9bb48167a",
+    ),
+    chunk_count=2753,
+    chunk_ids_sha256="2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d",
+    dense_collection="industrial_manual_phase7_dense_v1",
+    hybrid_collection="industrial_manual_phase7_hybrid_v1",
+    bm25_avg_len=81.33599709407919,
+)
 
 
 @dataclass(frozen=True)
@@ -64,6 +84,7 @@ class QueryRetrievalResult:
     candidates: list[RetrievalCandidate]
     retrieval_ms: float
     rerank_ms: float
+    candidate_pool: list[RetrievalCandidate] | None = None
 
 
 class QueryRetriever(Protocol):
@@ -94,6 +115,9 @@ class UnionRerankRetriever:
             candidates=execution.candidates_after_rerank,
             retrieval_ms=retrieval_ms,
             rerank_ms=execution.stage_latency_ms.get("rerank", 0.0),
+            candidate_pool=list(
+                getattr(execution, "candidates_before_rerank", execution.candidates_after_rerank)
+            ),
         )
 
 
@@ -123,6 +147,7 @@ class SparseRollbackRetriever:
             candidates=candidates,
             retrieval_ms=(perf_counter() - started) * 1000,
             rerank_ms=0.0,
+            candidate_pool=list(candidates),
         )
 
 
@@ -289,16 +314,18 @@ def _validate_frozen_collection(
             f"Collection {collection_name} has {point_count} points; "
             f"expected {contract.chunk_count}."
         )
-    chunk_ids = get_indexed_chunk_ids(
-        client,
-        collection_name=collection_name,
-        document_id=contract.document_id,
-    )
+    chunk_ids: set[str] = set()
+    for document_id in contract.indexed_document_ids:
+        chunk_ids.update(
+            get_indexed_chunk_ids(
+                client,
+                collection_name=collection_name,
+                document_id=document_id,
+            )
+        )
     fingerprint = hashlib.sha256("\n".join(sorted(chunk_ids)).encode("utf-8")).hexdigest()
     if len(chunk_ids) != contract.chunk_count or fingerprint != contract.chunk_ids_sha256:
-        raise RetrievalError(
-            f"Collection {collection_name} does not match the frozen Phase 6 chunk set."
-        )
+        raise RetrievalError(f"Collection {collection_name} does not match the frozen chunk set.")
 
 
 def _validate_settings(settings: Settings, contract: FrozenRetrievalContract) -> None:

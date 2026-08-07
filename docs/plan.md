@@ -668,6 +668,21 @@ structured-output details, validation evidence, and rollback.
 
 ## Phase 7 — End-to-end evaluation, real industrial corpus and production hardening
 
+### Current checkpoint (2026-08-07)
+
+- Separate ATV320 Installation/Programming corpus is frozen with 2,753 chunks and stable-ID hash
+  `2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
+- Protected Phase 3--6 v1/v2 collections remain 99/99 points. Phase 7 uses only
+  `industrial_manual_phase7_dense_v1` and `industrial_manual_phase7_hybrid_v1`.
+- Dataset approval is complete: calibration 12 answerable + 8 unanswerable; held-out test 30
+  answerable + 15 unanswerable. Hashes are recorded in the ignored evaluation manifest.
+- Implemented: multi-document frozen-runtime validation, sanitized resumable E2E scorer, Qdrant
+  readiness, request correlation IDs, bounded Qdrant timeout, optional bearer auth, and API Docker
+  liveness healthcheck.
+- Python 3.11 validation: Ruff `PASS`; pytest `175 passed, 1 warning`.
+- Remaining gate: explicit corpus-owner approval to send selected questions and retrieved manual
+  excerpts to Gemini, followed by calibration before the held-out benchmark.
+
 ### Evaluation dataset
 
 - Tối thiểu 20 answerable và 10 unanswerable questions.

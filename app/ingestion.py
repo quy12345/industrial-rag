@@ -120,9 +120,12 @@ def ingest_document(
     *,
     page_range: tuple[int, int] | None = None,
     batch_size: int | None = None,
+    chunker: str = "hierarchical",
 ) -> list[DocumentChunk]:
     """Convert a PDF or DOCX into normalized, structure-aware document chunks."""
 
+    if chunker not in {"hierarchical", "hybrid"}:
+        raise IngestionError("chunker must be 'hierarchical' or 'hybrid'.")
     path = validate_input_path(file_path)
     conversion_ranges = _resolve_conversion_ranges(path, page_range, batch_size)
     document_id = build_document_id(path)
@@ -130,7 +133,12 @@ def ingest_document(
     occurrence_counts: dict[str, int] = {}
 
     for conversion_range in conversion_ranges:
-        raw_chunks = _convert_document(path, page_range=conversion_range)
+        # Preserve the historical helper call shape for existing integrations and fakes.
+        raw_chunks = (
+            _convert_document(path, page_range=conversion_range)
+            if chunker == "hierarchical"
+            else _convert_document(path, page_range=conversion_range, chunker=chunker)
+        )
         _append_normalized_chunks(
             path,
             document_id,
@@ -287,11 +295,12 @@ def _convert_document(
     file_path: Path,
     *,
     page_range: tuple[int, int] | None = None,
+    chunker: str = "hierarchical",
 ) -> list[Any]:
     """Convert and chunk a document using Docling's native HierarchicalChunker."""
 
     try:
-        from docling.chunking import HierarchicalChunker
+        from docling.chunking import HierarchicalChunker, HybridChunker
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import PdfPipelineOptions
         from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -322,7 +331,8 @@ def _convert_document(
             convert_kwargs["page_range"] = page_range
         result = converter.convert(**convert_kwargs)
         _validate_conversion_result(result, page_range)
-        return list(HierarchicalChunker().chunk(dl_doc=result.document))
+        selected_chunker = HierarchicalChunker() if chunker == "hierarchical" else HybridChunker()
+        return list(selected_chunker.chunk(dl_doc=result.document))
     except IngestionError:
         raise
     except Exception as exc:

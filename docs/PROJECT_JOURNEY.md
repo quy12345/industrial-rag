@@ -24,6 +24,17 @@ supports it, avoid inventing unsupported sources, and be reproducible when a doc
 | 6 | `e3b3704` | Added query API, evidence gate, structured generation, citation validation, abstention, and Gemini/OpenAI routing. |
 | 7 | working tree | Adds a real industrial corpus, held-out evaluation, and portfolio-grade hardening. |
 
+## Phase 7 checkpoint
+
+Phase 7 does not overwrite the 99-chunk development corpus. It indexes 2,753 frozen chunks from
+two ATV320 manuals in `industrial_manual_phase7_dense_v1` and
+`industrial_manual_phase7_hybrid_v1`; their stable-ID hash is
+`2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
+The 20-row calibration and 45-row held-out sets are approved and hash-locked. The E2E evaluator
+scores qrel-only retrieval, phrase presence, citations, abstention, and latency without persisting
+raw provider content. A corpus owner must separately authorize provider data egress before the real
+benchmark runs.
+
 ## What changed in the architecture
 
 The first retrieval design was dense-only. Its important correction was that relevance must be a

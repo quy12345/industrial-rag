@@ -12,7 +12,7 @@ Query -> dense top-20 + sparse top-20 -> client-side RRF -> RetrievalCandidate
       -> source-ID validation -> trusted citation builder -> QueryResponse
 ```
 
-`app.main` exposes `/api/v1/health` and `/api/v1/query`. Retrieval, reranking, evidence gating, and
+`app.main` exposes `/api/v1/health`, `/api/v1/ready`, and `/api/v1/query`. Retrieval, reranking, evidence gating, and
 citations remain explicit Python; LangChain is limited to prompt orchestration, OpenAI Responses or
 Gemini OpenAI-compatible Chat Completions invocation, and provider-native structured output.
 
@@ -31,6 +31,10 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   schema/manifest validation, safe dual-vector indexing, sparse search, and deterministic RRF.
 - `app/evaluation.py`: dependency-free typed qrels, frozen-chunk validation, direct-evidence ranks,
   retrieval metrics, group metrics, and latency percentiles.
+- `app/phase7.py`: offline validation and hashing for the separate two-manual corpus and its approved
+  calibration/held-out JSONL sets; it never calls Qdrant or a provider.
+- `app/evaluation_e2e.py`: offline scoring of a completed query execution: qrel-only ranks,
+  citation outcomes, abstention confusion matrix, phrase checks, and stage latency summaries.
 - `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
   diagnostics, and RRF-demotion aggregation for the Phase 5 handoff.
 - `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
@@ -46,6 +50,7 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `app/query_service.py`: retrieve → gate → generate → validate/retry → respond orchestration,
   abstention policy, and internal stage timings.
 - `app/api/query.py`: threadpool handoff and sanitized HTTP error mapping only.
+- `app/api/auth.py`: optional constant-time bearer-token guard, disabled unless configured.
 - `scripts/index_document.py`, `scripts/search_dense.py`: v1 dense integration CLIs.
 - `scripts/index_hybrid.py`, `scripts/search_hybrid.py`, `scripts/evaluate.py`: v2 indexing/search
   and shared dense/sparse/hybrid evaluation CLIs.
@@ -60,6 +65,10 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   strategy/comparison JSON artifacts; `--comparison-only` never loads a model.
 - `scripts/validate_query_runtime.py`: read-only real union/sparse runtime smoke without OpenAI.
 - `scripts/query_smoke.py`: bounded real-provider smoke and sanitized Phase 6 artifact writer.
+- `scripts/audit_phase7_corpus.py`, `scripts/index_phase7_corpus.py`: source audit and guarded
+  indexing for the isolated ATV320 collections.
+- `scripts/evaluate_phase7_e2e.py`: resumable integration evaluator that validates the approved
+  manifest and live frozen hash before it sends anything to a provider.
 
 ## Dense-index contract
 

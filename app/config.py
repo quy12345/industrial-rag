@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     qdrant_url: str = "http://localhost"
     qdrant_port: int = 6333
+    qdrant_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     qdrant_collection: str = "industrial_manual_chunks"
     dense_vector_name: str = "dense"
     qdrant_hybrid_collection: str = "industrial_manual_chunks_v2"
@@ -57,6 +58,8 @@ class Settings(BaseSettings):
     openai_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     openai_max_retries: int = Field(default=1, ge=0, le=2)
     openai_store: bool = False
+    api_auth_enabled: bool = False
+    api_auth_key: SecretStr | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
+from app.config import get_settings
 from app.errors import (
     LLMNotConfiguredError,
     LLMTimeoutError,
@@ -139,3 +141,22 @@ def test_unexpected_error_returns_sanitized_500(client_and_service, caplog) -> N
     assert response.json()["detail"]["code"] == "internal_error"
     assert "raw evidence" not in response.text
     assert "secret question" not in caplog.text
+
+
+def test_optional_query_auth_rejects_missing_or_wrong_bearer_token(
+    client_and_service, monkeypatch
+) -> None:
+    client, service = client_and_service
+    monkeypatch.setattr(get_settings(), "api_auth_enabled", True)
+    monkeypatch.setattr(get_settings(), "api_auth_key", SecretStr("expected"))
+    missing = client.post("/api/v1/query", json={"question": "q"})
+    wrong = client.post(
+        "/api/v1/query", json={"question": "q"}, headers={"Authorization": "Bearer wrong"}
+    )
+    accepted = client.post(
+        "/api/v1/query", json={"question": "q"}, headers={"Authorization": "Bearer expected"}
+    )
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert accepted.status_code == 200
+    assert len(service.calls) == 1

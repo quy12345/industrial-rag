@@ -74,8 +74,14 @@ class Phase7Source(BaseModel):
     redistribution_note: str
 
     @field_validator(
-        "filename", "manufacturer", "title", "document_reference", "version", "official_url",
-        "retrieved_at", "redistribution_note",
+        "filename",
+        "manufacturer",
+        "title",
+        "document_reference",
+        "version",
+        "official_url",
+        "retrieved_at",
+        "redistribution_note",
     )
     @classmethod
     def non_empty_source_text(cls, value: str) -> str:
@@ -230,7 +236,9 @@ def validate_phase7_datasets(
 ) -> dict[str, Any]:
     """Validate immutable annotation rules against the frozen corpus."""
 
-    _validate_dataset_shape(calibration, kind="calibration", expected_answerable=12, expected_unanswerable=8)
+    _validate_dataset_shape(
+        calibration, kind="calibration", expected_answerable=12, expected_unanswerable=8
+    )
     _validate_dataset_shape(test, kind="test", expected_answerable=30, expected_unanswerable=15)
     calibration_ids = {item.id for item in calibration}
     duplicate_ids = calibration_ids.intersection(item.id for item in test)
@@ -272,7 +280,9 @@ def dataset_sha256(items: Sequence[Phase7DatasetItem]) -> str:
     """Hash canonical records, independent of JSONL line ending differences."""
 
     canonical = "\n".join(
-        json.dumps(item.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        json.dumps(
+            item.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
         for item in items
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -286,8 +296,13 @@ def write_json_atomic(path: Path, payload: Any) -> None:
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", newline="\n", dir=destination.parent,
-            prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
         ) as handle:
             temporary = Path(handle.name)
             json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
@@ -298,8 +313,37 @@ def write_json_atomic(path: Path, payload: Any) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def write_jsonl_atomic(path: Path, records: Sequence[dict[str, Any]]) -> None:
+    """Atomically replace a UTF-8 JSONL dataset while preserving record order."""
+
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+                handle.write("\n")
+        temporary.replace(destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def _validate_dataset_shape(
-    items: Sequence[Phase7DatasetItem], *, kind: DatasetKind, expected_answerable: int,
+    items: Sequence[Phase7DatasetItem],
+    *,
+    kind: DatasetKind,
+    expected_answerable: int,
     expected_unanswerable: int,
 ) -> None:
     counts = Counter(item.answerable for item in items)
@@ -313,7 +357,14 @@ def _validate_dataset_shape(
         if vi_to_en < 10:
             raise Phase7Error("Held-out test requires at least 10 answerable vi_to_en questions.")
         answerable_types = Counter(item.question_type for item in items if item.answerable)
-        required = {"installation", "safety", "wiring", "parameter_code", "fault_diagnosis", "cross_document"}
+        required = {
+            "installation",
+            "safety",
+            "wiring",
+            "parameter_code",
+            "fault_diagnosis",
+            "cross_document",
+        }
         missing = sorted(required - set(answerable_types))
         if missing:
             raise Phase7Error(f"Held-out test misses required question types: {missing}")

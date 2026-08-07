@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from app.models import DocumentChunk
 from app.phase7 import (
-    Phase7Error,
     Phase7DatasetItem,
+    Phase7Error,
     Phase7Source,
     dataset_sha256,
     file_sha256,
@@ -16,7 +17,6 @@ from app.phase7 import (
     validate_phase7_datasets,
     validate_source_records,
 )
-from app.models import DocumentChunk
 
 
 def _chunk(identifier: str, document_id: str, text: str, page: int) -> DocumentChunk:
@@ -31,23 +31,38 @@ def _chunk(identifier: str, document_id: str, text: str, page: int) -> DocumentC
     )
 
 
-def _answerable(index: int, *, language: str = "vi", question_type: str = "installation") -> Phase7DatasetItem:
+def _answerable(
+    index: int, *, language: str = "vi", question_type: str = "installation"
+) -> Phase7DatasetItem:
     document_id = "installation" if index % 2 else "programming"
     return Phase7DatasetItem(
-        id=f"item-{index}", question=f"Question {index}", language=language,
-        answerable=True, scenario="vi_to_en" if language == "vi" else "en_to_en",
-        question_type=question_type, expected_document_ids=[document_id],
-        relevant_chunk_ids=[f"chunk-{index}"], expected_pages=[index + 1],
-        expected_phrases=[f"phrase {index}"], citation_required=True,
+        id=f"item-{index}",
+        question=f"Question {index}",
+        language=language,
+        answerable=True,
+        scenario="vi_to_en" if language == "vi" else "en_to_en",
+        question_type=question_type,
+        expected_document_ids=[document_id],
+        relevant_chunk_ids=[f"chunk-{index}"],
+        expected_pages=[index + 1],
+        expected_phrases=[f"phrase {index}"],
+        citation_required=True,
     )
 
 
 def _unanswerable(index: int, *, language: str = "en") -> Phase7DatasetItem:
     return Phase7DatasetItem(
-        id=f"item-{index}", question=f"Unsupported question {index}", language=language,
-        answerable=False, scenario="vi_to_en" if language == "vi" else "en_to_en",
-        question_type="unanswerable", expected_document_ids=[], relevant_chunk_ids=[],
-        expected_pages=[], expected_phrases=[], citation_required=False,
+        id=f"item-{index}",
+        question=f"Unsupported question {index}",
+        language=language,
+        answerable=False,
+        scenario="vi_to_en" if language == "vi" else "en_to_en",
+        question_type="unanswerable",
+        expected_document_ids=[],
+        relevant_chunk_ids=[],
+        expected_pages=[],
+        expected_phrases=[],
+        citation_required=False,
         unanswerable_reason="Verified absent from both manuals.",
     )
 
@@ -57,18 +72,31 @@ def _valid_sets() -> tuple[list[Phase7DatasetItem], list[Phase7DatasetItem], lis
         _unanswerable(index) for index in range(13, 21)
     ]
     types = [
-        "installation", "safety", "wiring", "parameter_code", "fault_diagnosis", "cross_document",
+        "installation",
+        "safety",
+        "wiring",
+        "parameter_code",
+        "fault_diagnosis",
+        "cross_document",
     ]
     test = [
-        _answerable(index, language="vi" if index <= 16 else "en", question_type=types[(index - 21) % len(types)])
+        _answerable(
+            index,
+            language="vi" if index <= 36 else "en",
+            question_type=types[(index - 21) % len(types)],
+        )
         for index in range(21, 51)
     ] + [_unanswerable(index, language="vi" if index % 2 else "en") for index in range(51, 66)]
     all_items = [*calibration, *test]
     chunks = [
         _chunk(
-            item.relevant_chunk_ids[0], item.expected_document_ids[0], item.expected_phrases[0], item.expected_pages[0]
+            item.relevant_chunk_ids[0],
+            item.expected_document_ids[0],
+            item.expected_phrases[0],
+            item.expected_pages[0],
         )
-        for item in all_items if item.answerable
+        for item in all_items
+        if item.answerable
     ]
     return calibration, test, chunks
 
@@ -131,13 +159,23 @@ def test_file_hash_is_streamed_and_deterministic(tmp_path: Path) -> None:
 
 def test_source_manifest_contract_requires_unique_installation_and_programming() -> None:
     installation = Phase7Source(
-        filename="installation.pdf", manufacturer="Schneider Electric", title="Installation",
-        document_reference="NVE41289.09", version="04/2025", language="en",
-        document_role="installation", official_url="https://example.test/installation",
-        sha256="a" * 64, file_size_bytes=1, page_count=1, retrieved_at="2026-08-07",
+        filename="installation.pdf",
+        manufacturer="Schneider Electric",
+        title="Installation",
+        document_reference="NVE41289.09",
+        version="04/2025",
+        language="en",
+        document_role="installation",
+        official_url="https://example.test/installation",
+        sha256="a" * 64,
+        file_size_bytes=1,
+        page_count=1,
+        retrieved_at="2026-08-07",
         redistribution_note="Do not redistribute.",
     )
-    programming = installation.model_copy(update={"filename": "programming.pdf", "document_role": "programming"})
+    programming = installation.model_copy(
+        update={"filename": "programming.pdf", "document_role": "programming"}
+    )
     validate_source_records([installation, programming])
     with pytest.raises(Phase7Error, match="duplicate filenames"):
         validate_source_records([installation, installation])

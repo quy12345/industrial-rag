@@ -46,6 +46,32 @@ Extras are separated by responsibility:
 `EMBEDDING_CACHE_DIR` is optional locally. In Docker it is set to `/models/fastembed` and backed by
 a shared named volume; model weights are never baked into either image.
 
+## Phase 7 isolated industrial-corpus evaluation
+
+Phase 7 keeps the legacy 99-chunk development collections untouched. The new ATV320 corpus uses
+`industrial_manual_phase7_dense_v1` and `industrial_manual_phase7_hybrid_v1`, both frozen at 2,753
+points with stable-ID fingerprint
+`2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
+
+The approved calibration set has 12 answerable and 8 unanswerable cases. The separate held-out set
+has 30 answerable and 15 unanswerable cases. Verify annotations locally without models or Qdrant:
+
+```powershell
+python scripts/validate_phase7_dataset.py
+```
+
+The real end-to-end evaluator validates dataset hashes and live Qdrant hashes before startup, then
+writes a sanitized resumable artifact containing only IDs/ranks/metrics:
+
+```powershell
+python scripts/evaluate_phase7_e2e.py --dataset calibration
+python scripts/evaluate_phase7_e2e.py --dataset test
+```
+
+These commands send the selected question and retrieved manual evidence to the configured generation
+provider. They require separate corpus-owner approval for that external data transfer. Run calibration
+first and do not tune using the held-out test set.
+
 ## Quickstart: khởi động, test, chạy demo và dừng
 
 Các lệnh Docker được chạy tại repository root. Không cần activate `.venv` để build hoặc chạy

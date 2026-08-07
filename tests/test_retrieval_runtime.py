@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,8 @@ from app.reranking import RerankingError
 from app.retrieval import RetrievalError
 from app.retrieval_runtime import (
     PHASE6_RETRIEVAL_CONTRACT,
+    PHASE7_RETRIEVAL_CONTRACT,
+    FrozenRetrievalContract,
     LazyQueryRetriever,
     QueryRetrievalResult,
     UnionRerankRetriever,
@@ -114,6 +117,26 @@ def test_frozen_collection_rejects_count_and_hash_mismatch(monkeypatch) -> None:
     )
     with pytest.raises(RetrievalError, match="frozen"):
         _validate_frozen_collection(Client(99), "v1", contract)
+
+
+def test_multi_document_frozen_contract_hashes_the_union_of_stable_ids(monkeypatch) -> None:
+    contract = FrozenRetrievalContract(
+        document_id="a-doc",
+        document_ids=("a-doc", "b-doc"),
+        chunk_count=2,
+        chunk_ids_sha256=hashlib.sha256(b"a\nb").hexdigest(),
+    )
+
+    class Client:
+        def get_collection(self, name):
+            return SimpleNamespace(points_count=2)
+
+    monkeypatch.setattr(
+        "app.retrieval_runtime.get_indexed_chunk_ids",
+        lambda *args, document_id, **kwargs: {"a"} if document_id == "a-doc" else {"b"},
+    )
+    _validate_frozen_collection(Client(), "phase7", contract)
+    assert PHASE7_RETRIEVAL_CONTRACT.chunk_count == 2753
 
 
 def test_importing_runtime_does_not_construct_models() -> None:

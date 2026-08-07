@@ -16,6 +16,7 @@ from app.errors import (
 from app.generation import GeneratedAnswer, GenerationResult, TokenUsage
 from app.models import RetrievalCandidate
 from app.query_service import EvidenceGate, QueryService
+from app.request_context import request_id
 from app.retrieval_runtime import QueryRetrievalResult
 
 
@@ -115,6 +116,22 @@ def test_top_k_is_applied_after_ordered_retrieval_and_document_filter_is_forward
     assert [item.chunk_id for item in evidence.source_map.values()] == ["chunk-1", "chunk-2"]
 
 
+def test_execution_keeps_full_final_and_pre_rerank_candidates_for_evaluation() -> None:
+    final = [_candidate("final-1"), _candidate("final-2")]
+    pool = [_candidate("pool-1"), *final]
+    retriever = FakeRetriever(final)
+    retriever.retrieve = lambda question, *, document_id: QueryRetrievalResult(
+        final, retrieval_ms=2.0, rerank_ms=3.0, candidate_pool=pool
+    )
+    execution = _service(retriever).execute(question="q", document_id=None, top_k=1)
+    assert [candidate.chunk_id for candidate in execution.candidates] == ["final-1", "final-2"]
+    assert [candidate.chunk_id for candidate in execution.candidate_pool] == [
+        "pool-1",
+        "final-1",
+        "final-2",
+    ]
+
+
 @pytest.mark.parametrize(
     ("candidates", "reason"),
     [
@@ -148,24 +165,18 @@ def test_llm_declared_insufficient_evidence_returns_valid_abstention() -> None:
     generator = FakeGenerator(
         [
             GenerationResult(
-                GeneratedAnswer(
-                    answer="Not enough.", source_ids=[], insufficient_evidence=True
-                )
+                GeneratedAnswer(answer="Not enough.", source_ids=[], insufficient_evidence=True)
             )
         ]
     )
-    execution = _service(generator=generator).execute(
-        question="unknown", document_id=None, top_k=5
-    )
+    execution = _service(generator=generator).execute(question="unknown", document_id=None, top_k=5)
     assert execution.response.abstention_reason == "llm_insufficient_evidence"
     assert execution.response.citations == []
 
 
 def test_provider_refusal_returns_abstention_without_correction_retry() -> None:
     generator = FakeGenerator([LLMRefusalError("refused")])
-    execution = _service(generator=generator).execute(
-        question="q", document_id=None, top_k=5
-    )
+    execution = _service(generator=generator).execute(question="q", document_id=None, top_k=5)
     assert execution.response.abstention_reason == "llm_refusal"
     assert len(generator.calls) == 1
 
@@ -182,9 +193,7 @@ def test_invalid_citation_gets_one_retry_with_same_evidence_and_no_reretrieval()
             ),
         ]
     )
-    execution = _service(retriever, generator).execute(
-        question="q", document_id=None, top_k=5
-    )
+    execution = _service(retriever, generator).execute(question="q", document_id=None, top_k=5)
     assert execution.response.answer == "fixed"
     assert len(retriever.calls) == 1
     assert len(generator.calls) == 2
@@ -195,9 +204,7 @@ def test_invalid_citation_gets_one_retry_with_same_evidence_and_no_reretrieval()
 @pytest.mark.parametrize(
     "first_output",
     [
-        GenerationResult(
-            GeneratedAnswer(answer="bad", source_ids=[], insufficient_evidence=False)
-        ),
+        GenerationResult(GeneratedAnswer(answer="bad", source_ids=[], insufficient_evidence=False)),
         GenerationResult(
             GeneratedAnswer(answer=" ", source_ids=["S1"], insufficient_evidence=False)
         ),
@@ -205,12 +212,8 @@ def test_invalid_citation_gets_one_retry_with_same_evidence_and_no_reretrieval()
     ],
 )
 def test_second_invalid_output_abstains_after_exactly_one_retry(first_output) -> None:
-    generator = FakeGenerator(
-        [first_output, GenerationValidationError("still invalid")]
-    )
-    execution = _service(generator=generator).execute(
-        question="q", document_id=None, top_k=5
-    )
+    generator = FakeGenerator([first_output, GenerationValidationError("still invalid")])
+    execution = _service(generator=generator).execute(question="q", document_id=None, top_k=5)
     assert execution.response.abstention_reason == "citation_validation_failed"
     assert len(generator.calls) == 2
 
@@ -246,18 +249,21 @@ def test_usage_is_accumulated_across_correction_attempts() -> None:
             ),
         ]
     )
-    execution = _service(generator=generator).execute(
-        question="q", document_id=None, top_k=5
-    )
+    execution = _service(generator=generator).execute(question="q", document_id=None, top_k=5)
     assert execution.usage == TokenUsage(21, 5, 1)
 
 
 def test_logs_do_not_contain_question_or_evidence(caplog) -> None:
     secret_question = "secret-question-123"
     secret_evidence = "secret-evidence-456"
-    with caplog.at_level(logging.INFO, logger="app.query_service"):
-        _service(FakeRetriever([_candidate(text=secret_evidence)])).execute(
-            question=secret_question, document_id=None, top_k=5
-        )
+    token = request_id.set("request-123")
+    try:
+        with caplog.at_level(logging.INFO, logger="app.query_service"):
+            _service(FakeRetriever([_candidate(text=secret_evidence)])).execute(
+                question=secret_question, document_id=None, top_k=5
+            )
+    finally:
+        request_id.reset(token)
+    assert "request_id=request-123" in caplog.text
     assert secret_question not in caplog.text
     assert secret_evidence not in caplog.text

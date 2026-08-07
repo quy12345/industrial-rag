@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
+from app.api.auth import require_query_auth
 from app.errors import (
     LLMNotConfiguredError,
     LLMTimeoutError,
@@ -27,6 +28,7 @@ router = APIRouter()
 async def query(
     request: QueryRequest,
     service: Annotated[QueryService, Depends(get_query_service)],
+    _: Annotated[None, Depends(require_query_auth)],
 ) -> QueryResponse:
     """Return a grounded answer, a valid abstention, or a sanitized dependency error."""
 
