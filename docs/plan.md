@@ -683,21 +683,34 @@ structured-output details, validation evidence, and rollback.
 - Implemented: multi-document frozen-runtime validation, sanitized resumable E2E scorer, Qdrant
   readiness, request correlation IDs, bounded Qdrant timeout, optional bearer auth, and API Docker
   liveness healthcheck.
-- Current Python 3.11.15 validation: Ruff `PASS`; pytest `189 passed, 1 warning`; Compose config and
-  `git diff --check` PASS.
-- Gemini data egress was approved. Dataset-v2 diagnostics calibration completed all 20 rows:
+- Current Python 3.11.15 validation: Ruff `PASS`; pytest `224 passed, 1 warning`; Compose config and
+  `git diff --check` PASS. The warning is the known third-party Starlette/TestClient deprecation.
+- Historical Gemini dataset-v2 diagnostics calibration completed all 20 rows:
   candidate recall/Hit@5 0.667, MRR@5 0.583, strict answer-fact accuracy 0.500,
   direct-evidence citation rate 0.667, abstention precision/recall 1.000/1.000, total p95 10.043 s.
   The old dataset-v1 phrase score 0.417 remains historical and is not comparable.
 - Sanitized diagnostics now report fact IDs, exact match, token-overlap ratios, missing fact IDs,
   qrel dense/sparse/RRF/rerank ranks and unexpected citation document IDs without answer/evidence.
-- Provider-free calibration ablation tested union/RRF pools from dense/sparse 20--60. Candidate-only
-  recall reached 0.833, but required about 60--81 candidates/query and still missed calibration
-  004/010. Runtime stays union dense20/sparse20 to avoid worsening the dominant reranker latency.
+- Phase 7.4 separates strict contiguous phrase accuracy (diagnostic) from deterministic typed fact
+  accuracy (headline). Rescoring the existing sanitized output changes 6/12 strict matches to 8/12
+  deterministic matches; it is derived evidence because raw answers are intentionally absent.
+- Phase 7.4 calibration runtime now uses dense60 + expanded sparse40, weighted RRF `k=40`, sparse
+  weight `1.25`, dense@5/sparse@24 coverage reserves, same-document exact-content deduplication, and
+  a query-only soft role prior before and after unchanged Jina. Candidate recall is 12/12, Hit@5 is
+  11/12, MRR@5 is 0.875, and reranker input is capped at 30. Calibration 005 is recovered; 010 is
+  present but remains rank 6 after Jina.
+- Trusted document title/role is included in reranker and LLM evidence input without expected-doc
+  filtering. Canonical closure has wrong-document top-1 `0.000`, but final top-5 candidate
+  contamination is `0.267`, above the `<=0.15` gate. The runtime is therefore frozen for calibration
+  but Phase 7.4 status remains `PARTIAL`; citation contamination must be remeasured before held-out.
 - Phase 7 union runtime now supports same-document exact-normalized content deduplication before
   reranking. The setting defaults off globally and is enabled explicitly only by the Phase 7 E2E CLI,
   preserving legacy Phase 5/6 behavior.
-- Held-out evaluation remains unrun because dataset-v2 calibration gates still fail.
+- FastEmbed is now a direct `0.8.0` retrieval/dev constraint, matching the tested Python 3.11 runtime;
+  Phase 7 does not switch to the warning-suggested 0.5.1 behavior or re-index the corpus.
+- Fresh provider E2E is pending explicit data-egress approval. Held-out remains unrun because
+  deterministic answer/citation/document gates have not all been demonstrated on the frozen
+  Phase 7.4 runtime.
 
 ### Evaluation dataset
 

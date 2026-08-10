@@ -5,11 +5,12 @@ from __future__ import annotations
 from app.evaluation_e2e import (
     aggregate_phase7_records,
     evaluate_phase7_quality_gates,
+    score_expected_answer_fact,
     score_phase7_execution,
 )
 from app.generation import TokenUsage
 from app.models import Citation, QueryResponse, RetrievalCandidate
-from app.phase7 import Phase7DatasetItem
+from app.phase7 import ExpectedAnswerFact, Phase7DatasetItem
 from app.query_service import QueryExecution, QueryTimings
 from scripts import evaluate_phase7_e2e
 
@@ -133,6 +134,8 @@ def test_aggregate_reports_retrieval_citations_abstention_and_latency() -> None:
     metrics = aggregate_phase7_records([answerable, unsupported])
     assert metrics["retrieval"]["hit_rate_at_1"] == 1.0
     assert metrics["answer_quality"]["answer_fact_accuracy_when_answered"] == 1.0
+    assert metrics["answer_quality"]["deterministic_fact_accuracy_when_answered"] == 1.0
+    assert metrics["answer_quality"]["strict_phrase_accuracy_when_answered"] == 1.0
     assert metrics["answer_quality"]["fact_count"] == 1
     assert metrics["answer_quality"]["matched_fact_count"] == 1
     assert (
@@ -149,6 +152,7 @@ def test_aggregate_reports_retrieval_citations_abstention_and_latency() -> None:
     gates = evaluate_phase7_quality_gates(metrics)
     assert gates["overall_pass"] is True
     assert gates["gates"]["unsupported_citation_ids"]["actual"] == 0
+    assert gates["gates"]["wrong_document_citations"]["actual"] == 0
 
 
 def test_answerable_abstention_does_not_claim_answer_or_citation_success() -> None:
@@ -214,12 +218,103 @@ def test_answer_fact_diagnostics_report_ids_without_alias_or_answer_content() ->
     assert "aliases" not in record["answer_fact_results"][0]
 
 
+def test_text_fact_is_order_insensitive_but_strict_phrase_remains_diagnostic() -> None:
+    fact = ExpectedAnswerFact(
+        id="power",
+        aliases=["disconnect all power sources"],
+    )
+    result = score_expected_answer_fact(
+        fact, "Before work, all power sources must disconnect safely."
+    )
+    assert result["deterministic_matched"] is True
+    assert result["strict_phrase_matched"] is False
+    assert result["matcher"] == "text_alias_token_set_v1"
+
+
+def test_typed_numeric_identifier_and_required_token_group_matchers() -> None:
+    numeric = ExpectedAnswerFact(
+        id="voltage",
+        aliases=["24 VDC"],
+        type="numeric_unit",
+        value="24",
+        unit="VDC",
+    )
+    assert score_expected_answer_fact(numeric, "Supply: 24VDC.")[
+        "deterministic_matched"
+    ]
+    decimal = ExpectedAnswerFact(
+        id="decimal-voltage",
+        aliases=["24.0 VDC"],
+        type="numeric_unit",
+        value="24.0",
+        unit="VDC",
+    )
+    assert score_expected_answer_fact(decimal, "Supply: 24,0VDC.")["deterministic_matched"]
+    assert not score_expected_answer_fact(numeric, "Supply: 124 VDC.")[
+        "deterministic_matched"
+    ]
+
+    identifier = ExpectedAnswerFact(
+        id="rating",
+        aliases=["IP65"],
+        type="identifier",
+        acceptable_values=["IP65"],
+    )
+    assert score_expected_answer_fact(identifier, "The enclosure is rated IP65.")[
+        "deterministic_matched"
+    ]
+    assert not score_expected_answer_fact(identifier, "The enclosure is rated IP650.")[
+        "deterministic_matched"
+    ]
+
+    text = ExpectedAnswerFact(
+        id="mounting",
+        aliases=["vertical mounting"],
+        required_token_groups=[["vertical", "upright"], ["mount", "install"]],
+    )
+    result = score_expected_answer_fact(text, "Install the drive in an upright position.")
+    assert result["deterministic_matched"] is True
+    assert result["strict_phrase_matched"] is False
+
+
+def test_fact_matcher_rejects_plain_negation_even_when_alias_tokens_are_present() -> None:
+    fact = ExpectedAnswerFact(
+        id="disconnect-power",
+        aliases=["disconnect all power"],
+    )
+    result = score_expected_answer_fact(fact, "Do not disconnect all power before electrical work.")
+    assert result["deterministic_matched"] is False
+    assert result["matcher"] == "text_alias_token_set_v1_negation_guard_v1"
+
+
+def test_document_contamination_metrics_and_gate_are_explicit() -> None:
+    wrong = score_phase7_execution(
+        _item(),
+        _execution(
+            final=[_candidate("qrel", document_id="programming")],
+            pool=[_candidate("qrel", document_id="programming")],
+        ),
+    )
+    unsupported = score_phase7_execution(
+        _item(answerable=False),
+        _execution(final=[_candidate("other")], pool=[_candidate("other")], abstained=True),
+    )
+    metrics = aggregate_phase7_records([wrong, unsupported])
+    assert metrics["document_contamination"]["wrong_document_retrieval_at_1_rate"] == 1.0
+    assert metrics["citations"]["wrong_document_citation_rate_when_answered"] == 1.0
+    gates = evaluate_phase7_quality_gates(metrics)
+    assert gates["overall_pass"] is False
+    assert gates["gates"]["wrong_document_citations"]["passed"] is False
+
+
 def test_phase7_v2_cli_preserves_historical_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv", ["evaluate_phase7_e2e", "--dataset", "calibration"]
     )
     args = evaluate_phase7_e2e._parse_args()
-    assert args.output.name == "phase-7-calibration-e2e-v2-diagnostics.json"
-    assert args.checkpoint.name == "phase-7-calibration-e2e-v2-diagnostics-checkpoint.jsonl"
+    assert args.output.name == "phase-7-calibration-e2e-v3-phase74.json"
+    assert args.checkpoint.name == "phase-7-calibration-e2e-v3-phase74-checkpoint.jsonl"
     settings = evaluate_phase7_e2e._phase7_settings(evaluate_phase7_e2e.Settings())
     assert settings.rerank_deduplicate_content is True
+    assert settings.dense_candidate_limit == 60
+    assert settings.sparse_candidate_limit == 40

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 7 — industrial-corpus evaluation remediation in progress**
+**Phase 7.4 — calibration runtime implemented; release gate PARTIAL**
 
 Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
 `GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
@@ -16,7 +16,8 @@ bug and low candidate-qrel recall, so the held-out benchmark remains unrun and t
 called production-ready. Dataset v2 now separates reviewed answer facts from evidence phrases and
 adds exact-content qrel closure; it requires a new human review before any provider benchmark.
 
-The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, FastEmbed `0.8.0`,
+The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, direct-pinned FastEmbed
+`0.8.0`,
 and Qdrant server `v1.18.3`. The historic dense artifact that records client `1.18.0` is retained
 unchanged; it is a historic measurement, not the dependency declaration used after closure.
 
@@ -99,17 +100,35 @@ Frozen dataset-v2 hashes are calibration
 011/012 were corrected from an unrelated page-355 qrel to direct evidence on page 45 during source
 review. No retrieval result or provider output was used for that correction.
 
-The measured dataset-v2 diagnostics calibration completed all 20 rows but still fails the strict
-answer-fact gate: candidate recall/Hit@5 `0.667`, MRR@5 `0.583`, strict answer-fact accuracy `0.500`,
-direct-evidence citation rate `0.667`, abstention precision/recall `1.000/1.000`, and total p95
-`10.043 s`. Order-insensitive all-alias-token coverage is `0.667` and is diagnostic only, never a
-release gate. A provider-free candidate ablation found `union dense60/sparse40` recall `0.833` but
-about 81 candidates/query versus 31 for the baseline; the smaller RRF winner still needs about 60.
-Because both continue to miss calibration 004/010 and would worsen reranker latency, runtime remains
-dense20/sparse20. Held-out remains unrun.
+The historical dataset-v2 diagnostics calibration completed all 20 rows with candidate recall/Hit@5
+`0.667`, strict contiguous fact accuracy `0.500`, direct-evidence citation rate `0.667`, and
+abstention precision/recall `1.000/1.000`. Phase 7.4 now keeps strict phrase matching as a diagnostic
+and uses deterministic typed facts as the headline metric. A sanitized rescore of the same answers
+raises deterministic fact accuracy to `8/12 = 0.667`; this is a derived evaluator result, not a new
+provider run.
 
-Current offline validation: Python `3.11.15`, Ruff PASS, pytest `189 passed, 1 warning`; Docker
-Compose config and `git diff --check` PASS. Dataset-v2 calibration ran; held-out did not.
+Phase 7.4 now uses dense@60 plus expanded sparse@40, a weighted rank-only RRF profile (`k=40`, sparse
+weight `1.25`), dense@5/sparse@24 coverage reserves, and a soft query-role prior before and after the
+unchanged Jina reranker. Canonical Python 3.11 closure measured candidate recall `12/12 = 1.000`,
+Hit@5 `11/12 = 0.917`, MRR@5 `0.875`, zero wrong-document top-1 results, and at most 30 reranker
+inputs. It remains `PARTIAL`: wrong-document candidates still occupy `0.267` of final top-5 slots and
+calibration 010 remains rank 6. The artifact is
+`artifacts/metrics/phase-7-retrieval-closure-v2.json`; it has zero provider calls and zero held-out
+queries.
+
+A fresh provider E2E run was not executed without explicit corpus-owner data-egress approval, and
+held-out remains sealed. Canonical offline validation: Python `3.11.15`, Ruff PASS, pytest
+`224 passed, 1 warning`. The warning is the known third-party Starlette/TestClient deprecation.
+See `docs/walkthrough-phase-7-4.md` for the retrieval flow, measured closure and release gates.
+
+Run the provider-free Phase 7.4 diagnostics only after Qdrant and the shared FastEmbed cache are
+available. These commands never call Gemini/OpenAI and never execute held-out questions:
+
+```powershell
+python -m scripts.calibrate_phase7_weighted_fusion
+python -m scripts.evaluate_phase7_retrieval_closure `
+  --output artifacts/metrics/phase-7-retrieval-closure-v2.json
+```
 
 ## Quickstart: khởi động, test, chạy demo và dừng
 

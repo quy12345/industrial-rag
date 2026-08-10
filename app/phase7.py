@@ -16,7 +16,14 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from app.content_identity import evidence_content_fingerprint
 from app.evaluation import chunk_set_metadata, phrase_matches
@@ -49,6 +56,7 @@ QuestionType = Literal[
 ]
 ReviewStatus = Literal["needs_human_review", "approved"]
 PhraseMatchMode = Literal["all", "any"]
+AnswerFactType = Literal["text", "numeric_unit", "identifier"]
 
 
 class Phase7Error(ValueError):
@@ -56,12 +64,23 @@ class Phase7Error(ValueError):
 
 
 class ExpectedAnswerFact(BaseModel):
-    """One required answer fact with language-appropriate accepted aliases."""
+    """One deterministic answer fact plus language-appropriate strict aliases.
+
+    Existing dataset-v2 records contain only ``aliases`` and therefore use the
+    backwards-compatible text-token matcher. New annotations can opt into a
+    numeric/unit, identifier, or explicit token-group contract without changing
+    retrieval qrels.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     id: str
     aliases: list[str] = Field(min_length=1)
+    type: AnswerFactType = "text"
+    value: str | None = None
+    unit: str | None = None
+    acceptable_values: list[str] = Field(default_factory=list)
+    required_token_groups: list[list[str]] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -80,6 +99,59 @@ class ExpectedAnswerFact(BaseModel):
         if len(set(normalized)) != len(normalized):
             raise ValueError("must not contain duplicate aliases")
         return normalized
+
+    @field_validator("value", "unit")
+    @classmethod
+    def normalized_optional_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+    @field_validator("acceptable_values")
+    @classmethod
+    def normalized_acceptable_values(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("must not contain blank values")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("must not contain duplicate values")
+        return normalized
+
+    @field_validator("required_token_groups")
+    @classmethod
+    def normalized_token_groups(cls, groups: list[list[str]]) -> list[list[str]]:
+        normalized: list[list[str]] = []
+        for group in groups:
+            values = [value.strip() for value in group]
+            if not values or any(not value for value in values):
+                raise ValueError("must contain non-empty alternative groups")
+            if len(set(values)) != len(values):
+                raise ValueError("must not contain duplicate alternatives")
+            normalized.append(values)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_typed_contract(self) -> ExpectedAnswerFact:
+        if self.type == "numeric_unit":
+            if self.value is None or self.unit is None:
+                raise ValueError("numeric_unit facts require value and unit")
+            if self.acceptable_values or self.required_token_groups:
+                raise ValueError(
+                    "numeric_unit facts cannot define acceptable_values or token groups"
+                )
+        elif self.type == "identifier":
+            if not self.acceptable_values:
+                raise ValueError("identifier facts require acceptable_values")
+            if self.value is not None or self.unit is not None or self.required_token_groups:
+                raise ValueError(
+                    "identifier facts cannot define value, unit, or token groups"
+                )
+        elif self.value is not None or self.unit is not None or self.acceptable_values:
+            raise ValueError("text facts cannot define numeric or identifier fields")
+        return self
 
 
 class Phase7Source(BaseModel):
@@ -328,7 +400,10 @@ def dataset_sha256(items: Sequence[Phase7DatasetItem]) -> str:
 
     canonical = "\n".join(
         json.dumps(
-            item.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            item.model_dump(mode="json", exclude_unset=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
         )
         for item in items
     )

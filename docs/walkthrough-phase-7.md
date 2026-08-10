@@ -42,15 +42,19 @@ Retrieval hits use only `relevant_chunk_ids`. Same page, matching phrase, or
 matching document are diagnostics, not a hit. The output excludes raw questions,
 answers, prompts, evidence, and provider responses.
 
-`expected_phrases` remains an evidence/qrel validation field. Generated answers
-are scored only against reviewed `expected_answer_facts`; each fact contains one
-or more language-appropriate aliases. This prevents a Vietnamese answer from
-being marked wrong merely because the evidence manual is English.
+`expected_phrases` remains an evidence/qrel validation field. Generated answers use
+`phase7_deterministic_typed_facts_v1` as the headline evaluator. Supported contracts are text,
+numeric value+unit, identifier, and explicit required-token groups. Existing dataset-v2 aliases
+remain compatible through an order-independent token-set matcher. Contiguous alias accuracy and
+token coverage are separate diagnostics and never use source-language evidence phrases.
 
 The Phase 7 runtime also collapses same-document candidates only when their raw
 text is identical after NFKC, case and whitespace normalization. It preserves all
 equivalent chunk IDs in metadata and merges the best dense/sparse/RRF signals.
-This optimization is disabled by default outside Phase 7.
+This optimization is disabled by default outside Phase 7. Phase 7.4 additionally runs dense@60 and
+sparse@40 after deterministic Vietnamese technical-term augmentation, prunes with RRF `k=60` to 30,
+and sends at most 30 candidates to the unchanged Jina reranker. Trusted document title and role are
+included in reranker/evidence inputs; expected document IDs are never used as a retrieval filter.
 
 ## Run order
 
@@ -59,6 +63,10 @@ python -m scripts.validate_phase7_dataset
 # Reproduce the already-completed dataset-v2 freeze if the reviewed files are unchanged.
 python -m scripts.freeze_phase7_dataset `
   --approval-token "APPROVE PHASE 7 DATASET V2"
+python -m scripts.audit_phase7_retrieval_failures
+python -m scripts.calibrate_phase7_retrieval
+python -m scripts.evaluate_phase7_retrieval_closure
+# Requires explicit approval to send calibration questions/evidence externally:
 python -m scripts.evaluate_phase7_e2e --dataset calibration
 python -m scripts.evaluate_phase7_e2e --dataset test
 ```
@@ -82,7 +90,7 @@ explicit corpus-owner data-egress approval.
 
 ## Status and known limits
 
-Offline Python 3.11.15 validation passed with Ruff and 185 tests (one known
+Offline Python 3.11.15 validation passed with Ruff and 208 tests (one known
 third-party Starlette/TestClient deprecation warning). Live Phase 7 Qdrant hash
 validation passed.
 
@@ -111,9 +119,9 @@ The historical dataset-v1 source-of-truth artifact is
 the evaluator exits non-zero and the held-out command must not run yet.
 
 The initial v2 artifact remains
-`artifacts/metrics/phase-7-calibration-e2e-v2.json`. The improved evaluator writes
-`artifacts/metrics/phase-7-calibration-e2e-v2-diagnostics.json` and a separate
-checkpoint. It never overwrites historical v1/v2 evidence.
+`artifacts/metrics/phase-7-calibration-e2e-v2.json`. The historical diagnostics artifact is
+`artifacts/metrics/phase-7-calibration-e2e-v2-diagnostics.json`. Phase 7.4 defaults to a new
+`phase-7-calibration-e2e-v3-phase74.json` artifact/checkpoint and never overwrites v1/v2 evidence.
 
 ## Dataset-v2 calibration diagnostics
 
@@ -139,11 +147,61 @@ They are classified as scorer-format mismatches, not silently changed to PASS.
 Calibration 004, 005, 006 and 010 remain candidate misses.
 
 The provider-free artifact
-`artifacts/metrics/phase-7-calibration-retrieval-ablation.json` compares 13 pools.
-The baseline union20/20 has recall 0.667 with 31.25 candidates/query. Union60/40
+`artifacts/metrics/phase-7-calibration-retrieval-ablation.json` now compares 15 pools. The original
+13-pool result was:
+The historical baseline union20/20 has recall 0.667 with 31.25 candidates/query. Union60/40
 reaches 0.833 but averages 81.17 candidates; RRF60/40 top60 has the same recall
 with 59.5. Both still miss calibration 004/010 and would enlarge the expensive
-reranker stage, so no runtime setting was changed.
+reranker stage, so that first ablation did not change runtime.
+
+## Phase 7.4 calibration closure
+
+The evaluator now reports three deliberately different answer metrics:
+
+```text
+strict_phrase_accuracy        contiguous legacy alias; diagnostic only
+deterministic_fact_accuracy   typed/order-independent headline metric
+token_coverage                overlap diagnostic; not a release gate
+```
+
+Because the old sanitized artifact intentionally contains no answer text, Phase 7.4 did not pretend
+to rerun generation. `phase-7-calibration-fact-rescore-v1.json` reconstructs only legacy text-fact
+decisions from stored per-fact token recall. It measures `6/12 = 0.500` strict versus
+`8/12 = 0.667` deterministic, changing only 002/008. The deterministic result still fails the
+required `11/12` gate and is explicitly a derived rescore.
+
+The canonical top-200 audit now verifies qrels for 004/005/010 exist in both Qdrant collections and
+reviewed source phrases exist in frozen chunks. Calibration 005 is a sparse-tail case (original rank
+24; its diagnostic technical wording reaches rank 8), while 010 is an ordering/query-formulation case
+(original sparse rank 185; diagnostic English/technical variants rank 4). This is evidence against an
+ingestion-loss diagnosis. The glossary contains query terms only—no qrel, page, expected answer,
+document ID, or held-out-specific rule.
+
+The original closure artifact remains historical. The current canonical Python 3.11 Phase 7.4 runtime
+uses dense@60, expanded sparse@40, weighted rank-only RRF `k=40`, sparse weight `1.25`, dense@5 and
+sparse@24 coverage reserves, plus a query-only soft document-role prior before and after Jina. It
+measured:
+
+| Metric | Result |
+|---|---:|
+| Candidate recall | 12/12 = 1.000 |
+| Maximum reranker input | 30 |
+| Hit@5 after unchanged Jina | 11/12 = 0.917 |
+| MRR@5 | 0.875 |
+| Candidate miss | none |
+| Present but outside top 5 | calibration 010 at rank 6 |
+| Wrong-document top-1 retrieval | 0.000 |
+| Wrong-document candidates in top 5 | 0.267 |
+| Document title/role metadata completeness | 1.000 |
+| Retrieval p95 | 178.0 ms |
+| Reranker p95 | 13.399 s |
+
+The source of truth is `artifacts/metrics/phase-7-retrieval-closure-v2.json`; it records zero provider
+calls and zero held-out executions. Its overall gate is `PARTIAL`: candidate recall, Hit@5, budget,
+context completeness and wrong-document top-1 pass, but the `<= 0.15` wrong-document top-5 candidate
+gate fails. A fresh provider E2E run was not performed because external calibration data egress requires
+explicit approval. New answer/citation gates are therefore pending, and opening held-out remains
+prohibited.
 
 The v2 migration report is
 `artifacts/metrics/phase-7-dataset-v2-migration.json`: corpus identity stayed

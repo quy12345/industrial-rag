@@ -108,7 +108,23 @@ def test_evidence_labels_mapping_and_format_are_deterministic() -> None:
     assert first.source_map["S1"] is candidates[0]
     assert "pages: 1, 3" in first.text
     assert "heading: Power > Limits" in first.text
+    assert "document_title: n/a" in first.text
+    assert "document_role: n/a" in first.text
     assert "<untrusted_document>" in first.text
+
+
+def test_evidence_includes_trusted_document_title_and_role() -> None:
+    candidate = _candidate("a").model_copy(
+        update={
+            "metadata": {
+                "document_title": "ATV320 Programming Manual",
+                "document_role": "programming",
+            }
+        }
+    )
+    bundle = format_evidence([candidate], max_chars=4_000)
+    assert "document_title: ATV320 Programming Manual" in bundle.text
+    assert "document_role: programming" in bundle.text
 
 
 def test_evidence_prompt_injection_remains_inside_untrusted_block() -> None:

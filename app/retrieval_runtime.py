@@ -17,6 +17,11 @@ from app.hybrid_retrieval import (
     validate_hybrid_collection,
 )
 from app.models import RetrievalCandidate
+from app.phase7_optimization import PHASE7_CALIBRATION_FUSION_PROFILE, Phase7FusionProfile
+from app.query_expansion import (
+    QUERY_EXPANSION_PROFILE,
+    augment_vietnamese_technical_query,
+)
 from app.reranking import FastEmbedCrossEncoder, RerankingError, RerankPipeline
 from app.retrieval import (
     RetrievalError,
@@ -26,6 +31,15 @@ from app.retrieval import (
     get_indexed_chunk_ids,
     validate_dense_collection,
 )
+
+
+@dataclass(frozen=True)
+class FrozenDocumentContext:
+    """Trusted package metadata included in reranker and generation evidence context."""
+
+    document_id: str
+    document_title: str
+    document_role: str
 
 
 @dataclass(frozen=True)
@@ -51,12 +65,28 @@ class FrozenRetrievalContract:
     bm25_avg_len: float = 72.83838383838383
     bm25_disable_stemmer: bool = True
     document_ids: tuple[str, ...] = ()
+    document_contexts: tuple[FrozenDocumentContext, ...] = ()
+    union_rrf_prune_limit: int | None = None
+    query_expansion_profile: str | None = None
+    phase7_fusion_profile: Phase7FusionProfile | None = None
 
     @property
     def indexed_document_ids(self) -> tuple[str, ...]:
         """Return the documents whose stable IDs form this frozen corpus."""
 
         return self.document_ids or (self.document_id,)
+
+    @property
+    def document_context_by_id(self) -> dict[str, dict[str, str]]:
+        """Return immutable trusted metadata in the shape consumed by reranking."""
+
+        return {
+            item.document_id: {
+                "document_title": item.document_title,
+                "document_role": item.document_role,
+            }
+            for item in self.document_contexts
+        }
 
 
 PHASE6_RETRIEVAL_CONTRACT = FrozenRetrievalContract()
@@ -69,11 +99,33 @@ PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
         "atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
         "atv320-programming-manual-en-nve41295-06-f5e9bb48167a",
     ),
+    document_contexts=(
+        FrozenDocumentContext(
+            document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
+            document_title=(
+                "Altivar Machine ATV320 Variable Speed Drives Installation Manual"
+            ),
+            document_role="installation",
+        ),
+        FrozenDocumentContext(
+            document_id="atv320-programming-manual-en-nve41295-06-f5e9bb48167a",
+            document_title=(
+                "Altivar Machine ATV320 Variable Speed Drives Programming Manual"
+            ),
+            document_role="programming",
+        ),
+    ),
     chunk_count=2753,
     chunk_ids_sha256="2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d",
     dense_collection="industrial_manual_phase7_dense_v1",
     hybrid_collection="industrial_manual_phase7_hybrid_v1",
     bm25_avg_len=81.33599709407919,
+    rrf_k=40,
+    dense_candidate_limit=60,
+    sparse_candidate_limit=40,
+    union_rrf_prune_limit=30,
+    query_expansion_profile=QUERY_EXPANSION_PROFILE,
+    phase7_fusion_profile=PHASE7_CALIBRATION_FUSION_PROFILE,
 )
 
 
@@ -115,6 +167,11 @@ class UnionRerankRetriever:
                 "sparse_retrieval",
                 "content_deduplication",
                 "union_preparation",
+                "query_expansion",
+                "rrf_pruning",
+                "query_role_inference",
+                "coverage_preserving_weighted_rrf",
+                "role_aware_rank_fusion",
             }
         )
         return QueryRetrievalResult(
@@ -275,6 +332,14 @@ def build_union_rerank_runtime(
             rrf_k=settings.rrf_k,
             rerank_batch_size=settings.rerank_batch_size,
             deduplicate_content=settings.rerank_deduplicate_content,
+            document_contexts=contract.document_context_by_id,
+            sparse_query_transform=(
+                _expand_phase7_query
+                if contract.query_expansion_profile == QUERY_EXPANSION_PROFILE
+                else None
+            ),
+            union_rrf_prune_limit=contract.union_rrf_prune_limit,
+            phase7_fusion_profile=contract.phase7_fusion_profile,
         )
         return pipeline, {
             "collections": {
@@ -288,6 +353,22 @@ def build_union_rerank_runtime(
             "rrf_k": settings.rrf_k,
             "rerank_model": settings.rerank_model,
             "deduplicate_content": settings.rerank_deduplicate_content,
+            "query_expansion_profile": contract.query_expansion_profile,
+            "union_rrf_prune_limit": contract.union_rrf_prune_limit,
+            "phase7_fusion_profile": (
+                None
+                if contract.phase7_fusion_profile is None
+                else {
+                    "name": contract.phase7_fusion_profile.name,
+                    "rrf_k": contract.phase7_fusion_profile.rrf_k,
+                    "dense_weight": contract.phase7_fusion_profile.dense_weight,
+                    "sparse_weight": contract.phase7_fusion_profile.sparse_weight,
+                    "role_multiplier": contract.phase7_fusion_profile.role_multiplier,
+                    "dense_reserve": contract.phase7_fusion_profile.dense_reserve,
+                    "sparse_reserve": contract.phase7_fusion_profile.sparse_reserve,
+                    "max_candidates": contract.phase7_fusion_profile.max_candidates,
+                }
+            ),
         }
     except RetrievalUnavailableError:
         raise
@@ -307,6 +388,13 @@ def validate_frozen_runtime(
 
     for collection_name in collection_names:
         _validate_frozen_collection(client, collection_name, contract)
+
+
+def _expand_phase7_query(question: str) -> str:
+    """Apply the frozen lexical profile to sparse retrieval only."""
+
+    expanded, _ = augment_vietnamese_technical_query(question)
+    return expanded
 
 
 def _validate_frozen_collection(
@@ -337,6 +425,17 @@ def _validate_frozen_collection(
 
 
 def _validate_settings(settings: Settings, contract: FrozenRetrievalContract) -> None:
+    if contract.phase7_fusion_profile is not None:
+        profile = contract.phase7_fusion_profile
+        if profile.rrf_k != contract.rrf_k:
+            raise RetrievalUnavailableError(
+                "Frozen Phase 7 fusion profile RRF k differs from the retrieval contract."
+            )
+        if profile.max_candidates != contract.union_rrf_prune_limit:
+            raise RetrievalUnavailableError(
+                "Frozen Phase 7 fusion profile candidate budget differs from the "
+                "retrieval contract."
+            )
     expected = {
         "qdrant_collection": contract.dense_collection,
         "qdrant_hybrid_collection": contract.hybrid_collection,

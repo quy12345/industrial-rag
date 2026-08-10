@@ -16,6 +16,7 @@ from typing import Any
 from app.config import Settings
 from app.evaluation import chunk_set_metadata, load_frozen_chunks
 from app.evaluation_e2e import (
+    FACT_EVALUATOR_ID,
     aggregate_phase7_records,
     evaluate_phase7_quality_gates,
     score_phase7_execution,
@@ -28,6 +29,7 @@ from app.phase7 import (
     write_json_atomic,
 )
 from app.query_service import EvidenceGate, QueryService
+from app.reranking import PHASE7_CANDIDATE_TEXT_FORMAT
 from app.retrieval import create_qdrant_client
 from app.retrieval_runtime import (
     PHASE7_RETRIEVAL_CONTRACT,
@@ -72,6 +74,11 @@ def main() -> int:
         "contract_chunk_ids_sha256": PHASE7_RETRIEVAL_CONTRACT.chunk_ids_sha256,
         "strategy": settings.retrieval_strategy,
         "rerank_enabled": settings.rerank_enabled,
+        "dense_candidate_limit": settings.dense_candidate_limit,
+        "sparse_candidate_limit": settings.sparse_candidate_limit,
+        "union_rrf_prune_limit": PHASE7_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
+        "query_expansion_profile": PHASE7_RETRIEVAL_CONTRACT.query_expansion_profile,
+        "candidate_text_format": PHASE7_CANDIDATE_TEXT_FORMAT,
         "generation_provider": settings.generation_provider,
         "generation_model": settings.generation_model,
         "deduplicate_exact_content": settings.rerank_deduplicate_content,
@@ -98,12 +105,19 @@ def main() -> int:
         raise RuntimeError("Checkpoint result count does not match the selected dataset.")
     overall = aggregate_phase7_records(records)
     output = {
-        "schema_version": 3,
+        "schema_version": 4,
         "timestamp": datetime.now(UTC).isoformat(),
         "run_identity": identity,
         "dataset_validation": validation,
         "overall": overall,
         "quality_gates": evaluate_phase7_quality_gates(overall),
+        "evaluation_methodology": {
+            "headline_answer_metric": "deterministic_fact_accuracy_when_answered",
+            "fact_evaluator_id": FACT_EVALUATOR_ID,
+            "strict_phrase_accuracy": "diagnostic_only",
+            "token_coverage": "diagnostic_only",
+            "retrieval_relevance": "stable relevant_chunk_ids only",
+        },
         "per_query": records,
         "sanitization": {
             "raw_question": "excluded",
@@ -142,11 +156,11 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--max-queries must be positive")
     if args.output is None:
         args.output = Path(
-            f"artifacts/metrics/phase-7-{args.dataset}-e2e-v2-diagnostics.json"
+            f"artifacts/metrics/phase-7-{args.dataset}-e2e-v3-phase74.json"
         )
     if args.checkpoint is None:
         args.checkpoint = Path(
-            f"artifacts/metrics/phase-7-{args.dataset}-e2e-v2-diagnostics-checkpoint.jsonl"
+            f"artifacts/metrics/phase-7-{args.dataset}-e2e-v3-phase74-checkpoint.jsonl"
         )
     return args
 
@@ -159,6 +173,9 @@ def _phase7_settings(settings: Settings) -> Settings:
             "qdrant_collection": PHASE7_RETRIEVAL_CONTRACT.dense_collection,
             "qdrant_hybrid_collection": PHASE7_RETRIEVAL_CONTRACT.hybrid_collection,
             "bm25_avg_len": PHASE7_RETRIEVAL_CONTRACT.bm25_avg_len,
+            "dense_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit,
+            "sparse_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit,
+            "rrf_k": PHASE7_RETRIEVAL_CONTRACT.rrf_k,
             "retrieval_strategy": "union",
             "rerank_enabled": True,
             "rerank_deduplicate_content": True,

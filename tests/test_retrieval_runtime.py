@@ -19,6 +19,7 @@ from app.retrieval_runtime import (
     LazyQueryRetriever,
     QueryRetrievalResult,
     UnionRerankRetriever,
+    _expand_phase7_query,
     _validate_frozen_collection,
     _validate_settings,
 )
@@ -138,6 +139,20 @@ def test_multi_document_frozen_contract_hashes_the_union_of_stable_ids(monkeypat
     )
     _validate_frozen_collection(Client(), "phase7", contract)
     assert PHASE7_RETRIEVAL_CONTRACT.chunk_count == 2753
+    assert PHASE7_RETRIEVAL_CONTRACT.document_context_by_id[
+        PHASE7_RETRIEVAL_CONTRACT.document_ids[0]
+    ]["document_role"] == "installation"
+    assert PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit == 60
+    assert PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit == 40
+    assert PHASE7_RETRIEVAL_CONTRACT.union_rrf_prune_limit == 30
+    assert PHASE7_RETRIEVAL_CONTRACT.rrf_k == 40
+    assert PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile is not None
+    assert PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile.name == (
+        "weighted_rrf_k40_s1.25_role0.1_d5_s24"
+    )
+    assert _expand_phase7_query("Phím MODE chuyển nhóm menu") != (
+        "Phím MODE chuyển nhóm menu"
+    )
 
 
 def test_importing_runtime_does_not_construct_models() -> None:

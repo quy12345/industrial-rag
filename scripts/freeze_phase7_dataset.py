@@ -18,6 +18,7 @@ from app.phase7 import (
     write_json_atomic,
     write_jsonl_atomic,
 )
+from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT
 
 APPROVAL_TOKEN = "APPROVE PHASE 7 DATASET V2"
 
@@ -58,9 +59,12 @@ def main() -> int:
             + ", ".join(missing_facts)
         )
     approved_calibration = [
-        item.model_dump() | {"review_status": "approved"} for item in calibration
+        item.model_dump(exclude_unset=True) | {"review_status": "approved"}
+        for item in calibration
     ]
-    approved_test = [item.model_dump() | {"review_status": "approved"} for item in test]
+    approved_test = [
+        item.model_dump(exclude_unset=True) | {"review_status": "approved"} for item in test
+    ]
     write_jsonl_atomic(args.calibration, approved_calibration)
     write_jsonl_atomic(args.test, approved_test)
     approved_calibration_models = read_phase7_dataset(args.calibration)
@@ -71,7 +75,7 @@ def main() -> int:
     ):
         parser.error("Dataset approval update did not persist.")
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": datetime.now(UTC).isoformat(),
         "git_commit": _git_commit(),
         "corpus": chunk_set_metadata(chunks),
@@ -80,13 +84,21 @@ def main() -> int:
         "collections": {"dense": PHASE7_DENSE_COLLECTION, "hybrid": PHASE7_HYBRID_COLLECTION},
         "runtime_configuration": {
             "strategy": "union",
-            "dense_candidate_limit": 20,
-            "sparse_candidate_limit": 20,
-            "reranker": "jinaai/jina-reranker-v2-base-multilingual",
+            "dense_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit,
+            "sparse_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit,
+            "query_expansion_profile": PHASE7_RETRIEVAL_CONTRACT.query_expansion_profile,
+            "rrf_k": PHASE7_RETRIEVAL_CONTRACT.rrf_k,
+            "rrf_prune_limit": PHASE7_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
+            "reranker": PHASE7_RETRIEVAL_CONTRACT.rerank_model,
+            "phase7_fusion_profile": PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile.name,
             "deduplicate_exact_content": True,
             "final_top_k": 5,
         },
-        "answer_scoring": "reviewed expected_answer_facts aliases",
+        "answer_scoring": {
+            "headline": "phase7_deterministic_typed_facts_v1",
+            "strict_phrase": "diagnostic_only",
+            "token_coverage": "diagnostic_only",
+        },
     }
     write_json_atomic(args.output, manifest)
     print(f"Phase 7 dataset frozen: {args.output}")

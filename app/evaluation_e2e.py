@@ -15,8 +15,11 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from app.evaluation import direct_evidence_rank, percentile_nearest_rank, phrase_matches
-from app.phase7 import Phase7DatasetItem
+from app.phase7 import ExpectedAnswerFact, Phase7DatasetItem
 from app.query_service import QueryExecution
+
+FACT_EVALUATOR_ID = "phase7_deterministic_typed_facts_v1"
+_NEGATION_TOKENS = frozenset({"not", "no", "never", "dont", "cannot", "khong", "chua"})
 
 
 def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -> dict[str, Any]:
@@ -71,14 +74,31 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
             {
                 "relevant_chunk_ids": sorted(relevant),
                 "failure_class": _failure_class(candidate_rank, final_rank),
+                "strict_phrase_match": (
+                    all(result["strict_phrase_matched"] for result in fact_results)
+                    if not response.abstained
+                    else None
+                ),
+                "deterministic_fact_match": (
+                    all(result["deterministic_matched"] for result in fact_results)
+                    if not response.abstained
+                    else None
+                ),
                 "answer_fact_match": (
-                    all(result["matched"] for result in fact_results)
+                    all(result["deterministic_matched"] for result in fact_results)
                     if not response.abstained
                     else None
                 ),
                 "answer_fact_results": fact_results,
                 "missing_answer_fact_ids": [
-                    result["id"] for result in fact_results if not result["matched"]
+                    result["id"]
+                    for result in fact_results
+                    if not result["deterministic_matched"]
+                ],
+                "strict_missing_answer_fact_ids": [
+                    result["id"]
+                    for result in fact_results
+                    if not result["strict_phrase_matched"]
                 ],
                 "qrel_candidate_diagnostics": _qrel_diagnostics(
                     execution.candidate_pool, relevant
@@ -92,20 +112,31 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
                 "unexpected_citation_document_ids": sorted(
                     citation_documents - set(item.expected_document_ids)
                 ),
+                "wrong_document_retrieval_at_1": bool(execution.candidates)
+                and execution.candidates[0].document_id not in item.expected_document_ids,
+                "wrong_document_candidate_count_at_5": sum(
+                    candidate.document_id not in item.expected_document_ids
+                    for candidate in execution.candidates[:5]
+                ),
             }
         )
     else:
         record.update(
             {
                 "failure_class": "correct_abstention" if response.abstained else "false_answer",
+                "strict_phrase_match": None,
+                "deterministic_fact_match": None,
                 "answer_fact_match": None,
                 "answer_fact_results": [],
                 "missing_answer_fact_ids": [],
+                "strict_missing_answer_fact_ids": [],
                 "qrel_candidate_diagnostics": [],
                 "qrel_final_diagnostics": [],
                 "citation_direct_evidence": None,
                 "citation_document_correct": None,
                 "unexpected_citation_document_ids": [],
+                "wrong_document_retrieval_at_1": None,
+                "wrong_document_candidate_count_at_5": None,
             }
         )
     return record
@@ -127,6 +158,7 @@ def aggregate_phase7_records(records: Sequence[dict[str, Any]]) -> dict[str, Any
         "retrieval": _retrieval_metrics(answerable),
         "answer_quality": _answer_metrics(answerable),
         "citations": _citation_metrics(answerable),
+        "document_contamination": _document_contamination_metrics(answerable),
         "abstention": _abstention_metrics(answerable, unanswerable),
         "failure_classes": dict(
             sorted(Counter(record["failure_class"] for record in records).items())
@@ -147,14 +179,24 @@ def evaluate_phase7_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
     precision = float(abstention["precision"])
     recall = float(abstention["recall"])
     gates = {
+        "candidate_recall": _gate(
+            float(metrics["retrieval"]["candidate_recall"]),
+            11 / 12,
+            comparison="at_least",
+        ),
         "valid_citation_ids": _gate(
             float(citations["referential_valid_rate_when_answered"]), 1.0, comparison="equal"
         ),
         "unsupported_citation_ids": _gate(
             float(citations["unsupported_citation_count"]), 0.0, comparison="at_most"
         ),
-        "answer_fact_accuracy": _gate(
-            float(answer_quality["answer_fact_accuracy_when_answered"]),
+        "wrong_document_citations": _gate(
+            float(citations["wrong_document_citation_count"]),
+            0.0,
+            comparison="at_most",
+        ),
+        "deterministic_fact_accuracy": _gate(
+            float(answer_quality["deterministic_fact_accuracy_when_answered"]),
             0.85,
             comparison="at_least",
         ),
@@ -165,8 +207,8 @@ def evaluate_phase7_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
         "overall_pass": all(gate["passed"] for gate in gates.values()),
         "gates": gates,
         "note": (
-            "Answer accuracy uses reviewed expected_answer_facts aliases. Evidence phrases are "
-            "reserved for qrel validation and never score generated answers."
+            f"Headline answer accuracy uses {FACT_EVALUATOR_ID}. Strict contiguous aliases and "
+            "token coverage remain diagnostics. Evidence phrases validate qrels only."
         ),
     }
 
@@ -182,15 +224,21 @@ def _retrieval_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float]:
         "hit_rate_at_20": _hit_rate(final_ranks, cutoff=20),
         "mrr_at_5": _mrr(final_ranks, cutoff=5),
         "mrr_at_20": _mrr(final_ranks, cutoff=20),
+        "candidate_count_maximum": float(max(int(row["candidate_count"]) for row in rows)),
     }
 
 
 def _answer_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
     answered = [row for row in rows if not row["abstained"]]
-    fact_scores = [
-        row["answer_fact_match"]
+    deterministic_scores = [
+        row["deterministic_fact_match"]
         for row in answered
-        if row["answer_fact_match"] is not None
+        if row["deterministic_fact_match"] is not None
+    ]
+    strict_scores = [
+        row["strict_phrase_match"]
+        for row in answered
+        if row["strict_phrase_match"] is not None
     ]
     fact_results = [
         result for row in answered for result in row.get("answer_fact_results", [])
@@ -204,16 +252,36 @@ def _answer_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
     ]
     return {
         "answer_rate": len(answered) / len(rows),
-        "answer_fact_accuracy_when_answered": (
-            sum(bool(score) for score in fact_scores) / len(fact_scores)
-            if fact_scores
+        "deterministic_fact_accuracy_when_answered": (
+            sum(bool(score) for score in deterministic_scores) / len(deterministic_scores)
+            if deterministic_scores
             else 0.0
         ),
+        "answer_fact_accuracy_when_answered": (
+            sum(bool(score) for score in deterministic_scores) / len(deterministic_scores)
+            if deterministic_scores
+            else 0.0
+        ),
+        "strict_phrase_accuracy_when_answered": (
+            sum(bool(score) for score in strict_scores) / len(strict_scores)
+            if strict_scores
+            else 0.0
+        ),
+        "fact_evaluator_id": FACT_EVALUATOR_ID,
         "answered_count": len(answered),
         "fact_count": len(fact_results),
-        "matched_fact_count": sum(bool(result["matched"]) for result in fact_results),
+        "deterministically_matched_fact_count": sum(
+            bool(result["deterministic_matched"]) for result in fact_results
+        ),
+        "strictly_matched_fact_count": sum(
+            bool(result["strict_phrase_matched"]) for result in fact_results
+        ),
+        "matched_fact_count": sum(
+            bool(result["deterministic_matched"]) for result in fact_results
+        ),
         "fact_match_rate": (
-            sum(bool(result["matched"]) for result in fact_results) / len(fact_results)
+            sum(bool(result["deterministic_matched"]) for result in fact_results)
+            / len(fact_results)
             if fact_results
             else 0.0
         ),
@@ -239,6 +307,8 @@ def _citation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
             "document_correct_rate_when_answered": 0.0,
             "referential_valid_rate_when_answered": 0.0,
             "unsupported_citation_count": 0,
+            "wrong_document_citation_count": 0,
+            "wrong_document_citation_rate_when_answered": 0.0,
             "answered_count": 0,
         }
     return {
@@ -263,7 +333,28 @@ def _citation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
             )
             for row in answered
         ),
+        "wrong_document_citation_count": sum(
+            bool(row.get("unexpected_citation_document_ids")) for row in answered
+        ),
+        "wrong_document_citation_rate_when_answered": sum(
+            bool(row.get("unexpected_citation_document_ids")) for row in answered
+        )
+        / len(answered),
         "answered_count": len(answered),
+    }
+
+
+def _document_contamination_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
+    wrong_top1 = sum(bool(row["wrong_document_retrieval_at_1"]) for row in rows)
+    wrong_top5_candidates = sum(int(row["wrong_document_candidate_count_at_5"]) for row in rows)
+    top5_candidates = sum(min(int(row["final_candidate_count"]), 5) for row in rows)
+    return {
+        "wrong_document_retrieval_at_1_count": wrong_top1,
+        "wrong_document_retrieval_at_1_rate": wrong_top1 / len(rows),
+        "wrong_document_candidate_count_at_5": wrong_top5_candidates,
+        "wrong_document_candidate_rate_at_5": (
+            wrong_top5_candidates / top5_candidates if top5_candidates else 0.0
+        ),
     }
 
 
@@ -319,31 +410,113 @@ def _group_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
 def _answer_fact_results(item: Phase7DatasetItem, answer: str) -> list[dict[str, Any]]:
     if not item.expected_answer_facts:
         raise ValueError(f"Answerable item {item.id} has no reviewed expected_answer_facts.")
+    return [score_expected_answer_fact(fact, answer) for fact in item.expected_answer_facts]
+
+
+def score_expected_answer_fact(fact: ExpectedAnswerFact, answer: str) -> dict[str, Any]:
+    """Score one reviewed fact without a model or contiguous-word-order requirement."""
+
     answer_tokens = _diagnostic_tokens(answer)
-    results: list[dict[str, Any]] = []
-    for fact in item.expected_answer_facts:
-        alias_token_scores = [
-            _token_overlap(answer_tokens, _diagnostic_tokens(alias))
-            for alias in fact.aliases
-        ]
-        results.append(
-            {
-                "id": fact.id,
-                "matched": any(phrase_matches(answer, alias) for alias in fact.aliases),
-                "max_alias_token_recall": max(
-                    (score[0] for score in alias_token_scores), default=0.0
-                ),
-                "max_alias_token_precision": max(
-                    (score[1] for score in alias_token_scores), default=0.0
-                ),
-            }
+    alias_token_scores = [
+        _token_overlap(answer_tokens, _diagnostic_tokens(alias)) for alias in fact.aliases
+    ]
+    strict_match = any(phrase_matches(answer, alias) for alias in fact.aliases)
+    if fact.type == "numeric_unit":
+        deterministic_match = _numeric_unit_matches(answer, fact.value or "", fact.unit or "")
+        matcher = "numeric_unit_v1"
+    elif fact.type == "identifier":
+        deterministic_match = any(
+            _identifier_matches(answer, value) for value in fact.acceptable_values
         )
-    return results
+        matcher = "identifier_v1"
+    elif fact.required_token_groups:
+        deterministic_match = all(
+            any(_text_tokens_match(answer_tokens, alternative) for alternative in group)
+            for group in fact.required_token_groups
+        )
+        matcher = "required_token_groups_v1"
+    else:
+        deterministic_match = any(
+            _diagnostic_tokens(alias).issubset(answer_tokens) for alias in fact.aliases
+        )
+        matcher = "text_alias_token_set_v1"
+    if deterministic_match and _has_polarity_conflict(answer, fact):
+        deterministic_match = False
+        matcher = f"{matcher}_negation_guard_v1"
+    return {
+        "id": fact.id,
+        "type": fact.type,
+        "matcher": matcher,
+        "matched": deterministic_match,
+        "deterministic_matched": deterministic_match,
+        "strict_phrase_matched": strict_match,
+        "max_alias_token_recall": max(
+            (score[0] for score in alias_token_scores), default=0.0
+        ),
+        "max_alias_token_precision": max(
+            (score[1] for score in alias_token_scores), default=0.0
+        ),
+    }
 
 
 def _diagnostic_tokens(value: str) -> set[str]:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return set(re.findall(r"[^\W_]+", normalized, flags=re.UNICODE))
+
+
+def _text_tokens_match(answer_tokens: set[str], expected: str) -> bool:
+    expected_tokens = _diagnostic_tokens(expected)
+    return bool(expected_tokens) and expected_tokens.issubset(answer_tokens)
+
+
+def _has_polarity_conflict(answer: str, fact: ExpectedAnswerFact) -> bool:
+    """Reject token-set matches that occur only in a plainly negated clause.
+
+    This deliberately favours a false negative over declaring the opposite of a
+    safety or installation requirement correct. It is a deterministic guard,
+    not semantic entailment.
+    """
+
+    expected_tokens = set().union(*(_diagnostic_tokens(alias) for alias in fact.aliases))
+    if fact.value:
+        expected_tokens.update(_diagnostic_tokens(fact.value))
+    if fact.unit:
+        expected_tokens.update(_diagnostic_tokens(fact.unit))
+    for value in fact.acceptable_values:
+        expected_tokens.update(_diagnostic_tokens(value))
+    for group in fact.required_token_groups:
+        for alternative in group:
+            expected_tokens.update(_diagnostic_tokens(alternative))
+    for clause in re.split(r"[.!?;\n]+", unicodedata.normalize("NFKC", answer).casefold()):
+        clause_tokens = _diagnostic_tokens(clause)
+        if not clause_tokens.intersection(_NEGATION_TOKENS):
+            continue
+        if len(clause_tokens.intersection(expected_tokens)) >= min(2, len(expected_tokens)):
+            return True
+    return False
+
+
+def _identifier_matches(answer: str, expected: str) -> bool:
+    normalized_answer = unicodedata.normalize("NFKC", answer).casefold()
+    normalized_expected = unicodedata.normalize("NFKC", expected).casefold().strip()
+    if not normalized_expected:
+        return False
+    return re.search(
+        rf"(?<![\w]){re.escape(normalized_expected)}(?![\w])", normalized_answer
+    ) is not None
+
+
+def _numeric_unit_matches(answer: str, value: str, unit: str) -> bool:
+    normalized_answer = unicodedata.normalize("NFKC", answer).casefold()
+    normalized_value = unicodedata.normalize("NFKC", value).casefold().strip()
+    normalized_unit = unicodedata.normalize("NFKC", unit).casefold().strip()
+    if not normalized_value or not normalized_unit:
+        return False
+    value_pattern = re.escape(normalized_value).replace(r"\.", r"[.,]")
+    unit_pattern = r"\s*".join(re.escape(part) for part in normalized_unit.split())
+    return re.search(
+        rf"(?<![\d]){value_pattern}\s*{unit_pattern}(?![\w])", normalized_answer
+    ) is not None
 
 
 def _token_overlap(answer_tokens: set[str], alias_tokens: set[str]) -> tuple[float, float]:

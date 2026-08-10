@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from app.models import RetrievalCandidate
 from app.phase7 import Phase7DatasetItem
+from scripts.audit_phase7_retrieval_failures import (
+    _document_distribution,
+    _dominant_document,
+)
 from scripts.calibrate_phase7_retrieval import (
+    PROFILES,
     CandidateProfile,
     _build_profile,
     _score_profile,
@@ -77,6 +82,32 @@ def test_rrf_profile_applies_final_limit_and_preserves_component_diagnostics() -
     assert all(candidate.rrf_rank is not None for candidate in candidates)
 
 
+def test_wide_retrieval_has_fixed_top30_reranker_budget_profile() -> None:
+    profile = next(item for item in PROFILES if item.name == "rrf_d60_s40_top30")
+    assert profile.dense_limit == 60
+    assert profile.sparse_limit == 40
+    assert profile.final_limit == 30
+
+
+def test_expanded_profile_uses_expanded_sparse_candidates_only_for_that_profile() -> None:
+    dense = [_candidate("dense", dense_rank=1)]
+    original_sparse = [_candidate("original", sparse_rank=1)]
+    expanded_sparse = [_candidate("expanded-qrel", sparse_rank=1)]
+    expanded_profile = next(
+        item for item in PROFILES if item.name == "expanded_rrf_d60_s40_top30"
+    )
+    expanded = _build_profile(
+        expanded_profile,
+        dense,
+        original_sparse,
+        expanded_sparse_candidates=expanded_sparse,
+    )
+    assert {candidate.chunk_id for candidate in expanded} == {"dense", "expanded-qrel"}
+
+    baseline = _build_profile(PROFILES[0], dense, original_sparse)
+    assert {candidate.chunk_id for candidate in baseline} == {"dense", "original"}
+
+
 def test_profile_scoring_and_summary_use_only_stable_qrel_ids() -> None:
     profile = CandidateProfile("union", "union", 20, 20)
     hit = _score_profile(
@@ -90,3 +121,13 @@ def test_profile_scoring_and_summary_use_only_stable_qrel_ids() -> None:
     assert summary["candidate_recall"] == 0.5
     assert summary["missing_query_ids"] == ["item-vi"]
     assert summary["per_language"]["en"]["candidate_recall"] == 1.0
+
+
+def test_failure_audit_document_distribution_is_deterministic() -> None:
+    candidates = [
+        _candidate("a"),
+        _candidate("b").model_copy(update={"document_id": "programming"}),
+        _candidate("c").model_copy(update={"document_id": "programming"}),
+    ]
+    assert _document_distribution(candidates) == {"manual": 1, "programming": 2}
+    assert _dominant_document(candidates) == "programming"

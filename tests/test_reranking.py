@@ -117,6 +117,22 @@ def test_candidate_text_uses_heading_breadcrumb_without_mutating_raw_text() -> N
     assert build_candidate_text(candidate.model_copy(update={"headings": []})) == "raw a"
 
 
+def test_candidate_text_includes_trusted_document_context_when_present() -> None:
+    candidate = _candidate("a", sparse_rank=1).model_copy(
+        update={
+            "metadata": {
+                "document_title": "ATV320 Installation Manual",
+                "document_role": "installation",
+            }
+        }
+    )
+    assert build_candidate_text(candidate) == (
+        "Document title: ATV320 Installation Manual\n"
+        "Document role: installation\n\n"
+        "Safety > Limits\n\nraw a"
+    )
+
+
 def test_rerank_orders_scores_and_preserves_all_metadata_and_component_signals() -> None:
     candidates = [_candidate("a", sparse_rank=1), _candidate("b", sparse_rank=2)]
     model = FakeCrossEncoder([CrossEncoderScore(0, -2.0), CrossEncoderScore(1, 4.0)])
@@ -295,6 +311,71 @@ def test_pipeline_preserves_document_filter_and_uses_correct_dense_collection() 
     calls.clear()
     pipeline.prepare_pool("q", strategy="hybrid", document_id="manual-b")
     assert calls == [("v2", "manual-b"), ("v2", "manual-b")]
+
+
+def test_pipeline_attaches_only_configured_trusted_document_context() -> None:
+    def fake_dense(*args, **kwargs):
+        return [_dense("dense", document_id="manual-a")]
+
+    def fake_sparse(*args, **kwargs):
+        return [_candidate("sparse", sparse_rank=1, document_id="manual-b")]
+
+    pipeline = RerankPipeline(
+        client=object(),
+        dense_embedding_model=object(),
+        sparse_embedding_model=object(),
+        cross_encoder=FakeCrossEncoder(),
+        dense_collection="v1",
+        hybrid_collection="v2",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        document_contexts={
+            "manual-a": {
+                "document_title": "Installation Manual",
+                "document_role": "installation",
+            }
+        },
+        dense_search_fn=fake_dense,
+        sparse_search_fn=fake_sparse,
+    )
+    pool = pipeline.prepare_pool("q", strategy="union").candidates
+    dense = next(candidate for candidate in pool if candidate.chunk_id == "dense")
+    sparse = next(candidate for candidate in pool if candidate.chunk_id == "sparse")
+    assert dense.metadata["document_role"] == "installation"
+    assert dense.metadata["document_title"] == "Installation Manual"
+    assert "document_role" not in sparse.metadata
+
+
+def test_pipeline_expands_sparse_query_then_rrf_prunes_before_fixed_rerank_budget() -> None:
+    sparse_queries: list[str] = []
+
+    def fake_dense(*args, **kwargs):
+        return [_dense(f"d{index}", 1.0 - index / 10) for index in range(4)]
+
+    def fake_sparse(*args, **kwargs):
+        sparse_queries.append(args[1])
+        return [_candidate(f"s{index}", sparse_rank=index + 1) for index in range(4)]
+
+    pipeline = RerankPipeline(
+        client=object(),
+        dense_embedding_model=object(),
+        sparse_embedding_model=object(),
+        cross_encoder=FakeCrossEncoder(),
+        dense_collection="v1",
+        hybrid_collection="v2",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        sparse_query_transform=lambda query: f"{query} expanded",
+        union_rrf_prune_limit=3,
+        dense_search_fn=fake_dense,
+        sparse_search_fn=fake_sparse,
+    )
+    pool = pipeline.prepare_pool("q", strategy="union")
+    assert sparse_queries == ["q expanded"]
+    assert len(pool.candidates) == 3
+    assert all(candidate.rrf_rank is not None for candidate in pool.candidates)
+    assert "query_expansion" in pool.stage_latency_ms
+    assert "rrf_pruning" in pool.stage_latency_ms
 
 
 def test_evaluator_classifies_candidate_and_ordering_failures_with_stage_metrics() -> None:

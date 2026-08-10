@@ -8,6 +8,7 @@ import pytest
 
 from app.models import DocumentChunk
 from app.phase7 import (
+    ExpectedAnswerFact,
     Phase7DatasetItem,
     Phase7Error,
     Phase7Source,
@@ -144,6 +145,35 @@ def test_answer_facts_reject_duplicate_ids_and_aliases() -> None:
     item["expected_answer_facts"] = [{"id": "range", "aliases": ["a", "a"]}]
     with pytest.raises(ValueError, match="duplicate aliases"):
         Phase7DatasetItem.model_validate(item)
+
+
+def test_typed_answer_fact_schema_rejects_incomplete_or_mixed_contracts() -> None:
+    numeric = ExpectedAnswerFact.model_validate(
+        {
+            "id": "supply",
+            "aliases": ["24 VDC"],
+            "type": "numeric_unit",
+            "value": "24",
+            "unit": "VDC",
+        }
+    )
+    assert numeric.type == "numeric_unit"
+    with pytest.raises(ValueError, match="require value and unit"):
+        ExpectedAnswerFact.model_validate(
+            {"id": "supply", "aliases": ["24 VDC"], "type": "numeric_unit"}
+        )
+    with pytest.raises(ValueError, match="require acceptable_values"):
+        ExpectedAnswerFact.model_validate(
+            {"id": "rating", "aliases": ["IP65"], "type": "identifier"}
+        )
+    with pytest.raises(ValueError, match="non-empty alternative groups"):
+        ExpectedAnswerFact.model_validate(
+            {
+                "id": "mounting",
+                "aliases": ["vertical mounting"],
+                "required_token_groups": [[]],
+            }
+        )
 
 
 def test_phase7_rejects_missing_qrel_wrong_document_and_absent_phrase() -> None:

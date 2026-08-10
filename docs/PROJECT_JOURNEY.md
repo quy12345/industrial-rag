@@ -22,7 +22,7 @@ supports it, avoid inventing unsupported sources, and be reproducible when a doc
 | 4.1 | `9718926` | Audited candidate pools instead of assuming hybrid was best. |
 | 5 | `07c074b` | Compared three Jina reranking pools with strict model-output validation. |
 | 6 | `e3b3704` | Added query API, evidence gate, structured generation, citation validation, abstention, and Gemini/OpenAI routing. |
-| 7 | working tree | Adds a real industrial corpus, held-out evaluation, and portfolio-grade hardening. |
+| 7 | `8267c4b` + working tree | Adds a real industrial corpus, calibration closure, sealed held-out evaluation, and portfolio-grade hardening. |
 
 ## Phase 7 checkpoint
 
@@ -37,13 +37,20 @@ from qrel-validation phrases and expands only exact-content equivalents. All 42 
 then source-reviewed, all 65 records approved, and the final v2 hashes frozen. The held-out outputs
 remain unseen.
 
-Dataset-v2 calibration improved direct retrieval over v1 (Hit@5 0.667 versus
-0.583; MRR@5 0.583 versus 0.444) but still failed the strict answer-fact gate at
-0.500. Sanitized token-overlap diagnostics identified two formatting mismatches;
-four queries remained candidate misses. A provider-free dense/sparse 20--60
-ablation rejected brute-force wider pools because the best 0.833 recall still
-missed two queries while nearly doubling reranker inputs. The 20/20 runtime was
-therefore preserved and held-out remained sealed.
+Dataset-v2 calibration improved direct retrieval over v1 but exposed two separate problems. Strict
+contiguous phrase scoring marked calibration 002/008 wrong despite complete answer-fact token
+coverage, while 004/005/006/010 were absent from the 20/20 candidate pool. Phase 7.4 therefore keeps
+strict phrase accuracy only as a diagnostic and introduces deterministic typed fact scoring. A
+sanitized rescore of the same provider outputs changes 6/12 strict matches to 8/12 deterministic
+matches without editing expected phrases or qrels.
+
+The retrieval closure does not widen the cross-encoder to 80 candidates. It retrieves dense@60 and
+expanded sparse@40, augments only query terms through a fixed bilingual technical glossary, then uses
+weighted rank-only RRF `k=40`, dense@5/sparse@24 coverage reserves, and a soft query-role prior within
+the same 30-candidate budget. Canonical Python 3.11 calibration reaches candidate recall 12/12,
+Hit@5 11/12, MRR@5 0.875 and zero wrong-document top-1 results. It remains `PARTIAL`: calibration 010
+is rank 6 and wrong-document candidates still occupy 0.267 of final top-5 slots. The fresh provider
+E2E run requires explicit data-egress approval; held-out remains sealed.
 
 ## What changed in the architecture
 

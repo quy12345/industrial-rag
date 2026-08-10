@@ -253,11 +253,15 @@ def format_evidence(
     for source_id, candidate in source_map.items():
         pages = ", ".join(str(page) for page in sorted(set(candidate.page_numbers))) or "n/a"
         heading = " > ".join(candidate.headings) or "n/a"
+        document_title = str(candidate.metadata.get("document_title", "n/a")).strip() or "n/a"
+        document_role = str(candidate.metadata.get("document_role", "n/a")).strip() or "n/a"
         headers.append(
             f"--- SOURCE {source_id} ---\n"
             f"chunk_id: {candidate.chunk_id}\n"
             f"document_id: {candidate.document_id}\n"
             f"filename: {candidate.filename}\n"
+            f"document_title: {document_title}\n"
+            f"document_role: {document_role}\n"
             f"pages: {pages}\n"
             f"heading: {heading}\n"
             "content:\n<untrusted_document>\n"

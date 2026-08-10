@@ -28,6 +28,7 @@ from app.phase7 import (
     validate_phase7_datasets,
     write_json_atomic,
 )
+from app.query_expansion import augment_vietnamese_technical_query
 from app.reranking import deduplicate_candidates_by_content
 from app.retrieval import (
     create_embedding_model,
@@ -40,6 +41,7 @@ from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, validate_frozen_run
 MAX_DENSE_LIMIT = 60
 MAX_SPARSE_LIMIT = 60
 PoolKind = Literal["union", "rrf"]
+SparseQueryKind = Literal["original", "expanded"]
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,7 @@ class CandidateProfile:
     dense_limit: int
     sparse_limit: int
     final_limit: int | None = None
+    sparse_query: SparseQueryKind = "original"
 
 
 PROFILES = (
@@ -61,6 +64,10 @@ PROFILES = (
     CandidateProfile("rrf_d40_s40_top20", "rrf", 40, 40, 20),
     CandidateProfile("rrf_d60_s40_top20", "rrf", 60, 40, 20),
     CandidateProfile("rrf_d60_s60_top20", "rrf", 60, 60, 20),
+    CandidateProfile("rrf_d60_s40_top30", "rrf", 60, 40, 30),
+    CandidateProfile(
+        "expanded_rrf_d60_s40_top30", "rrf", 60, 40, 30, sparse_query="expanded"
+    ),
     CandidateProfile("rrf_d40_s40_top40", "rrf", 40, 40, 40),
     CandidateProfile("rrf_d60_s40_top40", "rrf", 60, 40, 40),
     CandidateProfile("rrf_d60_s60_top40", "rrf", 60, 60, 40),
@@ -141,6 +148,23 @@ def main() -> int:
         )
         sparse_ms = (perf_counter() - sparse_started) * 1000
         dense_candidates = dense_results_to_candidates(dense_results)
+        expanded_sparse_candidates = sparse_candidates
+        expanded_sparse_ms = 0.0
+        expansion_rule_count = 0
+        if item.language == "vi":
+            expanded_query, matched_rules = augment_vietnamese_technical_query(item.question)
+            expansion_rule_count = len(matched_rules)
+            if expanded_query != item.question:
+                expanded_started = perf_counter()
+                expanded_sparse_candidates = sparse_search(
+                    client,
+                    expanded_query,
+                    collection_name=settings.qdrant_hybrid_collection,
+                    sparse_vector_name=settings.sparse_vector_name,
+                    sparse_embedding_model=sparse_model,
+                    limit=MAX_SPARSE_LIMIT,
+                )
+                expanded_sparse_ms = (perf_counter() - expanded_started) * 1000
         relevant = set(item.relevant_chunk_ids)
         retrieval_rows.append(
             {
@@ -150,10 +174,20 @@ def main() -> int:
                 "sparse_qrel_rank_at_60": direct_evidence_rank(sparse_candidates, relevant),
                 "dense_ms_at_60": dense_ms,
                 "sparse_ms_at_60": sparse_ms,
+                "expanded_sparse_qrel_rank_at_60": direct_evidence_rank(
+                    expanded_sparse_candidates, relevant
+                ),
+                "expanded_sparse_ms_at_60": expanded_sparse_ms,
+                "query_expansion_rule_count": expansion_rule_count,
             }
         )
         for profile in PROFILES:
-            candidates = _build_profile(profile, dense_candidates, sparse_candidates)
+            candidates = _build_profile(
+                profile,
+                dense_candidates,
+                sparse_candidates,
+                expanded_sparse_candidates=expanded_sparse_candidates,
+            )
             profile_rows[profile.name].append(_score_profile(item, profile, candidates))
 
     summaries = {
@@ -173,6 +207,32 @@ def main() -> int:
     recommended_average = float(
         summaries[recommendation]["candidate_count"]["average"]
     )
+    fixed_budget_profiles = {
+        name: summary
+        for name, summary in summaries.items()
+        if int(summary["candidate_count"]["maximum"]) <= 30
+    }
+    fixed_budget_winner = min(
+        fixed_budget_profiles,
+        key=lambda name: (
+            -float(fixed_budget_profiles[name]["candidate_recall"]),
+            float(fixed_budget_profiles[name]["candidate_count"]["average"]),
+            name,
+        ),
+    )
+    fixed_budget_missing = list(
+        fixed_budget_profiles[fixed_budget_winner]["missing_query_ids"]
+    )
+    fixed_budget_passed = (
+        float(fixed_budget_profiles[fixed_budget_winner]["candidate_recall"]) >= 11 / 12
+    )
+    runtime_contract_matches = (
+        fixed_budget_winner == "expanded_rrf_d60_s40_top30"
+        and PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit == 60
+        and PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit == 40
+        and PHASE7_RETRIEVAL_CONTRACT.union_rrf_prune_limit == 30
+        and PHASE7_RETRIEVAL_CONTRACT.query_expansion_profile is not None
+    )
     payload = {
         "schema_version": 1,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -185,7 +245,10 @@ def main() -> int:
         "retrieval_methodology": {
             "dense_max_limit": MAX_DENSE_LIMIT,
             "sparse_max_limit": MAX_SPARSE_LIMIT,
-            "component_queries_per_item": 2,
+            "component_queries_per_item": (
+                "2 plus one sparse query when Vietnamese glossary expansion changes the query"
+            ),
+            "query_expansion": "deterministic technical glossary; query terms only",
             "profile_latency": (
                 "not estimated; profiles are deterministic slices of one max-limit retrieval"
             ),
@@ -194,13 +257,26 @@ def main() -> int:
         },
         "profiles": summaries,
         "recommended_profile_by_candidate_recall_then_pool_size": recommendation,
+        "fixed_reranker_budget": {
+            "maximum_candidates": 30,
+            "required_candidate_recall": 11 / 12,
+            "recommended_profile": fixed_budget_winner,
+            "actual_candidate_recall": fixed_budget_profiles[fixed_budget_winner][
+                "candidate_recall"
+            ],
+            "passed": fixed_budget_passed,
+        },
         "runtime_recommendation": {
-            "profile": baseline_name,
-            "change_runtime": False,
+            "profile": fixed_budget_winner if fixed_budget_passed else baseline_name,
+            "change_runtime": fixed_budget_passed and not runtime_contract_matches,
             "reason": (
-                "The candidate-only winner still misses calibration_004 and calibration_010 "
-                "and increases average reranker inputs substantially."
+                "The frozen Phase 7.4 runtime matches the best fixed-budget profile."
+                if fixed_budget_passed and runtime_contract_matches
+                else "No fixed-budget profile is ready for the frozen runtime."
             ),
+            "runtime_contract_matches_recommendation": runtime_contract_matches,
+            "best_fixed_budget_profile": fixed_budget_winner,
+            "best_fixed_budget_missing_query_ids": fixed_budget_missing,
             "candidate_only_winner_pool_size_multiplier_vs_baseline": (
                 recommended_average / baseline_average
             ),
@@ -232,9 +308,16 @@ def _build_profile(
     profile: CandidateProfile,
     dense_candidates: list[RetrievalCandidate],
     sparse_candidates: list[RetrievalCandidate],
+    *,
+    expanded_sparse_candidates: list[RetrievalCandidate] | None = None,
 ) -> list[RetrievalCandidate]:
     dense = dense_candidates[: profile.dense_limit]
-    sparse = sparse_candidates[: profile.sparse_limit]
+    sparse_source = (
+        expanded_sparse_candidates
+        if profile.sparse_query == "expanded" and expanded_sparse_candidates is not None
+        else sparse_candidates
+    )
+    sparse = sparse_source[: profile.sparse_limit]
     if profile.kind == "union":
         candidates = union_dense_sparse_candidates(dense, sparse)
     else:
@@ -282,6 +365,7 @@ def _summarize_profile(
         "dense_limit": profile.dense_limit,
         "sparse_limit": profile.sparse_limit,
         "final_limit": profile.final_limit,
+        "sparse_query": profile.sparse_query,
         "query_count": len(rows),
         "candidate_recall": sum(row["direct_evidence_rank"] is not None for row in rows)
         / len(rows),

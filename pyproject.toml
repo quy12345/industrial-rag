@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 retrieval = [
     "qdrant-client[fastembed]>=1.19.0,<1.20.0",
+    "fastembed==0.8.0",
 ]
 ingestion = [
     "docling>=2.117,<2.118",
@@ -27,6 +28,7 @@ llm = [
 ]
 dev = [
     "qdrant-client[fastembed]>=1.19.0,<1.20.0",
+    "fastembed==0.8.0",
     "docling>=2.117,<2.118",
     "langchain-core>=1.5.1,<1.6.0",
     "langchain-openai>=1.4.1,<1.5.0",
