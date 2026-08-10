@@ -24,7 +24,7 @@ from app.phase7 import (
     validate_phase7_datasets,
     write_json_atomic,
 )
-from app.phase7_optimization import Phase7FusionProfile
+from app.phase7_optimization import Phase7FusionProfile, phase7_profile_from_mapping
 from app.retrieval_runtime import (
     PHASE7_RETRIEVAL_CONTRACT,
     build_query_retriever,
@@ -45,9 +45,7 @@ def main() -> int:
         "--calibration", type=Path, default=Path("data/eval/phase7/calibration.jsonl")
     )
     parser.add_argument("--test", type=Path, default=Path("data/eval/phase7/test.jsonl"))
-    parser.add_argument(
-        "--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl")
-    )
+    parser.add_argument("--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl"))
     parser.add_argument("--max-profiles", type=int, default=MAX_PARETO_PROFILES)
     parser.add_argument(
         "--profile",
@@ -200,7 +198,7 @@ def _profiles_from_ablation(
         profile = row.get("summary", {}).get("profile")
         if not isinstance(profile, dict):
             raise ValueError("Ablation profile is malformed.")
-        profiles.append(Phase7FusionProfile(**profile))
+        profiles.append(phase7_profile_from_mapping(profile))
     return profiles
 
 
@@ -268,7 +266,10 @@ def _profile_payload(profile: Phase7FusionProfile) -> dict[str, Any]:
         "rrf_k": profile.rrf_k,
         "dense_weight": profile.dense_weight,
         "sparse_weight": profile.sparse_weight,
-        "role_multiplier": profile.role_multiplier,
+        "fusion_role_multiplier": profile.fusion_role_multiplier,
+        "post_rerank_role_multiplier": profile.post_rerank_role_multiplier,
+        "post_rerank_rank_offset": profile.post_rerank_rank_offset,
+        "post_rerank_confidence_mode": profile.post_rerank_confidence_mode,
         "dense_reserve": profile.dense_reserve,
         "sparse_reserve": profile.sparse_reserve,
         "max_candidates": profile.max_candidates,

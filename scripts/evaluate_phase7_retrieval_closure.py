@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -84,6 +84,7 @@ def main() -> int:
         )
 
     overall = aggregate_closure_rows(rows)
+    per_language = _per_language(rows)
     runtime_identity = {
         "dense_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit,
         "sparse_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit,
@@ -114,16 +115,27 @@ def main() -> int:
             "retrieval_runtime_source_sha256": _file_sha256(Path("app/retrieval_runtime.py")),
         },
         "overall": overall,
+        "per_language": per_language,
         "quality_gates": {
-            "candidate_recall_at_least_11_of_12": overall["candidate_recall"] >= 11 / 12,
+            "candidate_recall_12_of_12": overall["candidate_recall"] == 1.0,
             "hit_rate_at_5_at_least_11_of_12": overall["hit_rate_at_5"] >= 11 / 12,
+            "mrr_at_5_at_least_0_875": overall["mrr_at_5"] >= 0.875,
             "reranker_input_at_most_30": overall["candidate_count_maximum"] <= 30,
-            "wrong_document_top1_at_most_1_of_12": overall["wrong_document_top1_rate"]
-            <= 1 / 12,
+            "wrong_document_top1_zero": overall["wrong_document_top1_rate"] == 0.0,
             "wrong_document_candidate_rate_at_5_at_most_0_15": (
                 overall["wrong_document_candidate_rate_at_5"] <= 0.15
             ),
             "document_context_complete": overall["document_context_complete_rate"] == 1.0,
+            "english_hit_rate_at_5_6_of_6": per_language["en"]["hit_rate_at_5"] == 1.0,
+            "vietnamese_hit_rate_at_5_at_least_5_of_6": per_language["vi"]["hit_rate_at_5"]
+            >= 5 / 6,
+            "english_wrong_document_top5_at_most_5_of_30": (
+                per_language["en"]["wrong_document_candidate_rate_at_5"] <= 5 / 30
+            ),
+            "vietnamese_wrong_document_top5_at_most_5_of_30": (
+                per_language["vi"]["wrong_document_candidate_rate_at_5"] <= 5 / 30
+            ),
+            "calibration_010_rank_at_most_6": _rank(rows, "phase7_calibration_010") <= 6,
         },
         "per_query": rows,
         "provider_calls": 0,
@@ -179,6 +191,40 @@ def _latency_summary(values: list[float]) -> dict[str, float]:
         "p95": percentile_nearest_rank(values, 95),
         "maximum": max(values),
     }
+
+
+def _per_language(rows: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        groups[str(row["language"])].append(row)
+    result: dict[str, dict[str, float | int]] = {}
+    for language, group in sorted(groups.items()):
+        total_top5 = sum(min(int(row["final_candidate_count"]), 5) for row in group)
+        result[language] = {
+            "query_count": len(group),
+            "candidate_recall": sum(
+                row["candidate_direct_evidence_rank"] is not None for row in group
+            )
+            / len(group),
+            "hit_rate_at_5": sum(
+                row["final_direct_evidence_rank"] is not None
+                and row["final_direct_evidence_rank"] <= 5
+                for row in group
+            )
+            / len(group),
+            "wrong_document_candidate_rate_at_5": sum(
+                int(row["wrong_document_candidate_count_at_5"]) for row in group
+            )
+            / total_top5,
+        }
+    return result
+
+
+def _rank(rows: list[dict[str, Any]], identifier: str) -> int:
+    for row in rows:
+        if row["id"] == identifier:
+            return int(row["final_direct_evidence_rank"] or 2**31)
+    raise ValueError(f"Required calibration row missing: {identifier}")
 
 
 def _json_sha256(value: dict[str, Any]) -> str:

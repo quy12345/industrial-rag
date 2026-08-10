@@ -59,7 +59,7 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 5 | Implementation complete; quality PARTIAL | Ba multilingual reranking strategies đã benchmark; ranking gates và critical 3/3 PASS, CPU latency FAIL, không đặt runtime default |
 | Phase 5.1 | Deferred | Reranker optimization/quantization/license replacement không nằm trong Phase 6 |
 | Phase 6 | Implementation/offline/Docker correctness complete; real provider NOT RUN | Query API, evidence gate, Responses structured generation, citations, abstention, sparse rollback |
-| Phase 7 | Đang thực hiện | Corpus/index hoàn tất; dataset-v2 remediation đang chờ review trước held-out |
+| Phase 7 | Đang thực hiện | Provider-free calibration closure PASS; typed-fact draft và provider calibration đang chờ review/approval trước held-out |
 
 Thứ tự triển khai đã chốt:
 
@@ -683,7 +683,7 @@ structured-output details, validation evidence, and rollback.
 - Implemented: multi-document frozen-runtime validation, sanitized resumable E2E scorer, Qdrant
   readiness, request correlation IDs, bounded Qdrant timeout, optional bearer auth, and API Docker
   liveness healthcheck.
-- Current Python 3.11.15 validation: Ruff `PASS`; pytest `224 passed, 1 warning`; Compose config and
+- Current Python 3.11.15 validation: Ruff `PASS`; pytest `236 passed, 1 warning`; Compose config and
   `git diff --check` PASS. The warning is the known third-party Starlette/TestClient deprecation.
 - Historical Gemini dataset-v2 diagnostics calibration completed all 20 rows:
   candidate recall/Hit@5 0.667, MRR@5 0.583, strict answer-fact accuracy 0.500,
@@ -694,15 +694,20 @@ structured-output details, validation evidence, and rollback.
 - Phase 7.4 separates strict contiguous phrase accuracy (diagnostic) from deterministic typed fact
   accuracy (headline). Rescoring the existing sanitized output changes 6/12 strict matches to 8/12
   deterministic matches; it is derived evidence because raw answers are intentionally absent.
-- Phase 7.4 calibration runtime now uses dense60 + expanded sparse40, weighted RRF `k=40`, sparse
-  weight `1.25`, dense@5/sparse@24 coverage reserves, same-document exact-content deduplication, and
-  a query-only soft role prior before and after unchanged Jina. Candidate recall is 12/12, Hit@5 is
-  11/12, MRR@5 is 0.875, and reranker input is capped at 30. Calibration 005 is recovered; 010 is
-  present but remains rank 6 after Jina.
-- Trusted document title/role is included in reranker and LLM evidence input without expected-doc
-  filtering. Canonical closure has wrong-document top-1 `0.000`, but final top-5 candidate
-  contamination is `0.267`, above the `<=0.15` gate. The runtime is therefore frozen for calibration
-  but Phase 7.4 status remains `PARTIAL`; citation contamination must be remeasured before held-out.
+- Phase 7.4.1 closes the cross-document contamination gate without changing chunks, qrels, models,
+  schemas, collections, or candidate budget. Fusion uses a weak role multiplier `0.10`; a separate
+  rank-only post-rerank role prior uses multiplier `0.50`, offset `20`, and strong-and-weak
+  confidence. It was selected by six bilingual intent folds from a sanitized Jina snapshot, not from
+  qrels at runtime. The provider-free closure is candidate recall `12/12`, Hit@5 `11/12`, MRR@5
+  `0.875`, wrong-document top-1 `0/12`, wrong-document top-5 `8/60 = 0.133`, EN Hit@5 `6/6`, VI
+  Hit@5 `5/6`, and calibration 010 rank `6`; all contamination gates pass.
+- Phase 7.5 freezes reranker budget `30`, batch size `8`, and runtime-default ONNX threads after a
+  microbenchmark and three full repetitions of every calibration question. Rerank p95 is `6.996 s`
+  and total p95 is `7.027 s`, a 47.8% improvement from the 13.399-second baseline with no quality
+  regression. FastEmbed remains direct-pinned at `0.8.0`; no re-index or model/pooling change occurs.
+- Typed calibration-v3 facts are an inactive human-review draft that preserves qrels/pages/phrases.
+  Provider E2E has not run, because it requires a separate data-egress approval. Held-out remains
+  sealed until the fresh calibration fact/citation/abstention gate passes.
 - Phase 7 union runtime now supports same-document exact-normalized content deduplication before
   reranking. The setting defaults off globally and is enabled explicitly only by the Phase 7 E2E CLI,
   preserving legacy Phase 5/6 behavior.

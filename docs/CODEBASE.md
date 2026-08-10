@@ -12,11 +12,12 @@ Query -> dense top-20 + sparse top-20 -> client-side RRF -> RetrievalCandidate
       -> evidence gate -> structured grounded generation
       -> source-ID validation -> trusted citation builder -> QueryResponse
 
-Phase 7.4 calibration/runtime override:
+Phase 7.4.1--7.5 frozen calibration/runtime override:
 Query -> dense top-60 + expanded sparse top-40 after vi_technical_glossary_v1
       -> query-only role inference -> weighted RRF k=40 + dense@5/sparse@24 reserves
       -> exact-content deduplication -> maximum 30 candidates -> unchanged Jina reranker
-      -> rank-only soft document-role prior; never an expected-document filter
+      -> rank-only `0.50` document-role prior with offset 20 for strong/weak cues
+      -> frozen batch size 8 and runtime-default ONNX threads; never an expected-document filter
 ```
 
 `app.main` exposes `/api/v1/health`, `/api/v1/ready`, and `/api/v1/query`. Retrieval, reranking, evidence gating, and
@@ -49,9 +50,12 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `app/query_expansion.py`: frozen, deterministic Vietnamese technical glossary used only to append
   translated query terms before Phase 7 sparse retrieval; it contains no qrels, pages, document IDs,
   expected answers, model call, or held-out-specific rule.
-- `app/phase7_optimization.py`: query-only bilingual document-role inference, bounded weighted RRF,
-  coverage-preserving candidate membership, and post-rerank rank-only role prior. It has no Qdrant,
+- `app/phase7_optimization.py`: query-only bilingual document-role inference with Unicode-safe cue
+  boundaries and strong/weak confidence, bounded weighted RRF, coverage-preserving candidate
+  membership, and post-rerank rank-only role prior. It has no Qdrant,
   provider, qrel, expected-page, or answer-fact dependency.
+- `app/phase7_replay.py`: validates sanitized reranker snapshots and replays rank-only priors without
+  a model, Qdrant, provider, raw question, or chunk text.
 - `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
   diagnostics, and RRF-demotion aggregation for the Phase 5 handoff.
 - `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
@@ -95,8 +99,17 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   ablation and Pareto shortlist; no reranker, provider, or held-out query.
 - `scripts/evaluate_phase7_weighted_rerank.py`: local Jina evaluation of at most six shortlisted
   calibration profiles, with deterministic profile selection and no generation provider.
-- `scripts/evaluate_phase7_retrieval_closure.py`: runs the frozen Phase 7.4 retrieval and local Jina
+- `scripts/evaluate_phase7_retrieval_closure.py`: runs the frozen Phase 7.4.1 retrieval and local Jina
   reranker on answerable calibration only; no provider and no held-out execution.
+- `scripts/create_phase7_reranker_snapshot.py`: makes a sanitized baseline Jina snapshot once; replay
+  artifacts include IDs/ranks/scores and roles but exclude questions and raw evidence.
+- `scripts/calibrate_phase7_role_prior.py`: runs six-fold, provider-free rank-prior selection from a
+  snapshot; the fold mapping is evaluation-only and never imported by the runtime.
+- `scripts/benchmark_phase7_reranker_cpu.py`: runs the bounded CPU micro/full ablation without Docker
+  builds, re-indexing, provider calls, or held-out questions.
+- `scripts/generate_phase7_fact_evaluator_readiness.py` and
+  `scripts/generate_phase7_runtime_readiness.py`: fail-closed sanitized readiness artifacts for the
+  typed-fact review boundary and provider-approval boundary.
 - `scripts/rescore_phase7_calibration_facts.py`: derives deterministic text-fact decisions from the
   prior sanitized v2 diagnostics when raw provider answers are unavailable.
 - `scripts/migrate_phase7_dataset_v2.py`: offline migration that revokes approval, adds answer facts,
@@ -204,6 +217,7 @@ known third-party Starlette/TestClient deprecation warning. The additive Gemini 
 regressions bring the local suite to 162, and the real adapter constructs in the Python 3.11 API image; no default test
 calls Qdrant, FastEmbed, a reranker, or a generation provider.
 
-Phase 7.4 adds fake weighted-RRF, reserve-budget, bilingual role-inference, post-rerank rank-prior,
-negation, numeric/unit and profile-selection tests. Canonical Python 3.11 validation currently passes
-224 tests with the same one third-party warning; default pytest still performs no network/model/Qdrant call.
+Phase 7.4.1--7.5 adds offline Unicode/boundary role-inference, confidence, rank-prior replay,
+malformed-snapshot, CPU-profile selection, fact-readiness, and runtime-readiness tests. Canonical
+Python 3.11.15 validation passes 236 tests with the same one third-party warning; default pytest
+still performs no network/model/Qdrant call.

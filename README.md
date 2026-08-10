@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 7.4 — calibration runtime implemented; release gate PARTIAL**
+**Phase 7.5 — provider-free calibration closure PASS; provider approval required**
 
 Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
 `GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
@@ -107,27 +107,44 @@ and uses deterministic typed facts as the headline metric. A sanitized rescore o
 raises deterministic fact accuracy to `8/12 = 0.667`; this is a derived evaluator result, not a new
 provider run.
 
-Phase 7.4 now uses dense@60 plus expanded sparse@40, a weighted rank-only RRF profile (`k=40`, sparse
-weight `1.25`), dense@5/sparse@24 coverage reserves, and a soft query-role prior before and after the
-unchanged Jina reranker. Canonical Python 3.11 closure measured candidate recall `12/12 = 1.000`,
-Hit@5 `11/12 = 0.917`, MRR@5 `0.875`, zero wrong-document top-1 results, and at most 30 reranker
-inputs. It remains `PARTIAL`: wrong-document candidates still occupy `0.267` of final top-5 slots and
-calibration 010 remains rank 6. The artifact is
-`artifacts/metrics/phase-7-retrieval-closure-v2.json`; it has zero provider calls and zero held-out
-queries.
+Phase 7.4.1 preserves that retrieval profile but separates the weak fusion role signal from a strong
+post-rerank rank-only prior. The selected profile is weighted RRF `k=40`, sparse weight `1.25`,
+dense@5/sparse@24 coverage reserves, fusion multiplier `0.10`, then a `0.50` document-role prior with
+rank offset `20` for strong and weak inferences. It is selected from a sanitized Jina snapshot using
+six bilingual intent folds; raw Jina scores remain intact for diagnostics.
 
-A fresh provider E2E run was not executed without explicit corpus-owner data-egress approval, and
-held-out remains sealed. Canonical offline validation: Python `3.11.15`, Ruff PASS, pytest
-`224 passed, 1 warning`. The warning is the known third-party Starlette/TestClient deprecation.
-See `docs/walkthrough-phase-7-4.md` for the retrieval flow, measured closure and release gates.
+The final provider-free closure measures candidate recall `12/12 = 1.000`, Hit@5 `11/12 = 0.917`,
+MRR@5 `0.875`, wrong-document top-1 `0/12`, and wrong-document top-5 `8/60 = 0.133`. English is
+`6/6`; Vietnamese is `5/6`; calibration 010 is rank 6; reranker input is capped at 30. This passes
+the contamination gate without an expected-document filter, qrel change, re-index, or model change.
 
-Run the provider-free Phase 7.4 diagnostics only after Qdrant and the shared FastEmbed cache are
+Phase 7.5 freezes the final reranker budget at 30 and batch size 8 (runtime-default ONNX threads).
+Three repetitions of all 12 calibration questions measure rerank p95 `6.996 s` and total p95
+`7.027 s`, a 47.8% improvement from the 13.399 s baseline while retaining the closure metrics. A
+separate one-pass closure run measures rerank p95 `9.706 s`; it is not statistically comparable to
+the repeated CPU benchmark. The corpus, datasets, collections, MiniLM, Jina, and FastEmbed `0.8.0` remain frozen. Artifacts are
+sanitized and contain zero provider calls and zero held-out questions.
+
+Typed facts remain a review-required calibration-v3 draft: qrels/pages/phrases are preserved, but it
+is deliberately not active. A fresh calibration E2E run requires separate corpus-owner approval
+because it sends questions and retrieved excerpts to the configured provider. Held-out remains sealed
+until that E2E gate passes. See `docs/walkthrough-phase-7-5.md` for the selected profile, replay,
+CPU methodology, artifact boundaries, and next approval.
+
+Canonical Python 3.11.15 offline validation: Ruff PASS and pytest `236 passed, 1 warning`. The
+warning is the known third-party Starlette/TestClient deprecation.
+
+Run the provider-free Phase 7.4.1--7.5 diagnostics only after Qdrant and the shared FastEmbed cache are
 available. These commands never call Gemini/OpenAI and never execute held-out questions:
 
 ```powershell
 python -m scripts.calibrate_phase7_weighted_fusion
 python -m scripts.evaluate_phase7_retrieval_closure `
-  --output artifacts/metrics/phase-7-retrieval-closure-v2.json
+  --output artifacts/metrics/phase-7-contamination-closure-v4.json
+python -m scripts.create_phase7_reranker_snapshot
+python -m scripts.calibrate_phase7_role_prior
+python -m scripts.benchmark_phase7_reranker_cpu --stage micro
+python -m scripts.benchmark_phase7_reranker_cpu --stage full
 ```
 
 ## Quickstart: khởi động, test, chạy demo và dừng

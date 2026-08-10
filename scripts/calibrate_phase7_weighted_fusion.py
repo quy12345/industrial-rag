@@ -55,9 +55,7 @@ def main() -> int:
         "--calibration", type=Path, default=Path("data/eval/phase7/calibration.jsonl")
     )
     parser.add_argument("--test", type=Path, default=Path("data/eval/phase7/test.jsonl"))
-    parser.add_argument(
-        "--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl")
-    )
+    parser.add_argument("--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl"))
     parser.add_argument(
         "--output",
         type=Path,
@@ -195,7 +193,10 @@ def _score_profile(
 ) -> dict[str, Any]:
     try:
         candidates = select_coverage_preserving_candidates(
-            dense, sparse, profile=profile, query_role=query_role  # type: ignore[arg-type]
+            dense,
+            sparse,
+            profile=profile,
+            query_role=query_role,  # type: ignore[arg-type]
         )
     except Phase7OptimizationError as exc:
         return {"id": item.id, "language": item.language, "invalid": str(exc)}
@@ -238,15 +239,14 @@ def _summarize_profile(profile: Phase7FusionProfile, rows: list[dict[str, Any]])
     return {
         "valid": True,
         "profile": _profile_payload(profile),
-        "candidate_recall": sum(
-            row["direct_evidence_rank"] is not None for row in valid
-        )
+        "candidate_recall": sum(row["direct_evidence_rank"] is not None for row in valid)
         / len(valid),
         "wrong_document_top1_rate": sum(bool(row["wrong_document_top1"]) for row in valid)
         / len(valid),
         "wrong_document_candidate_rate_at_5": sum(
             int(row["wrong_document_candidate_count_at_5"]) for row in valid
-        ) / sum(min(int(row["candidate_count"]), 5) for row in valid),
+        )
+        / sum(min(int(row["candidate_count"]), 5) for row in valid),
         "candidate_count": {
             "minimum": min(counts),
             "maximum": max(counts),
@@ -278,15 +278,12 @@ def _select_pareto_profiles(summaries: dict[str, dict[str, Any]]) -> list[dict[s
             float(pair[1]["wrong_document_top1_rate"]),
             float(pair[1]["wrong_document_candidate_rate_at_5"]),
             float(pair[1]["profile"]["sparse_weight"] - 1.0),
-            float(pair[1]["profile"]["role_multiplier"]),
+            float(pair[1]["profile"]["fusion_role_multiplier"]),
             int(pair[1]["profile"]["rrf_k"]),
             pair[0],
         ),
     )
-    return [
-        {"name": name, "summary": summary}
-        for name, summary in ordered[:MAX_PARETO_PROFILES]
-    ]
+    return [{"name": name, "summary": summary} for name, summary in ordered[:MAX_PARETO_PROFILES]]
 
 
 def _with_document_context(candidate: RetrievalCandidate) -> RetrievalCandidate:
@@ -302,7 +299,10 @@ def _profile_payload(profile: Phase7FusionProfile) -> dict[str, Any]:
         "rrf_k": profile.rrf_k,
         "dense_weight": profile.dense_weight,
         "sparse_weight": profile.sparse_weight,
-        "role_multiplier": profile.role_multiplier,
+        "fusion_role_multiplier": profile.fusion_role_multiplier,
+        "post_rerank_role_multiplier": profile.post_rerank_role_multiplier,
+        "post_rerank_rank_offset": profile.post_rerank_rank_offset,
+        "post_rerank_confidence_mode": profile.post_rerank_confidence_mode,
         "dense_reserve": profile.dense_reserve,
         "sparse_reserve": profile.sparse_reserve,
         "max_candidates": profile.max_candidates,

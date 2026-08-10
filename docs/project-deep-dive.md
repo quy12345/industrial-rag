@@ -751,7 +751,8 @@ Không nên xóa helper; nên đổi ownership/public boundary ở phase cleanup
 4. OCR tắt; scanned PDF không hoạt động.
 5. Page batching làm mất heading/table continuity qua boundary.
 6. Re-index chưa có collection alias/staging transaction.
-7. Cross-encoder CPU p95 quá chậm và license phi thương mại.
+7. Phase 7.5 đưa Jina calibration p95 từ 13.399 s xuống 6.996 s bằng batch size 8 và ngân sách 30,
+   nhưng CPU-only latency vẫn quá chậm cho production và license vẫn phi thương mại.
 8. Chưa có authentication, rate limit, background jobs hoặc multi-tenant isolation.
 9. API health chưa kiểm tra Qdrant/model readiness sâu.
 10. Chưa có observability production: structured logs, traces, metrics exporter.

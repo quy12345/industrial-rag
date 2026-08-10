@@ -2,6 +2,10 @@
 
 ## Outcome
 
+This document records the Phase 7.4 intermediate checkpoint. Phase 7.4.1--7.5 subsequently closes
+the contamination gate and measures the frozen CPU profile; see
+[`walkthrough-phase-7-5.md`](walkthrough-phase-7-5.md) for the current contract and metrics.
+
 Phase 7.4 improves the frozen ATV320 calibration runtime without changing chunks, qrels, embedding
 model, Jina model, Qdrant schema, collections, or held-out data. The canonical Python 3.11 closure is
 `PARTIAL`, not release-ready: retrieval quality improved, but final top-5 still contains too many

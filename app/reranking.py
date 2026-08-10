@@ -188,7 +188,10 @@ class RerankPipeline:
             candidates = apply_role_aware_rank_fusion(
                 execution.candidates_after_rerank,
                 query_role=inference.role,
-                role_multiplier=self.phase7_fusion_profile.role_multiplier,
+                role_multiplier=self.phase7_fusion_profile.post_rerank_role_multiplier,
+                rank_offset=self.phase7_fusion_profile.post_rerank_rank_offset,
+                confidence=inference.confidence,
+                confidence_mode=self.phase7_fusion_profile.post_rerank_confidence_mode,
             )
         except Phase7OptimizationError as exc:
             raise RerankingError(str(exc)) from exc
@@ -290,9 +293,7 @@ class RerankPipeline:
         if self.deduplicate_content:
             deduplication_started = perf_counter()
             candidates = deduplicate_candidates_by_content(candidates)
-            stages["content_deduplication"] = (
-                perf_counter() - deduplication_started
-            ) * 1000
+            stages["content_deduplication"] = (perf_counter() - deduplication_started) * 1000
         if pending_prune_limit is not None:
             candidates = candidates[:pending_prune_limit]
         if strategy == "sparse" and "union_preparation" in stages:

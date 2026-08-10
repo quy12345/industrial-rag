@@ -69,6 +69,9 @@ class FrozenRetrievalContract:
     union_rrf_prune_limit: int | None = None
     query_expansion_profile: str | None = None
     phase7_fusion_profile: Phase7FusionProfile | None = None
+    frozen_rerank_batch_size: int | None = None
+    freeze_rerank_threads: bool = False
+    frozen_rerank_threads: int | None = None
 
     @property
     def indexed_document_ids(self) -> tuple[str, ...]:
@@ -102,16 +105,12 @@ PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
     document_contexts=(
         FrozenDocumentContext(
             document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
-            document_title=(
-                "Altivar Machine ATV320 Variable Speed Drives Installation Manual"
-            ),
+            document_title=("Altivar Machine ATV320 Variable Speed Drives Installation Manual"),
             document_role="installation",
         ),
         FrozenDocumentContext(
             document_id="atv320-programming-manual-en-nve41295-06-f5e9bb48167a",
-            document_title=(
-                "Altivar Machine ATV320 Variable Speed Drives Programming Manual"
-            ),
+            document_title=("Altivar Machine ATV320 Variable Speed Drives Programming Manual"),
             document_role="programming",
         ),
     ),
@@ -126,6 +125,9 @@ PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
     union_rrf_prune_limit=30,
     query_expansion_profile=QUERY_EXPANSION_PROFILE,
     phase7_fusion_profile=PHASE7_CALIBRATION_FUSION_PROFILE,
+    frozen_rerank_batch_size=8,
+    freeze_rerank_threads=True,
+    frozen_rerank_threads=None,
 )
 
 
@@ -322,6 +324,11 @@ def build_union_rerank_runtime(
             cross_encoder=FastEmbedCrossEncoder(
                 settings.rerank_model,
                 cache_dir=settings.rerank_cache_dir or settings.embedding_cache_dir,
+                threads=(
+                    contract.frozen_rerank_threads
+                    if contract.freeze_rerank_threads
+                    else settings.rerank_threads
+                ),
             ),
             dense_collection=settings.qdrant_collection,
             hybrid_collection=settings.qdrant_hybrid_collection,
@@ -330,7 +337,7 @@ def build_union_rerank_runtime(
             dense_candidate_limit=settings.dense_candidate_limit,
             sparse_candidate_limit=settings.sparse_candidate_limit,
             rrf_k=settings.rrf_k,
-            rerank_batch_size=settings.rerank_batch_size,
+            rerank_batch_size=contract.frozen_rerank_batch_size or settings.rerank_batch_size,
             deduplicate_content=settings.rerank_deduplicate_content,
             document_contexts=contract.document_context_by_id,
             sparse_query_transform=(
@@ -352,6 +359,12 @@ def build_union_rerank_runtime(
             "bm25_avg_len": contract.bm25_avg_len,
             "rrf_k": settings.rrf_k,
             "rerank_model": settings.rerank_model,
+            "rerank_batch_size": contract.frozen_rerank_batch_size or settings.rerank_batch_size,
+            "rerank_threads": (
+                contract.frozen_rerank_threads
+                if contract.freeze_rerank_threads
+                else settings.rerank_threads
+            ),
             "deduplicate_content": settings.rerank_deduplicate_content,
             "query_expansion_profile": contract.query_expansion_profile,
             "union_rrf_prune_limit": contract.union_rrf_prune_limit,
@@ -363,10 +376,19 @@ def build_union_rerank_runtime(
                     "rrf_k": contract.phase7_fusion_profile.rrf_k,
                     "dense_weight": contract.phase7_fusion_profile.dense_weight,
                     "sparse_weight": contract.phase7_fusion_profile.sparse_weight,
-                    "role_multiplier": contract.phase7_fusion_profile.role_multiplier,
+                    "fusion_role_multiplier": contract.phase7_fusion_profile.fusion_role_multiplier,
                     "dense_reserve": contract.phase7_fusion_profile.dense_reserve,
                     "sparse_reserve": contract.phase7_fusion_profile.sparse_reserve,
                     "max_candidates": contract.phase7_fusion_profile.max_candidates,
+                    "post_rerank_role_multiplier": (
+                        contract.phase7_fusion_profile.post_rerank_role_multiplier
+                    ),
+                    "post_rerank_rank_offset": (
+                        contract.phase7_fusion_profile.post_rerank_rank_offset
+                    ),
+                    "post_rerank_confidence_mode": (
+                        contract.phase7_fusion_profile.post_rerank_confidence_mode
+                    ),
                 }
             ),
         }
@@ -436,6 +458,8 @@ def _validate_settings(settings: Settings, contract: FrozenRetrievalContract) ->
                 "Frozen Phase 7 fusion profile candidate budget differs from the "
                 "retrieval contract."
             )
+    if contract.frozen_rerank_batch_size is not None and contract.frozen_rerank_batch_size <= 0:
+        raise RetrievalUnavailableError("Frozen rerank batch size must be greater than zero.")
     expected = {
         "qdrant_collection": contract.dense_collection,
         "qdrant_hybrid_collection": contract.hybrid_collection,
