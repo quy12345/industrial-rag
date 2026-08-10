@@ -7,6 +7,7 @@ PDF/DOCX -> Docling -> structure-aware DocumentChunk
         -> dense FastEmbed vector + BM25 sparse vector -> Qdrant collection v2
 Query -> dense top-20 + sparse top-20 -> client-side RRF -> RetrievalCandidate
       -> sparse | hybrid | dense/sparse union candidate pool
+      -> optional Phase 7 same-document exact-content deduplication
       -> lazy multilingual cross-encoder -> full reranked pool -> display cutoff
       -> evidence gate -> structured grounded generation
       -> source-ID validation -> trusted citation builder -> QueryResponse
@@ -31,10 +32,13 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   schema/manifest validation, safe dual-vector indexing, sparse search, and deterministic RRF.
 - `app/evaluation.py`: dependency-free typed qrels, frozen-chunk validation, direct-evidence ranks,
   retrieval metrics, group metrics, and latency percentiles.
-- `app/phase7.py`: offline validation and hashing for the separate two-manual corpus and its approved
-  calibration/held-out JSONL sets; it never calls Qdrant or a provider.
+- `app/content_identity.py`: dependency-free NFKC/case/whitespace identity for exact equivalence;
+  it is deliberately not semantic similarity.
+- `app/phase7.py`: offline schema, validation, hashing, exact-content qrel closure, and review state
+  for the separate two-manual corpus; it never calls Qdrant or a provider.
 - `app/evaluation_e2e.py`: offline scoring of a completed query execution: qrel-only ranks,
-  citation outcomes, abstention confusion matrix, phrase checks, and stage latency summaries.
+  citation outcomes, abstention confusion matrix, reviewed answer facts, token-overlap diagnostics,
+  component qrel ranks, and latency summaries. It stores no answer/evidence text.
 - `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
   diagnostics, and RRF-demotion aggregation for the Phase 5 handoff.
 - `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
@@ -69,6 +73,12 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   indexing for the isolated ATV320 collections.
 - `scripts/evaluate_phase7_e2e.py`: resumable integration evaluator that validates the approved
   manifest and live frozen hash before it sends anything to a provider.
+- `scripts/calibrate_phase7_retrieval.py`: provider-free, calibration-only dense/sparse 20--60
+  union/RRF ablation; it never loads the cross-encoder or executes held-out queries.
+- `scripts/migrate_phase7_dataset_v2.py`: offline migration that revokes approval, adds answer facts,
+  and expands qrels only across same-document exact-content duplicates.
+- `scripts/apply_phase7_answer_facts.py`: explicit source-review mapping for 42 answerable rows plus
+  the documented calibration 011/012 qrel correction; it reads no retrieval/provider output.
 
 ## Dense-index contract
 

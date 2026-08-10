@@ -11,11 +11,18 @@ from app.phase7 import (
     Phase7DatasetItem,
     Phase7Error,
     Phase7Source,
+    build_exact_content_equivalence,
     dataset_sha256,
+    expand_exact_equivalent_qrels,
     file_sha256,
     read_phase7_dataset,
     validate_phase7_datasets,
     validate_source_records,
+)
+from scripts.apply_phase7_answer_facts import (
+    QREL_CORRECTIONS,
+    REFERENCE_MODE_QREL,
+    REVIEWED_ANSWER_FACTS,
 )
 
 
@@ -46,6 +53,9 @@ def _answerable(
         relevant_chunk_ids=[f"chunk-{index}"],
         expected_pages=[index + 1],
         expected_phrases=[f"phrase {index}"],
+        expected_answer_facts=[
+            {"id": f"fact-{index}", "aliases": [f"phrase {index}"]}
+        ],
         citation_required=True,
     )
 
@@ -107,7 +117,33 @@ def test_valid_phase7_sets_have_deterministic_hashes() -> None:
     assert result["calibration"]["answerable"] == 12
     assert result["test"]["unanswerable"] == 15
     assert result["test"]["by_scenario"]["vi_to_en"] >= 10
+    assert result["review"]["answerable_missing_answer_facts"] == 0
     assert dataset_sha256(test) == dataset_sha256(list(test))
+
+
+def test_approved_answerable_requires_reviewed_answer_facts() -> None:
+    draft = _answerable(1).model_copy(
+        update={"expected_answer_facts": [], "review_status": "needs_human_review"}
+    )
+    assert draft.expected_answer_facts == []
+    with pytest.raises(ValueError, match="approved answerable items require"):
+        Phase7DatasetItem.model_validate(
+            draft.model_dump() | {"review_status": "approved"}
+        )
+
+
+def test_answer_facts_reject_duplicate_ids_and_aliases() -> None:
+    item = _answerable(1).model_dump()
+    item["expected_answer_facts"] = [
+        {"id": "range", "aliases": ["a"]},
+        {"id": "range", "aliases": ["b"]},
+    ]
+    with pytest.raises(ValueError, match="unique IDs"):
+        Phase7DatasetItem.model_validate(item)
+
+    item["expected_answer_facts"] = [{"id": "range", "aliases": ["a", "a"]}]
+    with pytest.raises(ValueError, match="duplicate aliases"):
+        Phase7DatasetItem.model_validate(item)
 
 
 def test_phase7_rejects_missing_qrel_wrong_document_and_absent_phrase() -> None:
@@ -137,6 +173,26 @@ def test_phase7_rejects_overlap_and_invalid_unanswerable_qrels() -> None:
     invalid["relevant_chunk_ids"] = ["chunk"]
     with pytest.raises(ValueError, match="unanswerable items cannot contain qrels"):
         Phase7DatasetItem.model_validate(invalid)
+
+
+def test_qrel_closure_adds_only_same_document_exact_content() -> None:
+    item = _answerable(1)
+    chunks = [
+        _chunk("chunk-1", "installation", " Exact\ncontent ", 2),
+        _chunk("same", "installation", "exact content", 3),
+        _chunk("similar", "installation", "exact contents", 4),
+        _chunk("other-document", "programming", "exact content", 5),
+    ]
+    by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    expanded = expand_exact_equivalent_qrels(
+        item,
+        chunks_by_id=by_id,
+        equivalence=build_exact_content_equivalence(chunks),
+    )
+    assert expanded.relevant_chunk_ids == ["chunk-1", "same"]
+    assert expanded.expected_pages == [2, 3]
+    assert "similar" not in expanded.relevant_chunk_ids
+    assert "other-document" not in expanded.relevant_chunk_ids
 
 
 def test_dataset_loader_rejects_bad_json_and_duplicate_ids(tmp_path: Path) -> None:
@@ -179,3 +235,21 @@ def test_source_manifest_contract_requires_unique_installation_and_programming()
     validate_source_records([installation, programming])
     with pytest.raises(Phase7Error, match="duplicate filenames"):
         validate_source_records([installation, installation])
+
+
+def test_source_reviewed_answer_fact_mapping_is_complete_and_strict() -> None:
+    assert len(REVIEWED_ANSWER_FACTS) == 42
+    assert set(QREL_CORRECTIONS) == {
+        "phase7_calibration_011",
+        "phase7_calibration_012",
+    }
+    assert all(
+        correction["relevant_chunk_ids"] == [REFERENCE_MODE_QREL]
+        and correction["expected_pages"] == [45]
+        and correction["expected_phrases"] == ["actual reference value"]
+        for correction in QREL_CORRECTIONS.values()
+    )
+    for facts in REVIEWED_ANSWER_FACTS.values():
+        assert facts
+        assert len({fact["id"] for fact in facts}) == len(facts)
+        assert all(fact["aliases"] for fact in facts)

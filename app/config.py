@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     rerank_model: str = "jinaai/jina-reranker-v2-base-multilingual"
     rerank_cache_dir: str | None = None
     rerank_batch_size: int = Field(default=16, gt=0)
+    rerank_deduplicate_content: bool = False
     rerank_candidate_strategy: Literal["sparse", "hybrid", "union"] | None = None
     rerank_final_limit: int = Field(default=5, gt=0)
     retrieval_strategy: Literal["union", "sparse"] = "union"

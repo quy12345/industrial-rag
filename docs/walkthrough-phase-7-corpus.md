@@ -1,10 +1,10 @@
 # Phase 7 corpus walkthrough — ATV320 source audit and freeze
 
-Status: **in progress; no Phase 7 qrels or benchmark metrics are approved yet.**
+Status: **corpus and dataset v2 frozen; calibration v2 ready; held-out benchmark not run.**
 
-**Current checkpoint:** the corpus and qrels are frozen. The provider benchmark is pending a
-separate approval to send selected questions and retrieved manual excerpts to the configured
-external generation provider.
+**Current checkpoint:** the corpus is frozen. Dataset-v1 calibration exposed an answer-scoring
+contract problem; dataset v2 has now been source-reviewed, approved and hash-locked before another
+calibration. Held-out outputs remain unseen.
 
 Phase 7 replaces neither frozen development collection. It uses two separate Schneider Electric
 ATV320 manuals and separate collections:
@@ -85,14 +85,14 @@ collections have 2,753 points; protected legacy v1/v2 remain 99/99 points.
 `HybridChunker` emits a Transformers warning for a 4,244-token source segment against a 512-token
 limit. Preview completed and the frozen JSONL is valid, but this is retained as a chunking limitation.
 
-`scripts/evaluate_phase7_e2e.py` validates approved dataset hashes and live Qdrant point-count/hash
+`scripts/evaluate_phase7_e2e.py` validates approved dataset-v2 hashes and live Qdrant point-count/hash
 before retrieval. Its resumable artifact stores only IDs, ranks, aggregate metrics, timings, token
 counts, and citation outcomes; it excludes raw questions, answers, evidence, prompts, and provider
 responses.
 
 ```powershell
-python scripts/evaluate_phase7_e2e.py --dataset calibration
-python scripts/evaluate_phase7_e2e.py --dataset test
+python -m scripts.evaluate_phase7_e2e --dataset calibration
+python -m scripts.evaluate_phase7_e2e --dataset test
 ```
 
 Run calibration first. The held-out test must not be used to tune prompts, retrieval settings, or

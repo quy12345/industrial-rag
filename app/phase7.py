@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from app.content_identity import evidence_content_fingerprint
 from app.evaluation import chunk_set_metadata, phrase_matches
 from app.models import DocumentChunk
 
@@ -52,6 +53,33 @@ PhraseMatchMode = Literal["all", "any"]
 
 class Phase7Error(ValueError):
     """Raised when Phase 7 frozen inputs do not satisfy their contract."""
+
+
+class ExpectedAnswerFact(BaseModel):
+    """One required answer fact with language-appropriate accepted aliases."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    aliases: list[str] = Field(min_length=1)
+
+    @field_validator("id")
+    @classmethod
+    def non_empty_fact_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be empty")
+        return normalized
+
+    @field_validator("aliases")
+    @classmethod
+    def normalized_unique_aliases(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("must not contain blank aliases")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("must not contain duplicate aliases")
+        return normalized
 
 
 class Phase7Source(BaseModel):
@@ -128,6 +156,7 @@ class Phase7DatasetItem(BaseModel):
     expected_pages: list[int]
     expected_phrases: list[str]
     phrase_match_mode: PhraseMatchMode = "all"
+    expected_answer_facts: list[ExpectedAnswerFact] = Field(default_factory=list)
     citation_required: bool
     annotation_notes: str | None = None
     unanswerable_reason: str | None = None
@@ -172,6 +201,11 @@ class Phase7DatasetItem(BaseModel):
                 raise ValueError("answerable items require pages and citations")
             if self.unanswerable_reason is not None:
                 raise ValueError("answerable items cannot have unanswerable_reason")
+            fact_ids = [fact.id for fact in self.expected_answer_facts]
+            if len(set(fact_ids)) != len(fact_ids):
+                raise ValueError("expected_answer_facts must have unique IDs")
+            if self.review_status == "approved" and not self.expected_answer_facts:
+                raise ValueError("approved answerable items require expected_answer_facts")
         else:
             if any(
                 (
@@ -179,6 +213,7 @@ class Phase7DatasetItem(BaseModel):
                     self.relevant_chunk_ids,
                     self.expected_pages,
                     self.expected_phrases,
+                    self.expected_answer_facts,
                 )
             ):
                 raise ValueError("unanswerable items cannot contain qrels or diagnostics")
@@ -273,6 +308,18 @@ def validate_phase7_datasets(
         "calibration": _dataset_summary(calibration),
         "test": _dataset_summary(test),
         "corpus": chunk_set_metadata(chunks),
+        "review": {
+            "approved": sum(
+                item.review_status == "approved" for item in [*calibration, *test]
+            ),
+            "needs_human_review": sum(
+                item.review_status == "needs_human_review" for item in [*calibration, *test]
+            ),
+            "answerable_missing_answer_facts": sum(
+                item.answerable and not item.expected_answer_facts
+                for item in [*calibration, *test]
+            ),
+        },
     }
 
 
@@ -286,6 +333,52 @@ def dataset_sha256(items: Sequence[Phase7DatasetItem]) -> str:
         for item in items
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def build_exact_content_equivalence(
+    chunks: Sequence[DocumentChunk],
+) -> dict[str, tuple[str, ...]]:
+    """Map each chunk ID to same-document chunks with exact-normalized text."""
+
+    groups: dict[tuple[str, str], list[str]] = {}
+    for chunk in chunks:
+        key = (chunk.document_id, evidence_content_fingerprint(chunk.text))
+        groups.setdefault(key, []).append(chunk.chunk_id)
+    equivalence: dict[str, tuple[str, ...]] = {}
+    for chunk_ids in groups.values():
+        members = tuple(sorted(chunk_ids))
+        for chunk_id in members:
+            equivalence[chunk_id] = members
+    return equivalence
+
+
+def expand_exact_equivalent_qrels(
+    item: Phase7DatasetItem,
+    *,
+    chunks_by_id: dict[str, DocumentChunk],
+    equivalence: dict[str, tuple[str, ...]],
+) -> Phase7DatasetItem:
+    """Add only same-document, exact-content equivalents to an item's qrels."""
+
+    if not item.answerable:
+        return item
+    expanded_ids = list(item.relevant_chunk_ids)
+    seen = set(expanded_ids)
+    for chunk_id in item.relevant_chunk_ids:
+        for equivalent_id in equivalence.get(chunk_id, (chunk_id,)):
+            if equivalent_id not in seen:
+                expanded_ids.append(equivalent_id)
+                seen.add(equivalent_id)
+    pages = sorted(
+        {
+            page
+            for chunk_id in expanded_ids
+            for page in chunks_by_id[chunk_id].page_numbers
+        }
+    )
+    return item.model_copy(
+        update={"relevant_chunk_ids": expanded_ids, "expected_pages": pages}
+    )
 
 
 def write_json_atomic(path: Path, payload: Any) -> None:

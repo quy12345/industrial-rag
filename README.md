@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 6 — Query API, Grounded Generation, Citations and Abstention**
+**Phase 7 — industrial-corpus evaluation remediation in progress**
 
 Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
 `GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
@@ -10,11 +10,11 @@ multilingual cross-encoder reranking, an evidence gate, OpenAI/Gemini structured
 referential citation validation, and deterministic citations built from Qdrant payloads. Sparse
 top-20 without reranking remains the explicit operational rollback.
 
-An interactive Gemini request has returned an answer through the full API path. The sanitized,
-bounded provider smoke artifact is still not recorded, and the OpenAI path is not run. This is not
-called production-ready: semantic citation evaluation, unanswerable calibration, a real industrial
-corpus, and production hardening remain Phase 7 work. Phase 5.1 reranker optimization remains
-deferred.
+An interactive Gemini request has returned an answer through the full API path. Phase 7 added a
+separate two-manual ATV320 corpus and ran calibration once. That run exposed an evaluation-contract
+bug and low candidate-qrel recall, so the held-out benchmark remains unrun and the system is not
+called production-ready. Dataset v2 now separates reviewed answer facts from evidence phrases and
+adds exact-content qrel closure; it requires a new human review before any provider benchmark.
 
 The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, FastEmbed `0.8.0`,
 and Qdrant server `v1.18.3`. The historic dense artifact that records client `1.18.0` is retained
@@ -53,24 +53,63 @@ Phase 7 keeps the legacy 99-chunk development collections untouched. The new ATV
 points with stable-ID fingerprint
 `2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
 
-The approved calibration set has 12 answerable and 8 unanswerable cases. The separate held-out set
-has 30 answerable and 15 unanswerable cases. Verify annotations locally without models or Qdrant:
+The calibration set has 12 answerable and 8 unanswerable cases. The separate held-out set has 30
+answerable and 15 unanswerable cases. Dataset v2 is source-reviewed and frozen: all 42 answerable
+rows have language-appropriate `expected_answer_facts`, all 65 rows are approved, and the held-out
+outputs remain unseen. Verify annotations locally without models or Qdrant:
 
 ```powershell
-python scripts/validate_phase7_dataset.py
+python -m scripts.validate_phase7_dataset
 ```
 
-The real end-to-end evaluator validates dataset hashes and live Qdrant hashes before startup, then
-writes a sanitized resumable artifact containing only IDs/ranks/metrics:
+The reproducible freeze command is shown below. It has already completed for the current files; the
+historical v1 approval token is intentionally rejected:
 
 ```powershell
-python scripts/evaluate_phase7_e2e.py --dataset calibration
-python scripts/evaluate_phase7_e2e.py --dataset test
+python -m scripts.freeze_phase7_dataset `
+  --approval-token "APPROVE PHASE 7 DATASET V2"
+```
+
+The real end-to-end evaluator refuses draft datasets. After review and an explicit v2 freeze, it
+validates dataset hashes and live Qdrant hashes before startup, then writes a sanitized resumable
+artifact containing only IDs/ranks/metrics:
+
+```powershell
+python -m scripts.evaluate_phase7_e2e --dataset calibration
+python -m scripts.evaluate_phase7_e2e --dataset test
 ```
 
 These commands send the selected question and retrieved manual evidence to the configured generation
 provider. They require separate corpus-owner approval for that external data transfer. Run calibration
 first and do not tune using the held-out test set.
+
+The historical dataset-v1 Gemini calibration on 2026-08-09 completed all 20 records but failed its
+quality gate: Hit@5 `0.583`, MRR@5 `0.444`, direct-evidence citation rate `0.500`, and total p95
+`11.585 s`. Its reported phrase accuracy `0.417` is retained only as historical evidence: that metric
+incorrectly compared Vietnamese answers with English evidence wording. It must not be compared with
+the dataset-v2 answer-fact metric. The held-out benchmark has not been run; see
+`docs/walkthrough-phase-7.md`.
+
+The current evaluator writes `phase-7-<split>-e2e-v2-diagnostics.json` and a separate diagnostics
+checkpoint, so rerunning it cannot overwrite either dataset-v1 or initial dataset-v2 evidence.
+
+Frozen dataset-v2 hashes are calibration
+`7ae670a705dcda2ff63f7e16f67bd8c308b5f58079b4a4b3066dd0f15d9f3999` and held-out
+`68c9c52e745a7616a869a2f55024964501dfb0cb537bbe6ff91dac5fbcae3c54`. Calibration questions
+011/012 were corrected from an unrelated page-355 qrel to direct evidence on page 45 during source
+review. No retrieval result or provider output was used for that correction.
+
+The measured dataset-v2 diagnostics calibration completed all 20 rows but still fails the strict
+answer-fact gate: candidate recall/Hit@5 `0.667`, MRR@5 `0.583`, strict answer-fact accuracy `0.500`,
+direct-evidence citation rate `0.667`, abstention precision/recall `1.000/1.000`, and total p95
+`10.043 s`. Order-insensitive all-alias-token coverage is `0.667` and is diagnostic only, never a
+release gate. A provider-free candidate ablation found `union dense60/sparse40` recall `0.833` but
+about 81 candidates/query versus 31 for the baseline; the smaller RRF winner still needs about 60.
+Because both continue to miss calibration 004/010 and would worsen reranker latency, runtime remains
+dense20/sparse20. Held-out remains unrun.
+
+Current offline validation: Python `3.11.15`, Ruff PASS, pytest `189 passed, 1 warning`; Docker
+Compose config and `git diff --check` PASS. Dataset-v2 calibration ran; held-out did not.
 
 ## Quickstart: khởi động, test, chạy demo và dừng
 

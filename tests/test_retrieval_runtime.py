@@ -63,6 +63,7 @@ def test_union_adapter_preserves_full_order_and_stage_timings() -> None:
                     "dense_retrieval": 2.0,
                     "sparse_retrieval": 1.0,
                     "union_preparation": 0.5,
+                    "content_deduplication": 0.25,
                     "rerank": 4.0,
                     "total": 7.5,
                 },
@@ -70,7 +71,7 @@ def test_union_adapter_preserves_full_order_and_stage_timings() -> None:
 
     result = UnionRerankRetriever(Pipeline()).retrieve("q", document_id="manual-a")
     assert [item.chunk_id for item in result.candidates] == ["b", "a"]
-    assert result.retrieval_ms == 3.5
+    assert result.retrieval_ms == 3.75
     assert result.rerank_ms == 4.0
 
 

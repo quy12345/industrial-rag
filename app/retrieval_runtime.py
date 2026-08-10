@@ -109,7 +109,13 @@ class UnionRerankRetriever:
         retrieval_ms = sum(
             value
             for name, value in execution.stage_latency_ms.items()
-            if name in {"dense_retrieval", "sparse_retrieval", "union_preparation"}
+            if name
+            in {
+                "dense_retrieval",
+                "sparse_retrieval",
+                "content_deduplication",
+                "union_preparation",
+            }
         )
         return QueryRetrievalResult(
             candidates=execution.candidates_after_rerank,
@@ -268,6 +274,7 @@ def build_union_rerank_runtime(
             sparse_candidate_limit=settings.sparse_candidate_limit,
             rrf_k=settings.rrf_k,
             rerank_batch_size=settings.rerank_batch_size,
+            deduplicate_content=settings.rerank_deduplicate_content,
         )
         return pipeline, {
             "collections": {
@@ -280,6 +287,7 @@ def build_union_rerank_runtime(
             "bm25_avg_len": contract.bm25_avg_len,
             "rrf_k": settings.rrf_k,
             "rerank_model": settings.rerank_model,
+            "deduplicate_content": settings.rerank_deduplicate_content,
         }
     except RetrievalUnavailableError:
         raise

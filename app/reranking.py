@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Any, Literal, Protocol
 
 from app.candidate_audit import dense_results_to_candidates, union_dense_sparse_candidates
+from app.content_identity import evidence_content_fingerprint
 from app.evaluation import (
     EvaluationCase,
     EvaluationError,
@@ -129,6 +130,7 @@ class RerankPipeline:
         sparse_candidate_limit: int = 20,
         rrf_k: int = 60,
         rerank_batch_size: int = 16,
+        deduplicate_content: bool = False,
         dense_search_fn: Callable[..., list[RetrievedChunk]] = dense_search,
         sparse_search_fn: Callable[..., list[RetrievalCandidate]] = sparse_search,
     ) -> None:
@@ -144,6 +146,7 @@ class RerankPipeline:
         self.sparse_candidate_limit = sparse_candidate_limit
         self.rrf_k = rrf_k
         self.rerank_batch_size = rerank_batch_size
+        self.deduplicate_content = deduplicate_content
         self.dense_search_fn = dense_search_fn
         self.sparse_search_fn = sparse_search_fn
 
@@ -206,6 +209,12 @@ class RerankPipeline:
         stages["fusion" if strategy == "hybrid" else "union_preparation"] = (
             perf_counter() - preparation_started
         ) * 1000
+        if self.deduplicate_content:
+            deduplication_started = perf_counter()
+            candidates = deduplicate_candidates_by_content(candidates)
+            stages["content_deduplication"] = (
+                perf_counter() - deduplication_started
+            ) * 1000
         if strategy == "sparse":
             stages.pop("union_preparation")
         return CandidatePool(candidates, stages)
@@ -262,6 +271,60 @@ def build_candidate_pool(
     if strategy == "union":
         return union_dense_sparse_candidates(dense_candidates, sparse_candidates)
     raise RerankingError(f"Unsupported rerank candidate strategy: {strategy}")
+
+
+def deduplicate_candidates_by_content(
+    candidates: Sequence[RetrievalCandidate],
+) -> list[RetrievalCandidate]:
+    """Collapse exact-normalized text duplicates while preserving provenance IDs."""
+
+    groups: dict[tuple[str, str], list[RetrievalCandidate]] = {}
+    order: list[tuple[str, str]] = []
+    for candidate in candidates:
+        fingerprint = evidence_content_fingerprint(candidate.text)
+        key = (candidate.document_id, fingerprint)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(candidate)
+
+    deduplicated: list[RetrievalCandidate] = []
+    for document_id, fingerprint in order:
+        equivalents = groups[(document_id, fingerprint)]
+        representative = equivalents[0]
+        equivalent_ids = sorted({candidate.chunk_id for candidate in equivalents})
+        metadata = dict(representative.metadata)
+        metadata.update(
+            {
+                "content_fingerprint": fingerprint,
+                "equivalent_chunk_ids": equivalent_ids,
+                "equivalent_chunk_count": len(equivalent_ids),
+            }
+        )
+        deduplicated.append(
+            representative.model_copy(
+                update={
+                    "metadata": metadata,
+                    "dense_rank": _minimum_optional(
+                        candidate.dense_rank for candidate in equivalents
+                    ),
+                    "dense_score": _maximum_optional(
+                        candidate.dense_score for candidate in equivalents
+                    ),
+                    "sparse_rank": _minimum_optional(
+                        candidate.sparse_rank for candidate in equivalents
+                    ),
+                    "sparse_score": _maximum_optional(
+                        candidate.sparse_score for candidate in equivalents
+                    ),
+                    "rrf_rank": _minimum_optional(candidate.rrf_rank for candidate in equivalents),
+                    "rrf_score": _maximum_optional(
+                        candidate.rrf_score for candidate in equivalents
+                    ),
+                }
+            )
+        )
+    return deduplicated
 
 
 def rerank_candidates(
@@ -534,3 +597,13 @@ def _mrr(ranks: Sequence[int | None], cutoff: int) -> float:
     return sum(1 / rank if rank is not None and rank <= cutoff else 0.0 for rank in ranks) / len(
         ranks
     )
+
+
+def _minimum_optional(values: Iterable[int | None]) -> int | None:
+    present = [value for value in values if value is not None]
+    return min(present) if present else None
+
+
+def _maximum_optional(values: Iterable[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    return max(present) if present else None

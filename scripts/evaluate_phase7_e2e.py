@@ -15,7 +15,11 @@ from typing import Any
 
 from app.config import Settings
 from app.evaluation import chunk_set_metadata, load_frozen_chunks
-from app.evaluation_e2e import aggregate_phase7_records, score_phase7_execution
+from app.evaluation_e2e import (
+    aggregate_phase7_records,
+    evaluate_phase7_quality_gates,
+    score_phase7_execution,
+)
 from app.generation import LangChainOpenAIGenerator
 from app.phase7 import (
     dataset_sha256,
@@ -70,6 +74,7 @@ def main() -> int:
         "rerank_enabled": settings.rerank_enabled,
         "generation_provider": settings.generation_provider,
         "generation_model": settings.generation_model,
+        "deduplicate_exact_content": settings.rerank_deduplicate_content,
     }
     records = _load_checkpoint(args.checkpoint, identity)
     completed_ids = {record["id"] for record in records}
@@ -91,12 +96,14 @@ def main() -> int:
 
     if len(records) != len(selected):
         raise RuntimeError("Checkpoint result count does not match the selected dataset.")
+    overall = aggregate_phase7_records(records)
     output = {
-        "schema_version": 1,
+        "schema_version": 3,
         "timestamp": datetime.now(UTC).isoformat(),
         "run_identity": identity,
         "dataset_validation": validation,
-        "overall": aggregate_phase7_records(records),
+        "overall": overall,
+        "quality_gates": evaluate_phase7_quality_gates(overall),
         "per_query": records,
         "sanitization": {
             "raw_question": "excluded",
@@ -106,8 +113,13 @@ def main() -> int:
         },
     }
     write_json_atomic(args.output, output)
-    print(f"Phase 7 {args.dataset} E2E evaluation PASS: {args.output}")
-    return 0
+    quality_passed = bool(output["quality_gates"]["overall_pass"])
+    quality_status = "PASS" if quality_passed else "FAIL"
+    print(
+        f"Phase 7 {args.dataset} E2E evaluation completed; "
+        f"quality gates {quality_status}: {args.output}"
+    )
+    return 0 if quality_passed else 2
 
 
 def _parse_args() -> argparse.Namespace:
@@ -123,15 +135,19 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--top-k", type=int, default=5, choices=range(1, 11))
     parser.add_argument("--max-queries", type=int, default=None)
-    parser.add_argument(
-        "--checkpoint", type=Path, default=Path("artifacts/metrics/phase-7-e2e-checkpoint.jsonl")
-    )
+    parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
     if args.max_queries is not None and args.max_queries <= 0:
         parser.error("--max-queries must be positive")
     if args.output is None:
-        args.output = Path(f"artifacts/metrics/phase-7-{args.dataset}-e2e.json")
+        args.output = Path(
+            f"artifacts/metrics/phase-7-{args.dataset}-e2e-v2-diagnostics.json"
+        )
+    if args.checkpoint is None:
+        args.checkpoint = Path(
+            f"artifacts/metrics/phase-7-{args.dataset}-e2e-v2-diagnostics-checkpoint.jsonl"
+        )
     return args
 
 
@@ -145,6 +161,7 @@ def _phase7_settings(settings: Settings) -> Settings:
             "bm25_avg_len": PHASE7_RETRIEVAL_CONTRACT.bm25_avg_len,
             "retrieval_strategy": "union",
             "rerank_enabled": True,
+            "rerank_deduplicate_content": True,
         }
     )
 

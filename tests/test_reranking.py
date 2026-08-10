@@ -19,6 +19,7 @@ from app.reranking import (
     build_candidate_pool,
     build_candidate_text,
     classify_rerank_failure,
+    deduplicate_candidates_by_content,
     evaluate_reranked_cases,
     rerank_candidates,
 )
@@ -102,6 +103,7 @@ def test_settings_and_candidate_model_are_backward_compatible() -> None:
     assert settings.rerank_model == "jinaai/jina-reranker-v2-base-multilingual"
     assert settings.rerank_candidate_strategy is None
     assert settings.rerank_batch_size == 16
+    assert settings.rerank_deduplicate_content is False
     assert _candidate("a", sparse_rank=1).rerank_score is None
     with pytest.raises(ValidationError):
         Settings(rerank_batch_size=0)
@@ -220,6 +222,49 @@ def test_sparse_hybrid_and_union_pool_construction_preserve_signals() -> None:
     assert {item.chunk_id for item in union} == {"both", "dense-only", "sparse-only"}
     merged = next(item for item in union if item.chunk_id == "both")
     assert merged.dense_rank == 1 and merged.sparse_rank == 1
+
+
+def test_content_dedup_collapses_only_exact_normalized_text_and_preserves_signals() -> None:
+    first = _candidate("a", dense_rank=3).model_copy(update={"text": "  SAME\ntext  "})
+    second = _candidate("b", sparse_rank=2).model_copy(update={"text": "same text"})
+    similar = _candidate("c", sparse_rank=1).model_copy(update={"text": "same texts"})
+    other_document = _candidate("d", sparse_rank=4, document_id="manual-b").model_copy(
+        update={"text": "same text"}
+    )
+
+    result = deduplicate_candidates_by_content([first, second, similar, other_document])
+
+    assert [item.chunk_id for item in result] == ["a", "c", "d"]
+    assert result[0].dense_rank == 3
+    assert result[0].sparse_rank == 2
+    assert result[0].metadata["equivalent_chunk_ids"] == ["a", "b"]
+    assert result[0].metadata["equivalent_chunk_count"] == 2
+    assert first.metadata == {"marker": "a"}
+
+
+def test_pipeline_content_dedup_is_opt_in() -> None:
+    def fake_dense(*args, **kwargs):
+        return [_dense("dense").model_copy(update={"text": "same"})]
+
+    def fake_sparse(*args, **kwargs):
+        return [_candidate("sparse", sparse_rank=1).model_copy(update={"text": " SAME "})]
+
+    pipeline = RerankPipeline(
+        client=object(),
+        dense_embedding_model=object(),
+        sparse_embedding_model=object(),
+        cross_encoder=FakeCrossEncoder(),
+        dense_collection="v1",
+        hybrid_collection="v2",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        deduplicate_content=True,
+        dense_search_fn=fake_dense,
+        sparse_search_fn=fake_sparse,
+    )
+    execution = pipeline.search("q", strategy="union")
+    assert len(execution.candidates_before_rerank) == 1
+    assert "content_deduplication" in execution.stage_latency_ms
 
 
 def test_pipeline_preserves_document_filter_and_uses_correct_dense_collection() -> None:

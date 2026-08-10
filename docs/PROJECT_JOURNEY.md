@@ -30,10 +30,20 @@ Phase 7 does not overwrite the 99-chunk development corpus. It indexes 2,753 fro
 two ATV320 manuals in `industrial_manual_phase7_dense_v1` and
 `industrial_manual_phase7_hybrid_v1`; their stable-ID hash is
 `2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
-The 20-row calibration and 45-row held-out sets are approved and hash-locked. The E2E evaluator
-scores qrel-only retrieval, phrase presence, citations, abstention, and latency without persisting
-raw provider content. A corpus owner must separately authorize provider data egress before the real
-benchmark runs.
+The first 20-row calibration exposed two evaluation lessons before the 45-row held-out set was run:
+English evidence phrases cannot score Vietnamese generated answers, and one logical evidence block
+can have multiple exact duplicate chunk IDs. Dataset v2 therefore separates reviewed answer facts
+from qrel-validation phrases and expands only exact-content equivalents. All 42 answerable rows were
+then source-reviewed, all 65 records approved, and the final v2 hashes frozen. The held-out outputs
+remain unseen.
+
+Dataset-v2 calibration improved direct retrieval over v1 (Hit@5 0.667 versus
+0.583; MRR@5 0.583 versus 0.444) but still failed the strict answer-fact gate at
+0.500. Sanitized token-overlap diagnostics identified two formatting mismatches;
+four queries remained candidate misses. A provider-free dense/sparse 20--60
+ablation rejected brute-force wider pools because the best 0.833 recall still
+missed two queries while nearly doubling reranker inputs. The 20/20 runtime was
+therefore preserved and held-out remained sealed.
 
 ## What changed in the architecture
 

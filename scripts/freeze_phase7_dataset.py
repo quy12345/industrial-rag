@@ -19,6 +19,8 @@ from app.phase7 import (
     write_jsonl_atomic,
 )
 
+APPROVAL_TOKEN = "APPROVE PHASE 7 DATASET V2"
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -30,7 +32,14 @@ def main() -> int:
     parser.add_argument(
         "--output", type=Path, default=Path("artifacts/metrics/phase-7-evaluation-manifest.json")
     )
+    parser.add_argument(
+        "--approval-token",
+        required=True,
+        help=f"Required exact human approval phrase: {APPROVAL_TOKEN}",
+    )
     args = parser.parse_args()
+    if args.approval_token != APPROVAL_TOKEN:
+        parser.error(f"Approval token must exactly equal: {APPROVAL_TOKEN}")
     try:
         calibration = read_phase7_dataset(args.calibration)
         test = read_phase7_dataset(args.test)
@@ -38,6 +47,16 @@ def main() -> int:
         validate_phase7_datasets(calibration, test, chunks)
     except Phase7Error as exc:
         parser.error(str(exc))
+    missing_facts = [
+        item.id
+        for item in [*calibration, *test]
+        if item.answerable and not item.expected_answer_facts
+    ]
+    if missing_facts:
+        parser.error(
+            "Cannot approve Phase 7 dataset v2: answer facts still require human review for "
+            + ", ".join(missing_facts)
+        )
     approved_calibration = [
         item.model_dump() | {"review_status": "approved"} for item in calibration
     ]
@@ -52,7 +71,7 @@ def main() -> int:
     ):
         parser.error("Dataset approval update did not persist.")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now(UTC).isoformat(),
         "git_commit": _git_commit(),
         "corpus": chunk_set_metadata(chunks),
@@ -64,8 +83,10 @@ def main() -> int:
             "dense_candidate_limit": 20,
             "sparse_candidate_limit": 20,
             "reranker": "jinaai/jina-reranker-v2-base-multilingual",
+            "deduplicate_exact_content": True,
             "final_top_k": 5,
         },
+        "answer_scoring": "reviewed expected_answer_facts aliases",
     }
     write_json_atomic(args.output, manifest)
     print(f"Phase 7 dataset frozen: {args.output}")

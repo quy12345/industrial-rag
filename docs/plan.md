@@ -59,7 +59,7 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 5 | Implementation complete; quality PARTIAL | Ba multilingual reranking strategies đã benchmark; ranking gates và critical 3/3 PASS, CPU latency FAIL, không đặt runtime default |
 | Phase 5.1 | Deferred | Reranker optimization/quantization/license replacement không nằm trong Phase 6 |
 | Phase 6 | Implementation/offline/Docker correctness complete; real provider NOT RUN | Query API, evidence gate, Responses structured generation, citations, abstention, sparse rollback |
-| Phase 7 | Chưa bắt đầu | Held-out end-to-end evaluation, real industrial corpus và production hardening |
+| Phase 7 | Đang thực hiện | Corpus/index hoàn tất; dataset-v2 remediation đang chờ review trước held-out |
 
 Thứ tự triển khai đã chốt:
 
@@ -668,32 +668,49 @@ structured-output details, validation evidence, and rollback.
 
 ## Phase 7 — End-to-end evaluation, real industrial corpus and production hardening
 
-### Current checkpoint (2026-08-07)
+### Current checkpoint (2026-08-09)
 
 - Separate ATV320 Installation/Programming corpus is frozen with 2,753 chunks and stable-ID hash
   `2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
 - Protected Phase 3--6 v1/v2 collections remain 99/99 points. Phase 7 uses only
   `industrial_manual_phase7_dense_v1` and `industrial_manual_phase7_hybrid_v1`.
-- Dataset approval is complete: calibration 12 answerable + 8 unanswerable; held-out test 30
-  answerable + 15 unanswerable. Hashes are recorded in the ignored evaluation manifest.
+- Dataset v1 was approved and used only for calibration. Diagnosis found that generated-answer
+  scoring reused English evidence phrases and that qrels omitted some exact duplicate chunks.
+- Dataset v2 is source-reviewed and frozen: 65/65 rows are approved and all 42 answerable rows have
+  language-aware `expected_answer_facts`. Exact-content closure added 2 calibration and 14 held-out
+  qrels without broad phrase matching. Manual review also corrected calibration 011/012 from an
+  unrelated page-355 qrel to direct reference-mode evidence on page 45.
 - Implemented: multi-document frozen-runtime validation, sanitized resumable E2E scorer, Qdrant
   readiness, request correlation IDs, bounded Qdrant timeout, optional bearer auth, and API Docker
   liveness healthcheck.
-- Python 3.11 validation: Ruff `PASS`; pytest `175 passed, 1 warning`.
-- Remaining gate: explicit corpus-owner approval to send selected questions and retrieved manual
-  excerpts to Gemini, followed by calibration before the held-out benchmark.
+- Current Python 3.11.15 validation: Ruff `PASS`; pytest `189 passed, 1 warning`; Compose config and
+  `git diff --check` PASS.
+- Gemini data egress was approved. Dataset-v2 diagnostics calibration completed all 20 rows:
+  candidate recall/Hit@5 0.667, MRR@5 0.583, strict answer-fact accuracy 0.500,
+  direct-evidence citation rate 0.667, abstention precision/recall 1.000/1.000, total p95 10.043 s.
+  The old dataset-v1 phrase score 0.417 remains historical and is not comparable.
+- Sanitized diagnostics now report fact IDs, exact match, token-overlap ratios, missing fact IDs,
+  qrel dense/sparse/RRF/rerank ranks and unexpected citation document IDs without answer/evidence.
+- Provider-free calibration ablation tested union/RRF pools from dense/sparse 20--60. Candidate-only
+  recall reached 0.833, but required about 60--81 candidates/query and still missed calibration
+  004/010. Runtime stays union dense20/sparse20 to avoid worsening the dominant reranker latency.
+- Phase 7 union runtime now supports same-document exact-normalized content deduplication before
+  reranking. The setting defaults off globally and is enabled explicitly only by the Phase 7 E2E CLI,
+  preserving legacy Phase 5/6 behavior.
+- Held-out evaluation remains unrun because dataset-v2 calibration gates still fail.
 
 ### Evaluation dataset
 
 - Tối thiểu 20 answerable và 10 unanswerable questions.
 - Bao gồm tiếng Việt và tiếng Anh.
-- Answerable item có relevant chunk IDs, expected phrases và citation expectations.
+- Answerable item có relevant chunk IDs, evidence-validation phrases, reviewed answer facts theo
+  ngôn ngữ câu hỏi và citation expectations.
 - Unanswerable item phải thực sự không có evidence trong indexed manual.
 
 ### Metrics
 
 - Retrieval Hit@k, MRR và candidate recall.
-- Answer key-phrase accuracy.
+- Reviewed answer-fact accuracy; evidence phrases không dùng để chấm generated answer.
 - Citation validity và citation coverage.
 - Abstention precision và recall.
 - Dense, sparse, fusion, rerank, LLM và total latency.
@@ -703,7 +720,7 @@ structured-output details, validation evidence, and rollback.
 
 ```text
 Valid citation IDs: 100%
-Answer key-phrase accuracy: >= 0.85
+Reviewed answer-fact accuracy: >= 0.85
 Abstention precision: >= 0.90
 Abstention recall: >= 0.80
 Critical direct-evidence top-5: 3/3
