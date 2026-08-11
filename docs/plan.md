@@ -668,7 +668,7 @@ structured-output details, validation evidence, and rollback.
 
 ## Phase 7 — End-to-end evaluation, real industrial corpus and production hardening
 
-### Current checkpoint (2026-08-09)
+### Historical checkpoint (2026-08-09)
 
 - Separate ATV320 Installation/Programming corpus is frozen with 2,753 chunks and stable-ID hash
   `2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
@@ -721,6 +721,48 @@ structured-output details, validation evidence, and rollback.
 - Fresh provider E2E is pending explicit data-egress approval. Held-out remains unrun because
   deterministic answer/citation/document gates have not all been demonstrated on the frozen
   Phase 7.4 runtime.
+
+### Calibration-closure checkpoint (2026-08-11)
+
+Status: `PARTIAL`; held-out: `BLOCKED_GOVERNANCE`.
+
+- Calibration mode is sealed to `calibration-v3.jsonl`. It validates one split and obtains only the
+  held-out SHA-256 from `phase-7-evaluation-manifest-v3.json`; it does not open `test.jsonl`.
+- The E2E run identity now includes prompt/evaluator/runtime hashes, provider/model/base-host,
+  reasoning effort, explicit Gemini temperature `0`, token/timeout/retry/store settings, Python and
+  library versions, top-k, and correction count. A changed field invalidates the checkpoint.
+- Typed fact evaluator v2 adds narrow, ASCII-only regular inflection for text facts and span-aware
+  negation. It fixes generic `block`/`blocked` and `contact`/`contacts` cases without applying
+  stemming/prefix rules to identifiers or numeric-unit facts. Strict phrase and token coverage remain
+  diagnostics only.
+- `QueryExecution` now distinguishes the full post-rerank ranking from actual generation evidence.
+  Exact normalized content duplicated across different documents is represented once before top-k;
+  the query-derived document role chooses provenance, and equivalent chunk/document IDs remain in
+  diagnostics. Same-document duplicates and near-duplicates are not collapsed.
+- Snapshot v2 was executed against real Qdrant/Jina with zero provider calls and zero held-out reads.
+  The finite CE-rank/RRF-rank grid preserves candidate recall `12/12`, Hit@5 `11/12`, MRR@5 `0.875`,
+  EN `6/6`, VI `5/6`, and wrong-document top-1 `0`. The active offset-20 profile has
+  wrong-document actual evidence `7/60 = 0.117` after cross-document dedup.
+- No grid profile moves calibration 010 from full rank 6 into actual evidence top 5. The single
+  pre-registered `list_completeness_v1` fallback also fails because rank 5 has the same query-derived
+  `MODE` identifier and a larger generic list-pair count. It is not activated; no query-specific or
+  qrel-aware rule is added.
+- Historical calibration 005 cannot be classified from v4 because raw answers were intentionally
+  omitted. `diagnose_phase7_calibration_005.py` implements a three-attempt, one-evidence diagnostic,
+  but it requires the separate token `APPROVE PHASE 7 CALIBRATION 005 DIAGNOSTIC EGRESS` and was not
+  run in this implementation.
+- Three-run worst-case aggregation is implemented but not run. Full calibration requires a new token
+  `APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS`; each run must independently pass at least 11/12
+  facts and all citation/abstention gates.
+- Historical tracked documentation exposed held-out row content and the old CLI parsed both splits.
+  Current documentation is metadata-only and the CLI refuses held-out execution, but history cannot
+  be made unseen. A new access-controlled final set or an explicit reporting downgrade is required.
+- No qrel, chunk, model, Qdrant collection, volume, public Query API, Docker image, or embedding
+  behavior was changed. No provider call, held-out run, re-index, build, or prune occurred.
+- Final canonical ingestion-container Python 3.11.15 validation: Ruff PASS; pytest
+  `279 passed, 1 warning`; `git diff --check` and `docker compose config --quiet` PASS. The local
+  `.venv` is Python 3.13.5 and also passes, but was not used as canonical or overwritten. The warning
+  is the known Starlette/TestClient deprecation.
 
 ### Evaluation dataset
 

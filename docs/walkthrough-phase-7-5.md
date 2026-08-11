@@ -1,9 +1,14 @@
 # Phase 7.4.1--7.5 walkthrough: contamination closure and CPU reranking
 
+> Historical checkpoint: the 2026-08-11 calibration closure supersedes the readiness conclusion in
+> this file. Retrieval/CPU measurements below remain valid historical evidence, but the current
+> overall status is `PARTIAL` and held-out is `BLOCKED_GOVERNANCE`. See
+> `walkthrough-phase-7-calibration-closure.md`.
+
 ## Outcome
 
-The Phase 7 calibration runtime now passes its provider-free retrieval and contamination gates while
-the held-out dataset remains sealed. Nothing in this work changes the 2,753 frozen chunks, qrels,
+This historical checkpoint passed its then-current provider-free retrieval and contamination gates.
+Nothing in this work changes the 2,753 frozen chunks, qrels,
 MiniLM embedding model, Jina reranker model, Qdrant collections, or public query API.
 
 | Metric | Before | Selected runtime |

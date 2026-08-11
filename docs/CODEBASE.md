@@ -17,6 +17,7 @@ Query -> dense top-60 + expanded sparse top-40 after vi_technical_glossary_v1
       -> query-only role inference -> weighted RRF k=40 + dense@5/sparse@24 reserves
       -> exact-content deduplication -> maximum 30 candidates -> unchanged Jina reranker
       -> rank-only `0.50` document-role prior with offset 20 for strong/weak cues
+      -> exact cross-document duplicate evidence selection -> actual top-k generation context
       -> frozen batch size 8 and runtime-default ONNX threads; never an expected-document filter
 ```
 
@@ -45,15 +46,21 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   for the separate two-manual corpus; it never calls Qdrant or a provider.
 - `app/evaluation_e2e.py`: offline scoring of a completed query execution: qrel-only ranks,
   citation outcomes, abstention confusion matrix, typed deterministic answer facts, strict-phrase
-  and token-overlap diagnostics, document contamination, component qrel ranks, and latency
-  summaries. It stores no answer/evidence text.
+  and token-overlap diagnostics, bounded lexical inflection for text facts, span-aware negation,
+  document contamination, full-ranking versus actual-evidence qrel ranks, and latency summaries. It
+  stores no answer/evidence text.
+- `app/evidence_selection.py`: removes exact normalized content duplicated across source documents
+  before top-k. It chooses provenance from query-derived role plus existing rank, retains equivalent
+  source IDs in metadata, and does not import qrels/expected documents or collapse near-duplicates.
 - `app/query_expansion.py`: frozen, deterministic Vietnamese technical glossary used only to append
   translated query terms before Phase 7 sparse retrieval; it contains no qrels, pages, document IDs,
   expected answers, model call, or held-out-specific rule.
 - `app/phase7_optimization.py`: query-only bilingual document-role inference with Unicode-safe cue
   boundaries and strong/weak confidence, bounded weighted RRF, coverage-preserving candidate
-  membership, and post-rerank rank-only role prior. It has no Qdrant,
-  provider, qrel, expected-page, or answer-fact dependency.
+  membership, post-rerank rank-only role prior, and the bounded query-derived
+  `list_completeness_v1` fallback. The fallback remains disabled because its provider-free gate did
+  not recover calibration 010. This module has no Qdrant, provider, qrel, expected-page, or
+  answer-fact dependency.
 - `app/phase7_replay.py`: validates sanitized reranker snapshots and replays rank-only priors without
   a model, Qdrant, provider, raw question, or chunk text.
 - `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
@@ -68,8 +75,9 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   Gemini uses Google's OpenAI-compatible Chat Completions endpoint.
 - `app/citations.py`: referential source-ID validation and deterministic citation construction from
   retrieved metadata.
-- `app/query_service.py`: retrieve → gate → generate → validate/retry → respond orchestration,
-  abstention policy, and internal stage timings.
+- `app/query_service.py`: retrieve/rerank → select actual evidence → gate → generate →
+  validate/retry → respond orchestration, abstention policy, full-rank/evidence provenance, and
+  internal stage timings.
 - `app/api/query.py`: threadpool handoff and sanitized HTTP error mapping only.
 - `app/api/auth.py`: optional constant-time bearer-token guard, disabled unless configured.
 - `scripts/index_document.py`, `scripts/search_dense.py`: v1 dense integration CLIs.
@@ -91,8 +99,9 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `scripts/freeze_phase7_calibration_v3.py`: copies the review-required typed calibration draft to an
   approved v3 file and manifest only after an exact human token; it cannot modify held-out.
 - `scripts/evaluate_phase7_e2e.py`: resumable integration evaluator that validates the approved
-  manifest and live frozen hash before it sends anything to a provider. Calibration and held-out use
-  distinct provider-approval tokens, so held-out cannot run accidentally after calibration approval.
+  manifest and live frozen hash before it sends anything to a provider. Calibration mode reads one
+  split only and records a full non-secret run identity. Held-out execution currently fails closed
+  with `BLOCKED_GOVERNANCE` because historical repository content exposed that split.
 - `scripts/calibrate_phase7_retrieval.py`: provider-free, calibration-only dense/sparse 20--60
   union/RRF/expanded-RRF ablation, including the fixed top-30 reranker budget; it never loads the
   cross-encoder or executes held-out queries.
@@ -107,7 +116,15 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `scripts/create_phase7_reranker_snapshot.py`: makes a sanitized baseline Jina snapshot once; replay
   artifacts include IDs/ranks/scores and roles but exclude questions and raw evidence.
 - `scripts/calibrate_phase7_role_prior.py`: runs six-fold, provider-free rank-prior selection from a
-  snapshot; the fold mapping is evaluation-only and never imported by the runtime.
+  schema-v2 snapshot, then tries the single registered list-completeness fallback if the finite rank
+  grid fails. The fold mapping is evaluation-only and never imported by the runtime.
+- `scripts/diagnose_phase7_calibration_005.py`: separately approved three-attempt provider diagnostic
+  that reuses one retrieved/reranked evidence bundle. Raw answer debugging is restricted to ignored
+  `artifacts/private-debug/`; the metrics artifact is sanitized.
+- `scripts/aggregate_phase7_calibration_stability.py`: validates three independent schema-v5 runs,
+  rejects identity/duplicate mismatches, and gates on the worst run instead of selecting the best.
+- `scripts/generate_phase7_calibration_closure_readiness.py`: writes the fail-closed technical and
+  governance decision without opening held-out content or calling Qdrant/provider.
 - `scripts/benchmark_phase7_reranker_cpu.py`: runs the bounded CPU micro/full ablation without Docker
   builds, re-indexing, provider calls, or held-out questions.
 - `scripts/generate_phase7_fact_evaluator_readiness.py` and
@@ -192,10 +209,11 @@ The canonical post-closure retrieval dependency is `qdrant-client >=1.19.0,<1.20
 client used by the successful Phase 4 Python 3.11 integration; Qdrant server remains pinned to
 `v1.18.3`. Historic metrics artifacts are immutable even where older runtime metadata says `1.18.0`.
 
-`Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. API adds only
-the LLM extra; ingestion does not receive LangChain/OpenAI. Compose starts API/Qdrant by default;
-ingestion is profile-gated. The shared `fastembed_cache` volume supplies models at runtime; weights
-are not baked into either image.
+`Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. API adds the
+LLM extra without Docling. Ingestion now adds Docling and the LLM extra, because its on-demand Phase 7
+E2E CLI uses the same structured generator; this deliberately makes only the profile-gated tools image
+heavier. Compose starts API/Qdrant by default. The shared `fastembed_cache` volume supplies models at
+runtime; weights are not baked into either image.
 
 The ingestion target installs Debian runtime packages `libxcb1`, `libgl1`, and
 `libglib2.0-0t64`; Docling's PDF/image stack needs the shared libraries they provide when running

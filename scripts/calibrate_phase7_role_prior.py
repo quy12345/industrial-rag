@@ -16,13 +16,18 @@ from pathlib import Path
 from typing import Any
 
 from app.evaluation import direct_evidence_rank, load_frozen_chunks
+from app.evidence_selection import select_evidence_candidates_for_role
 from app.phase7 import (
     dataset_sha256,
     read_phase7_dataset,
-    validate_phase7_datasets,
+    validate_phase7_dataset,
     write_json_atomic,
 )
-from app.phase7_optimization import PHASE7_CALIBRATION_FUSION_PROFILE, Phase7FusionProfile
+from app.phase7_optimization import (
+    PHASE7_CALIBRATION_FUSION_PROFILE,
+    Phase7FusionProfile,
+    apply_list_completeness_from_metadata,
+)
 from app.phase7_replay import Phase7ReplayError, replay_role_prior, snapshot_candidates_to_retrieval
 from scripts.evaluate_phase7_retrieval_closure import aggregate_closure_rows
 
@@ -41,23 +46,28 @@ def main() -> int:
     parser.add_argument(
         "--snapshot",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-reranker-snapshot-v1.json"),
+        default=Path("artifacts/metrics/phase-7-reranker-snapshot-v2.json"),
     )
     parser.add_argument(
-        "--calibration", type=Path, default=Path("data/eval/phase7/calibration.jsonl")
+        "--calibration", type=Path, default=Path("data/eval/phase7/calibration-v3.jsonl")
     )
-    parser.add_argument("--test", type=Path, default=Path("data/eval/phase7/test.jsonl"))
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("artifacts/metrics/phase-7-evaluation-manifest-v3.json"),
+    )
     parser.add_argument("--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl"))
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-role-prior-ablation-v1.json"),
+        default=Path("artifacts/metrics/phase-7-role-prior-ablation-v2.json"),
     )
     args = parser.parse_args()
 
     calibration = read_phase7_dataset(args.calibration)
-    held_out = read_phase7_dataset(args.test)
-    validation = validate_phase7_datasets(calibration, held_out, load_frozen_chunks(args.chunks))
+    validation = validate_phase7_dataset(
+        calibration, load_frozen_chunks(args.chunks), kind="calibration"
+    )
     selected = [item for item in calibration if item.answerable]
     snapshot = _read_snapshot(args.snapshot, calibration_sha=dataset_sha256(calibration))
     snapshot_rows = {str(row["id"]): row for row in snapshot["per_query"]}
@@ -67,21 +77,48 @@ def main() -> int:
         )
     _validate_folds({item.id for item in selected})
 
+    profiles = _role_prior_profiles()
     summaries = {
         profile.name: _evaluate_profile(profile, selected, snapshot_rows)
-        for profile in _role_prior_profiles()
+        for profile in profiles
     }
     folds = _cross_validate(summaries)
     recommended_profile = folds["consensus_profile"]
+    best_experimental_profile = recommended_profile
     quality = _quality(summaries[recommended_profile], stable=bool(folds["stable_consensus"]))
+    fallback: dict[str, Any] | None = None
+    if not quality["overall_pass"]:
+        base_profile = next(profile for profile in profiles if profile.name == recommended_profile)
+        fallback_profile = replace(
+            base_profile,
+            name=f"{base_profile.name}_list_completeness_v1",
+            list_completeness_enabled=True,
+        )
+        fallback_summary = _evaluate_profile(fallback_profile, selected, snapshot_rows)
+        fallback_quality = _quality(
+            fallback_summary,
+            stable=bool(folds["stable_consensus"]),
+        )
+        summaries[fallback_profile.name] = fallback_summary
+        fallback = {
+            "triggered": True,
+            "base_profile": recommended_profile,
+            "profile": fallback_profile.name,
+            "quality": fallback_quality,
+        }
+        if fallback_quality["overall_pass"]:
+            recommended_profile = fallback_profile.name
+            best_experimental_profile = fallback_profile.name
+            quality = fallback_quality
+    released_profile = recommended_profile if quality["overall_pass"] else None
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "timestamp": datetime.now(UTC).isoformat(),
         "scope": "approved answerable calibration rows only",
         "provider_calls": 0,
         "held_out_queries_executed": 0,
         "calibration_dataset_sha256": dataset_sha256(calibration),
-        "held_out_dataset_sha256": dataset_sha256(held_out),
+        "held_out_dataset_sha256": _sealed_held_out_hash(args.manifest),
         "corpus": validation["corpus"],
         "snapshot_source": {
             "path": str(args.snapshot).replace("\\", "/"),
@@ -91,7 +128,9 @@ def main() -> int:
         },
         "profiles": summaries,
         "cross_validation": folds,
-        "recommended_profile": recommended_profile,
+        "registered_fallback": fallback,
+        "recommended_profile": released_profile,
+        "best_experimental_profile": best_experimental_profile,
         "quality": quality,
         "latency_methodology": "rank-only replay; Jina and Qdrant timings are not measured",
         "sanitization": {
@@ -108,20 +147,16 @@ def main() -> int:
 
 def _role_prior_profiles() -> tuple[Phase7FusionProfile, ...]:
     profiles: list[Phase7FusionProfile] = []
-    for multiplier in (0.0, 0.10, 0.20, 0.30, 0.40, 0.50):
-        for offset in (5, 10, 20):
-            for confidence_mode in ("strong_only", "strong_and_weak"):
-                profiles.append(
-                    replace(
-                        PHASE7_CALIBRATION_FUSION_PROFILE,
-                        name=(
-                            f"phase741_role_prior_m{multiplier:g}_offset{offset}_{confidence_mode}"
-                        ),
-                        post_rerank_role_multiplier=multiplier,
-                        post_rerank_rank_offset=offset,
-                        post_rerank_confidence_mode=confidence_mode,
-                    )
+    for rrf_multiplier in (0.0, 0.25, 0.50, 1.0, 2.0):
+        for offset in (10, 20, 40):
+            profiles.append(
+                replace(
+                    PHASE7_CALIBRATION_FUSION_PROFILE,
+                    name=f"phase7_rank_fusion_rrf{rrf_multiplier:g}_offset{offset}",
+                    post_rerank_rrf_multiplier=rrf_multiplier,
+                    post_rerank_rank_offset=offset,
                 )
+            )
     return tuple(profiles)
 
 
@@ -137,27 +172,41 @@ def _evaluate_profile(
             query_role=snapshot["query_role"],
             confidence=snapshot["query_role_confidence"],
             role_multiplier=profile.post_rerank_role_multiplier,
+            rrf_rank_multiplier=profile.post_rerank_rrf_multiplier,
             rank_offset=profile.post_rerank_rank_offset,
             confidence_mode=profile.post_rerank_confidence_mode,
         )
+        if profile.list_completeness_enabled:
+            replayed = apply_list_completeness_from_metadata(
+                replayed,
+                enabled=bool(snapshot["list_intent_enabled"]),
+            )
+        evidence = select_evidence_candidates_for_role(
+            replayed,
+            top_k=5,
+            query_role=snapshot["query_role"],
+        ).candidates
         relevant = set(item.relevant_chunk_ids)
         rows.append(
             {
                 "id": item.id,
                 "language": item.language,
                 "candidate_count": len(raw_candidates),
-                "final_candidate_count": len(replayed),
+                "full_reranked_candidate_count": len(replayed),
+                "final_candidate_count": len(evidence),
                 "candidate_direct_evidence_rank": direct_evidence_rank(raw_candidates, relevant),
-                "final_direct_evidence_rank": direct_evidence_rank(replayed, relevant),
+                "ranked_direct_evidence_rank": direct_evidence_rank(replayed, relevant),
+                "final_direct_evidence_rank": direct_evidence_rank(evidence, relevant),
                 "failure_class": _failure_class(
                     direct_evidence_rank(raw_candidates, relevant),
                     direct_evidence_rank(replayed, relevant),
+                    direct_evidence_rank(evidence, relevant),
                 ),
-                "wrong_document_top1": bool(replayed)
-                and replayed[0].document_id not in item.expected_document_ids,
+                "wrong_document_top1": bool(evidence)
+                and evidence[0].document_id not in item.expected_document_ids,
                 "wrong_document_candidate_count_at_5": sum(
                     candidate.document_id not in item.expected_document_ids
-                    for candidate in replayed[:5]
+                    for candidate in evidence
                 ),
                 "query_role": snapshot["query_role"],
                 "query_role_confidence": snapshot["query_role_confidence"],
@@ -221,8 +270,9 @@ def _select_profile(summaries: dict[str, dict[str, Any]]) -> str:
             float(summaries[name]["overall"]["wrong_document_candidate_rate_at_5"]),
             float(summaries[name]["overall"]["wrong_document_top1_rate"]),
             -float(summaries[name]["overall"]["mrr_at_5"]),
+            float(summaries[name]["profile"]["post_rerank_rrf_multiplier"]),
             float(summaries[name]["profile"]["post_rerank_role_multiplier"]),
-            int(summaries[name]["profile"]["post_rerank_rank_offset"]),
+            -int(summaries[name]["profile"]["post_rerank_rank_offset"]),
             str(summaries[name]["profile"]["post_rerank_confidence_mode"]),
             name,
         ),
@@ -250,8 +300,8 @@ def _quality(summary: dict[str, Any], *, stable: bool) -> dict[str, Any]:
         ]
         <= 5 / 30,
         "candidate_budget_at_most_30": overall["candidate_count_maximum"] <= 30,
-        "calibration_010_rank_at_most_6": _rank(summary["per_query"], "phase7_calibration_010")
-        <= 6,
+        "calibration_010_rank_at_most_5": _rank(summary["per_query"], "phase7_calibration_010")
+        <= 5,
         "cross_validation_consensus_stable": stable,
     }
     return {"overall_pass": all(gates.values()), "gates": gates}
@@ -291,12 +341,16 @@ def _rank(rows: list[dict[str, Any]], identifier: str) -> int:
     raise ValueError(f"Required calibration row missing: {identifier}")
 
 
-def _failure_class(candidate_rank: int | None, final_rank: int | None) -> str:
+def _failure_class(
+    candidate_rank: int | None,
+    ranked_rank: int | None,
+    final_rank: int | None,
+) -> str:
     if candidate_rank is None:
         return "candidate_miss"
-    if final_rank is None or final_rank > 20:
+    if ranked_rank is None or ranked_rank > 20:
         return "reranker_miss_top20"
-    if final_rank > 5:
+    if final_rank is None or final_rank > 5:
         return "reranker_miss_top5"
     return "hit"
 
@@ -314,16 +368,25 @@ def _read_snapshot(path: Path, *, calibration_sha: str) -> dict[str, Any]:
         raise ValueError("Unable to read Phase 7 reranker snapshot.") from exc
     if payload.get("provider_calls") != 0 or payload.get("held_out_queries_executed") != 0:
         raise ValueError("Snapshot must be calibration-only with zero provider/held-out calls.")
+    if payload.get("schema_version") != 2:
+        raise ValueError("Final rank calibration requires a schema-v2 reranker snapshot.")
     if payload.get("calibration_dataset_sha256") != calibration_sha:
         raise ValueError("Snapshot calibration dataset hash does not match current frozen dataset.")
     if payload.get("candidate_text_format") != "document_context_heading_content_v2":
         raise ValueError("Snapshot candidate text format is not the frozen Phase 7.4.1 format.")
+    if payload.get("list_completeness_profile") != "phase7_list_completeness_v1":
+        raise ValueError("Snapshot list-completeness profile is not the registered fallback.")
     rows = payload.get("per_query")
     if not isinstance(rows, list):
         raise ValueError("Snapshot per-query rows are malformed.")
     try:
         for row in rows:
-            snapshot_candidates_to_retrieval(row["candidates"])
+            candidates = snapshot_candidates_to_retrieval(row["candidates"])
+            if any(
+                "content_fingerprint_sha256" not in candidate.metadata
+                for candidate in candidates
+            ):
+                raise ValueError("Snapshot candidate is missing its content fingerprint.")
     except (KeyError, TypeError, Phase7ReplayError) as exc:
         raise ValueError("Snapshot candidate data is invalid.") from exc
     return payload
@@ -340,13 +403,26 @@ def _profile_payload(profile: Phase7FusionProfile) -> dict[str, Any]:
         "sparse_reserve": profile.sparse_reserve,
         "max_candidates": profile.max_candidates,
         "post_rerank_role_multiplier": profile.post_rerank_role_multiplier,
+        "post_rerank_rrf_multiplier": profile.post_rerank_rrf_multiplier,
         "post_rerank_rank_offset": profile.post_rerank_rank_offset,
         "post_rerank_confidence_mode": profile.post_rerank_confidence_mode,
+        "list_completeness_enabled": profile.list_completeness_enabled,
     }
 
 
 def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _sealed_held_out_hash(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Unable to read the frozen Phase 7 evaluation manifest.") from exc
+    value = payload.get("test_dataset_sha256")
+    if not isinstance(value, str) or len(value) != 64:
+        raise ValueError("Phase 7 manifest has no valid sealed held-out hash.")
+    return value
 
 
 if __name__ == "__main__":

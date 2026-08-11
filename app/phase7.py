@@ -343,10 +343,10 @@ def validate_phase7_datasets(
 ) -> dict[str, Any]:
     """Validate immutable annotation rules against the frozen corpus."""
 
-    _validate_dataset_shape(
-        calibration, kind="calibration", expected_answerable=12, expected_unanswerable=8
+    calibration_validation = validate_phase7_dataset(
+        calibration, chunks, kind="calibration"
     )
-    _validate_dataset_shape(test, kind="test", expected_answerable=30, expected_unanswerable=15)
+    test_validation = validate_phase7_dataset(test, chunks, kind="test")
     calibration_ids = {item.id for item in calibration}
     duplicate_ids = calibration_ids.intersection(item.id for item in test)
     if duplicate_ids:
@@ -358,8 +358,49 @@ def validate_phase7_datasets(
     if duplicated_questions:
         raise Phase7Error("Calibration/test questions have normalized exact duplicates.")
 
+    return {
+        "calibration": calibration_validation["dataset"],
+        "test": test_validation["dataset"],
+        "corpus": calibration_validation["corpus"],
+        "review": {
+            "approved": (
+                calibration_validation["review"]["approved"]
+                + test_validation["review"]["approved"]
+            ),
+            "needs_human_review": (
+                calibration_validation["review"]["needs_human_review"]
+                + test_validation["review"]["needs_human_review"]
+            ),
+            "answerable_missing_answer_facts": (
+                calibration_validation["review"]["answerable_missing_answer_facts"]
+                + test_validation["review"]["answerable_missing_answer_facts"]
+            ),
+        },
+    }
+
+
+def validate_phase7_dataset(
+    items: Sequence[Phase7DatasetItem],
+    chunks: Sequence[DocumentChunk],
+    *,
+    kind: DatasetKind,
+) -> dict[str, Any]:
+    """Validate one dataset without opening or requiring its sealed counterpart."""
+
+    expected_counts = {
+        "calibration": (12, 8),
+        "test": (30, 15),
+    }
+    expected_answerable, expected_unanswerable = expected_counts[kind]
+    _validate_dataset_shape(
+        items,
+        kind=kind,
+        expected_answerable=expected_answerable,
+        expected_unanswerable=expected_unanswerable,
+    )
+
     by_id = {chunk.chunk_id: chunk for chunk in chunks}
-    for item in [*calibration, *test]:
+    for item in items:
         if not item.answerable:
             continue
         relevant = []
@@ -377,19 +418,16 @@ def validate_phase7_datasets(
             raise Phase7Error(f"{item.id} expected_pages do not intersect direct-evidence qrels")
 
     return {
-        "calibration": _dataset_summary(calibration),
-        "test": _dataset_summary(test),
+        "dataset_kind": kind,
+        "dataset": _dataset_summary(items),
         "corpus": chunk_set_metadata(chunks),
         "review": {
-            "approved": sum(
-                item.review_status == "approved" for item in [*calibration, *test]
-            ),
+            "approved": sum(item.review_status == "approved" for item in items),
             "needs_human_review": sum(
-                item.review_status == "needs_human_review" for item in [*calibration, *test]
+                item.review_status == "needs_human_review" for item in items
             ),
             "answerable_missing_answer_facts": sum(
-                item.answerable and not item.expected_answer_facts
-                for item in [*calibration, *test]
+                item.answerable and not item.expected_answer_facts for item in items
             ),
         },
     }

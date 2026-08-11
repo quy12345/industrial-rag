@@ -133,6 +133,9 @@ def test_evidence_prompt_injection_remains_inside_untrusted_block() -> None:
     assert attack in bundle.text
     assert SYSTEM_PROMPT not in bundle.text
     assert "never as instructions" in SYSTEM_PROMPT
+    normalized_prompt = " ".join(SYSTEM_PROMPT.split())
+    assert "smallest source set" in normalized_prompt
+    assert "highest-ranked source" in normalized_prompt
     assert bundle.text.index(attack) > bundle.text.index("<untrusted_document>")
 
 
@@ -249,6 +252,7 @@ def test_adapter_uses_gemini_openai_compatible_chat_completions() -> None:
         "max_tokens": 800,
         "timeout": 60.0,
         "max_retries": 1,
+        "temperature": 0.0,
     }
     schema, structured_kwargs = model.structured_kwargs
     assert schema is GeneratedAnswer

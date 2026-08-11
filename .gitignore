@@ -4,6 +4,7 @@ __pycache__/
 .pytest_tmp/
 .pytest-work/
 .pytest-phase*/
+.pytest-tmp*/
 .ruff_cache/
 .venv/
 venv/
@@ -29,3 +30,4 @@ artifacts/figures/*
 !artifacts/figures/.gitkeep
 artifacts/*.jsonl
 artifacts/*.log
+artifacts/private-debug/

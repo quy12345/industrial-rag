@@ -12,14 +12,30 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from app.evaluation import direct_evidence_rank, percentile_nearest_rank, phrase_matches
 from app.phase7 import ExpectedAnswerFact, Phase7DatasetItem
 from app.query_service import QueryExecution
 
-FACT_EVALUATOR_ID = "phase7_deterministic_typed_facts_v1"
-_NEGATION_TOKENS = frozenset({"not", "no", "never", "dont", "cannot", "khong", "chua"})
+FACT_EVALUATOR_ID = "phase7_deterministic_typed_facts_v2"
+_NEGATION_TOKENS = frozenset(
+    {"not", "no", "never", "dont", "cannot", "without", "khong", "chua", "chang"}
+)
+_INFLECTION_SUFFIXES = ("s", "es", "ed", "d", "ing")
+_NEGATION_WINDOW = 3
+
+
+@dataclass(frozen=True)
+class _TextMatch:
+    alternatives: tuple[str, ...]
+    positions: tuple[tuple[int, int], ...]
+    match_mode: str
+    clause_index: int
+    negation_positions: tuple[int, ...]
+    minimum_negation_distance: int | None
+    polarity: str
 
 
 def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -> dict[str, Any]:
@@ -30,13 +46,17 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
     """
 
     relevant = set(item.relevant_chunk_ids)
-    final_rank = direct_evidence_rank(execution.candidates, relevant) if item.answerable else None
+    evidence_candidates = execution.evidence_candidates or execution.candidates
+    ranked_rank = (
+        direct_evidence_rank(execution.candidates, relevant) if item.answerable else None
+    )
+    final_rank = direct_evidence_rank(evidence_candidates, relevant) if item.answerable else None
     candidate_rank = (
         direct_evidence_rank(execution.candidate_pool, relevant) if item.answerable else None
     )
     response = execution.response
     citation_ids = [citation.chunk_id for citation in response.citations]
-    final_ids = {candidate.chunk_id for candidate in execution.candidates}
+    final_ids = {candidate.chunk_id for candidate in evidence_candidates}
     citation_documents = {citation.document_id for citation in response.citations}
 
     record: dict[str, Any] = {
@@ -47,7 +67,9 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
         "answerable": item.answerable,
         "candidate_count": len(execution.candidate_pool),
         "final_candidate_count": len(execution.candidates),
+        "evidence_candidate_count": len(evidence_candidates),
         "candidate_direct_evidence_rank": candidate_rank,
+        "ranked_direct_evidence_rank": ranked_rank,
         "direct_evidence_rank": final_rank,
         "abstained": response.abstained,
         "abstention_reason": response.abstention_reason,
@@ -56,6 +78,16 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
         "citation_document_ids": sorted(citation_documents),
         "citation_ids_in_final_candidates": all(chunk_id in final_ids for chunk_id in citation_ids),
         "unsupported_citation_count": sum(chunk_id not in final_ids for chunk_id in citation_ids),
+        "evidence_candidate_ids": [candidate.chunk_id for candidate in evidence_candidates],
+        "evidence_duplicate_groups": [
+            {
+                "representative_chunk_id": group.representative_chunk_id,
+                "equivalent_chunk_ids": list(group.equivalent_chunk_ids),
+                "equivalent_document_ids": list(group.equivalent_document_ids),
+            }
+            for group in execution.evidence_duplicate_groups
+        ],
+        "generation_attempts": execution.generation_attempts,
         "timings_ms": {
             "retrieval": execution.timings.retrieval_ms,
             "rerank": execution.timings.rerank_ms,
@@ -73,7 +105,7 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
         record.update(
             {
                 "relevant_chunk_ids": sorted(relevant),
-                "failure_class": _failure_class(candidate_rank, final_rank),
+                "failure_class": _failure_class(candidate_rank, ranked_rank, final_rank),
                 "strict_phrase_match": (
                     all(result["strict_phrase_matched"] for result in fact_results)
                     if not response.abstained
@@ -104,6 +136,9 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
                     execution.candidate_pool, relevant
                 ),
                 "qrel_final_diagnostics": _qrel_diagnostics(
+                    evidence_candidates, relevant
+                ),
+                "qrel_reranked_diagnostics": _qrel_diagnostics(
                     execution.candidates, relevant
                 ),
                 "citation_direct_evidence": bool(set(citation_ids).intersection(relevant)),
@@ -117,6 +152,12 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
                 "wrong_document_candidate_count_at_5": sum(
                     candidate.document_id not in item.expected_document_ids
                     for candidate in execution.candidates[:5]
+                ),
+                "wrong_document_evidence_at_1": bool(evidence_candidates)
+                and evidence_candidates[0].document_id not in item.expected_document_ids,
+                "wrong_document_evidence_count_at_5": sum(
+                    candidate.document_id not in item.expected_document_ids
+                    for candidate in evidence_candidates[:5]
                 ),
             }
         )
@@ -132,11 +173,14 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
                 "strict_missing_answer_fact_ids": [],
                 "qrel_candidate_diagnostics": [],
                 "qrel_final_diagnostics": [],
+                "qrel_reranked_diagnostics": [],
                 "citation_direct_evidence": None,
                 "citation_document_correct": None,
                 "unexpected_citation_document_ids": [],
                 "wrong_document_retrieval_at_1": None,
                 "wrong_document_candidate_count_at_5": None,
+                "wrong_document_evidence_at_1": None,
+                "wrong_document_evidence_count_at_5": None,
             }
         )
     return record
@@ -414,13 +458,14 @@ def _answer_fact_results(item: Phase7DatasetItem, answer: str) -> list[dict[str,
 
 
 def score_expected_answer_fact(fact: ExpectedAnswerFact, answer: str) -> dict[str, Any]:
-    """Score one reviewed fact without a model or contiguous-word-order requirement."""
+    """Score one reviewed fact with typed, deterministic matching rules."""
 
     answer_tokens = _diagnostic_tokens(answer)
     alias_token_scores = [
         _token_overlap(answer_tokens, _diagnostic_tokens(alias)) for alias in fact.aliases
     ]
     strict_match = any(phrase_matches(answer, alias) for alias in fact.aliases)
+    text_trace: _TextMatch | None = None
     if fact.type == "numeric_unit":
         deterministic_match = _numeric_unit_matches(answer, fact.value or "", fact.unit or "")
         matcher = "numeric_unit_v1"
@@ -429,23 +474,20 @@ def score_expected_answer_fact(fact: ExpectedAnswerFact, answer: str) -> dict[st
             _identifier_matches(answer, value) for value in fact.acceptable_values
         )
         matcher = "identifier_v1"
-    elif fact.required_token_groups:
-        deterministic_match = all(
-            any(_text_tokens_match(answer_tokens, alternative) for alternative in group)
-            for group in fact.required_token_groups
-        )
-        matcher = "required_token_groups_v1"
     else:
-        deterministic_match = any(
-            _diagnostic_tokens(alias).issubset(answer_tokens) for alias in fact.aliases
+        text_trace = _match_text_fact(fact, answer)
+        deterministic_match = text_trace is not None and text_trace.polarity == "positive"
+        matcher = (
+            "required_token_groups_v2"
+            if fact.required_token_groups
+            else "text_alias_token_set_v2"
         )
-        matcher = "text_alias_token_set_v1"
-    if deterministic_match and _has_polarity_conflict(answer, fact):
-        deterministic_match = False
-        matcher = f"{matcher}_negation_guard_v1"
+        if text_trace is not None and text_trace.polarity != "positive":
+            matcher = f"{matcher}_negation_guard_v2"
     return {
         "id": fact.id,
         "type": fact.type,
+        "matcher_version": FACT_EVALUATOR_ID,
         "matcher": matcher,
         "matched": deterministic_match,
         "deterministic_matched": deterministic_match,
@@ -456,44 +498,211 @@ def score_expected_answer_fact(fact: ExpectedAnswerFact, answer: str) -> dict[st
         "max_alias_token_precision": max(
             (score[1] for score in alias_token_scores), default=0.0
         ),
+        "selected_group_alternatives": (
+            list(text_trace.alternatives) if text_trace is not None else []
+        ),
+        "match_mode": text_trace.match_mode if text_trace is not None else None,
+        "matched_token_positions": (
+            [list(span) for span in text_trace.positions] if text_trace is not None else []
+        ),
+        "matched_clause_index": text_trace.clause_index if text_trace is not None else None,
+        "negation_token_positions": (
+            list(text_trace.negation_positions) if text_trace is not None else []
+        ),
+        "minimum_negation_distance": (
+            text_trace.minimum_negation_distance if text_trace is not None else None
+        ),
+        "polarity": text_trace.polarity if text_trace is not None else "not_applicable",
     }
 
 
 def _diagnostic_tokens(value: str) -> set[str]:
+    return set(_lexical_tokens(value))
+
+
+def _lexical_tokens(value: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", value).casefold()
-    return set(re.findall(r"[^\W_]+", normalized, flags=re.UNICODE))
+    return re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
 
 
-def _text_tokens_match(answer_tokens: set[str], expected: str) -> bool:
-    expected_tokens = _diagnostic_tokens(expected)
-    return bool(expected_tokens) and expected_tokens.issubset(answer_tokens)
-
-
-def _has_polarity_conflict(answer: str, fact: ExpectedAnswerFact) -> bool:
-    """Reject token-set matches that occur only in a plainly negated clause.
-
-    This deliberately favours a false negative over declaring the opposite of a
-    safety or installation requirement correct. It is a deterministic guard,
-    not semantic entailment.
-    """
-
-    expected_tokens = set().union(*(_diagnostic_tokens(alias) for alias in fact.aliases))
-    if fact.value:
-        expected_tokens.update(_diagnostic_tokens(fact.value))
-    if fact.unit:
-        expected_tokens.update(_diagnostic_tokens(fact.unit))
-    for value in fact.acceptable_values:
-        expected_tokens.update(_diagnostic_tokens(value))
-    for group in fact.required_token_groups:
-        for alternative in group:
-            expected_tokens.update(_diagnostic_tokens(alternative))
-    for clause in re.split(r"[.!?;\n]+", unicodedata.normalize("NFKC", answer).casefold()):
-        clause_tokens = _diagnostic_tokens(clause)
-        if not clause_tokens.intersection(_NEGATION_TOKENS):
+def _match_text_fact(fact: ExpectedAnswerFact, answer: str) -> _TextMatch | None:
+    matches: list[_TextMatch] = []
+    for clause_index, clause in enumerate(re.split(r"[.!?;\n]+", answer)):
+        tokens = _lexical_tokens(clause)
+        if not tokens:
             continue
-        if len(clause_tokens.intersection(expected_tokens)) >= min(2, len(expected_tokens)):
-            return True
-    return False
+        if fact.required_token_groups:
+            alternatives: list[str] = []
+            spans: list[tuple[int, int]] = []
+            modes: list[str] = []
+            for group in fact.required_token_groups:
+                selected = _first_alternative_match(tokens, group)
+                if selected is None:
+                    break
+                alternative, span, mode = selected
+                alternatives.append(alternative)
+                spans.append(span)
+                modes.append(mode)
+            else:
+                matches.append(
+                    _text_match_trace(
+                        tokens,
+                        alternatives=alternatives,
+                        spans=spans,
+                        modes=modes,
+                        clause_index=clause_index,
+                    )
+                )
+        else:
+            for alias in fact.aliases:
+                selected = _unordered_token_match(tokens, _lexical_tokens(alias))
+                if selected is None:
+                    continue
+                spans, mode = selected
+                matches.append(
+                    _text_match_trace(
+                        tokens,
+                        alternatives=[alias],
+                        spans=spans,
+                        modes=[mode],
+                        clause_index=clause_index,
+                    )
+                )
+                break
+    positive = next((match for match in matches if match.polarity == "positive"), None)
+    if positive is not None:
+        return positive
+    ambiguous = next((match for match in matches if match.polarity == "ambiguous"), None)
+    if ambiguous is not None:
+        return ambiguous
+    return matches[0] if matches else None
+
+
+def _first_alternative_match(
+    tokens: Sequence[str], alternatives: Sequence[str]
+) -> tuple[str, tuple[int, int], str] | None:
+    for alternative in alternatives:
+        expected = _lexical_tokens(alternative)
+        selected = _ordered_token_match(tokens, expected)
+        if selected is not None:
+            span, mode = selected
+            return alternative, span, mode
+    return None
+
+
+def _ordered_token_match(
+    tokens: Sequence[str], expected: Sequence[str]
+) -> tuple[tuple[int, int], str] | None:
+    if not expected or len(expected) > len(tokens):
+        return None
+    for start in range(len(tokens) - len(expected) + 1):
+        modes = [
+            _lexical_equivalence(tokens[start + offset], value)
+            for offset, value in enumerate(expected)
+        ]
+        if all(mode is not None for mode in modes):
+            return (start, start + len(expected)), (
+                "inflection" if "inflection" in modes else "exact"
+            )
+    return None
+
+
+def _unordered_token_match(
+    tokens: Sequence[str], expected: Sequence[str]
+) -> tuple[list[tuple[int, int]], str] | None:
+    if not expected:
+        return None
+    used: set[int] = set()
+    spans: list[tuple[int, int]] = []
+    modes: list[str] = []
+    for expected_token in expected:
+        selected: tuple[int, str] | None = None
+        for index, actual in enumerate(tokens):
+            if index in used:
+                continue
+            mode = _lexical_equivalence(actual, expected_token)
+            if mode is not None:
+                selected = index, mode
+                break
+        if selected is None:
+            return None
+        index, mode = selected
+        used.add(index)
+        spans.append((index, index + 1))
+        modes.append(mode)
+    return spans, "inflection" if "inflection" in modes else "exact"
+
+
+def _lexical_equivalence(actual: str, expected: str) -> str | None:
+    if actual == expected:
+        return "exact"
+    if not actual.isascii() or not expected.isascii():
+        return None
+    if not actual.isalpha() or not expected.isalpha():
+        return None
+    shorter, longer = sorted((actual, expected), key=len)
+    if len(shorter) < 4:
+        return None
+    if any(longer == shorter + suffix for suffix in _INFLECTION_SUFFIXES):
+        return "inflection"
+    return None
+
+
+def _text_match_trace(
+    tokens: Sequence[str],
+    *,
+    alternatives: Sequence[str],
+    spans: Sequence[tuple[int, int]],
+    modes: Sequence[str],
+    clause_index: int,
+) -> _TextMatch:
+    negation_positions = _negation_positions(tokens)
+    starts = [start for start, _ in spans]
+    relevant_negations = tuple(
+        position
+        for position in negation_positions
+        if any(0 <= start - position <= _NEGATION_WINDOW for start in starts)
+    )
+    distances = [
+        start - position
+        for position in relevant_negations
+        for start in starts
+        if start >= position
+    ]
+    if len(relevant_negations) > 1:
+        polarity = "ambiguous"
+    elif relevant_negations:
+        polarity = "negative"
+    else:
+        polarity = "positive"
+    return _TextMatch(
+        alternatives=tuple(alternatives),
+        positions=tuple(spans),
+        match_mode="inflection" if "inflection" in modes else "exact",
+        clause_index=clause_index,
+        negation_positions=relevant_negations,
+        minimum_negation_distance=min(distances) if distances else None,
+        polarity=polarity,
+    )
+
+
+def _negation_positions(tokens: Sequence[str]) -> tuple[int, ...]:
+    positions: list[int] = []
+    for index, token in enumerate(tokens):
+        folded = _strip_diacritics(token)
+        if folded == "not" and index + 1 < len(tokens) and tokens[index + 1] == "only":
+            continue
+        if folded in _NEGATION_TOKENS:
+            positions.append(index)
+            continue
+        if folded in {"don", "can"} and index + 1 < len(tokens) and tokens[index + 1] == "t":
+            positions.append(index)
+    return tuple(positions)
+
+
+def _strip_diacritics(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    return "".join(character for character in normalized if not unicodedata.combining(character))
 
 
 def _identifier_matches(answer: str, expected: str) -> bool:
@@ -514,8 +723,9 @@ def _numeric_unit_matches(answer: str, value: str, unit: str) -> bool:
         return False
     value_pattern = re.escape(normalized_value).replace(r"\.", r"[.,]")
     unit_pattern = r"\s*".join(re.escape(part) for part in normalized_unit.split())
+    leading_boundary = r"(?<![\d.,+\-])"
     return re.search(
-        rf"(?<![\d]){value_pattern}\s*{unit_pattern}(?![\w])", normalized_answer
+        rf"{leading_boundary}{value_pattern}\s*{unit_pattern}(?![\w])", normalized_answer
     ) is not None
 
 
@@ -553,12 +763,16 @@ def _qrel_diagnostics(
     return diagnostics
 
 
-def _failure_class(candidate_rank: int | None, final_rank: int | None) -> str:
+def _failure_class(
+    candidate_rank: int | None,
+    ranked_rank: int | None,
+    evidence_rank: int | None,
+) -> str:
     if candidate_rank is None:
         return "candidate_miss"
-    if final_rank is None or final_rank > 20:
+    if ranked_rank is None or ranked_rank > 20:
         return "reranker_miss_top20"
-    if final_rank > 5:
+    if evidence_rank is None or evidence_rank > 5:
         return "reranker_miss_top5"
     return "hit"
 

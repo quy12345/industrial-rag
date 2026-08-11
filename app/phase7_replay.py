@@ -34,6 +34,16 @@ def snapshot_candidates_to_retrieval(
             document_role = str(value["document_role"])
             rank = int(value["cross_encoder_rank"])
             score = float(value["rerank_score"])
+            dense_rank = _optional_rank(value.get("dense_rank"))
+            sparse_rank = _optional_rank(value.get("sparse_rank"))
+            rrf_rank = _optional_rank(value.get("rrf_rank"))
+            content_fingerprint = value.get("content_fingerprint_sha256")
+            query_identifier_matches = _non_negative_count(
+                value.get("query_identifier_match_count")
+            )
+            bracketed_pair_count = _non_negative_count(
+                value.get("bracketed_label_code_pair_count")
+            )
         except (KeyError, TypeError, ValueError) as exc:
             raise Phase7ReplayError("Snapshot candidate is malformed.") from exc
         if not chunk_id or not document_id or document_role not in {"installation", "programming"}:
@@ -44,6 +54,12 @@ def snapshot_candidates_to_retrieval(
             )
         if not math.isfinite(score):
             raise Phase7ReplayError("Snapshot rerank score must be finite.")
+        if content_fingerprint is not None and (
+            not isinstance(content_fingerprint, str)
+            or len(content_fingerprint) != 64
+            or any(character not in "0123456789abcdef" for character in content_fingerprint)
+        ):
+            raise Phase7ReplayError("Snapshot content fingerprint must be lowercase SHA-256.")
         seen_ids.add(chunk_id)
         seen_ranks.add(rank)
         candidates.append(
@@ -55,8 +71,20 @@ def snapshot_candidates_to_retrieval(
                 page_numbers=[],
                 headings=[],
                 content_type="snapshot",
-                metadata={"document_role": document_role},
+                metadata={
+                    "document_role": document_role,
+                    "query_identifier_match_count": query_identifier_matches,
+                    "bracketed_label_code_pair_count": bracketed_pair_count,
+                    **(
+                        {"content_fingerprint_sha256": content_fingerprint}
+                        if content_fingerprint is not None
+                        else {}
+                    ),
+                },
                 score=score,
+                dense_rank=dense_rank,
+                sparse_rank=sparse_rank,
+                rrf_rank=rrf_rank,
                 rerank_score=score,
                 rerank_rank=rank,
             )
@@ -72,6 +100,7 @@ def replay_role_prior(
     query_role: QueryRole,
     confidence: RoleConfidence,
     role_multiplier: float,
+    rrf_rank_multiplier: float = 0.0,
     rank_offset: int,
     confidence_mode: PostRerankConfidenceMode,
 ) -> list[RetrievalCandidate]:
@@ -85,7 +114,22 @@ def replay_role_prior(
             confidence=confidence,
             confidence_mode=confidence_mode,
             role_multiplier=role_multiplier,
+            rrf_rank_multiplier=rrf_rank_multiplier,
             rank_offset=rank_offset,
         )
     except Phase7OptimizationError as exc:
         raise Phase7ReplayError(str(exc)) from exc
+
+
+def _optional_rank(value: Any) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise Phase7ReplayError("Snapshot component ranks must be positive integers or null.")
+    return value
+
+
+def _non_negative_count(value: Any) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise Phase7ReplayError("Snapshot structural feature counts must be non-negative integers.")
+    return value

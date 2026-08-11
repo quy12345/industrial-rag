@@ -22,7 +22,7 @@ def _row(identifier: str, *, language: str = "en", rank: int = 1, wrong: int = 0
     }
 
 
-def _summary(name: str, *, wrong: int, rank_010: int = 6) -> dict:
+def _summary(name: str, *, wrong: int, rank_010: int = 5) -> dict:
     ids = [f"phase7_calibration_{index:03d}" for index in range(1, 13)]
     rows = [
         _row(identifier, language="en" if index % 2 else "vi", wrong=wrong)
@@ -43,6 +43,7 @@ def _summary(name: str, *, wrong: int, rank_010: int = 6) -> dict:
     return {
         "profile": {
             "name": name,
+            "post_rerank_rrf_multiplier": 0.25,
             "post_rerank_role_multiplier": 0.1 if name == "simple" else 0.2,
             "post_rerank_rank_offset": 10,
             "post_rerank_confidence_mode": "strong_only",
@@ -63,5 +64,5 @@ def test_cross_validation_requires_stable_consensus_and_quality_checks_010() -> 
     folds = _cross_validate({"simple": summary})
     assert folds["stable_consensus"] is True
     quality = _quality(summary, stable=True)
-    assert quality["gates"]["calibration_010_rank_at_most_6"] is True
+    assert quality["gates"]["calibration_010_rank_at_most_5"] is True
     assert quality["overall_pass"] is True

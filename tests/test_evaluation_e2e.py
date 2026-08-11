@@ -73,11 +73,16 @@ def _item(*, answerable: bool = True, phrase_mode: str = "all") -> Phase7Dataset
 
 
 def _execution(
-    *, final: list[RetrievalCandidate], pool: list[RetrievalCandidate], abstained: bool = False
+    *,
+    final: list[RetrievalCandidate],
+    pool: list[RetrievalCandidate],
+    abstained: bool = False,
+    evidence: list[RetrievalCandidate] | None = None,
 ) -> QueryExecution:
+    actual_evidence = evidence if evidence is not None else final
     citations = []
     if not abstained:
-        candidate = final[0]
+        candidate = actual_evidence[0]
         citations = [
             Citation(
                 chunk_id=candidate.chunk_id,
@@ -99,6 +104,7 @@ def _execution(
         usage=TokenUsage(10, 2, 1),
         candidates=tuple(final),
         candidate_pool=tuple(pool),
+        evidence_candidates=tuple(actual_evidence),
     )
 
 
@@ -125,6 +131,38 @@ def test_scores_direct_evidence_and_candidate_miss_without_page_fallback() -> No
         }
     ]
     assert record["qrel_final_diagnostics"] == []
+
+
+def test_scoring_distinguishes_full_ranking_from_actual_generation_evidence() -> None:
+    qrel = _candidate("qrel")
+    record = score_phase7_execution(
+        _item(),
+        _execution(
+            final=[_candidate("other"), qrel],
+            pool=[_candidate("other"), qrel],
+            evidence=[qrel],
+        ),
+    )
+    assert record["ranked_direct_evidence_rank"] == 2
+    assert record["direct_evidence_rank"] == 1
+    assert record["evidence_candidate_ids"] == ["qrel"]
+    assert record["citation_ids_in_final_candidates"] is True
+
+
+def test_full_rank_six_excluded_from_actual_top_five_is_a_top5_miss() -> None:
+    leading = [_candidate(f"other-{index}") for index in range(1, 6)]
+    qrel = _candidate("qrel")
+    record = score_phase7_execution(
+        _item(),
+        _execution(
+            final=[*leading, qrel],
+            pool=[*leading, qrel],
+            evidence=leading,
+        ),
+    )
+    assert record["ranked_direct_evidence_rank"] == 6
+    assert record["direct_evidence_rank"] is None
+    assert record["failure_class"] == "reranker_miss_top5"
 
 
 def test_aggregate_reports_retrieval_citations_abstention_and_latency() -> None:
@@ -232,7 +270,7 @@ def test_text_fact_is_order_insensitive_but_strict_phrase_remains_diagnostic() -
     )
     assert result["deterministic_matched"] is True
     assert result["strict_phrase_matched"] is False
-    assert result["matcher"] == "text_alias_token_set_v1"
+    assert result["matcher"] == "text_alias_token_set_v2"
 
 
 def test_typed_numeric_identifier_and_required_token_group_matchers() -> None:
@@ -281,6 +319,111 @@ def test_typed_numeric_identifier_and_required_token_group_matchers() -> None:
     assert result["strict_phrase_matched"] is False
 
 
+@pytest.mark.parametrize(
+    ("expected", "answer"),
+    [
+        ("block", "The guard is blocked."),
+        ("contact", "Inspect all contacts."),
+        ("install", "The unit is installed."),
+        ("secure", "The cover is secured."),
+    ],
+)
+def test_text_fact_accepts_only_bounded_regular_inflections(expected, answer) -> None:
+    fact = ExpectedAnswerFact(id="lexical", aliases=[expected])
+    result = score_expected_answer_fact(fact, answer)
+    assert result["deterministic_matched"] is True
+    assert result["match_mode"] == "inflection"
+
+
+def test_text_inflection_does_not_use_arbitrary_prefix_matching() -> None:
+    fact = ExpectedAnswerFact(id="mode", aliases=["MODE"])
+    assert score_expected_answer_fact(fact, "Select the model.")[
+        "deterministic_matched"
+    ] is False
+
+
+def test_typed_boundaries_reject_identifier_substrings_wrong_value_unit_and_sign() -> None:
+    identifier = ExpectedAnswerFact(
+        id="menu",
+        aliases=["rEF"],
+        type="identifier",
+        acceptable_values=["rEF"],
+    )
+    assert score_expected_answer_fact(identifier, "Open rEF.")["deterministic_matched"]
+    assert not score_expected_answer_fact(identifier, "Open prEFix.")[
+        "deterministic_matched"
+    ]
+
+    voltage = ExpectedAnswerFact(
+        id="voltage",
+        aliases=["24 VDC"],
+        type="numeric_unit",
+        value="24",
+        unit="VDC",
+    )
+    for invalid in ("124 VDC", "24 VAC", "-24 VDC"):
+        assert not score_expected_answer_fact(voltage, invalid)["deterministic_matched"]
+    negative_voltage = ExpectedAnswerFact(
+        id="negative-voltage",
+        aliases=["-24 VDC"],
+        type="numeric_unit",
+        value="-24",
+        unit="VDC",
+    )
+    assert score_expected_answer_fact(negative_voltage, "-24 VDC")["deterministic_matched"]
+    assert not score_expected_answer_fact(negative_voltage, "--24 VDC")[
+        "deterministic_matched"
+    ]
+
+
+def test_multiword_text_alternative_preserves_internal_order() -> None:
+    fact = ExpectedAnswerFact(
+        id="shaft",
+        aliases=["motor shaft"],
+        required_token_groups=[["motor shaft"]],
+    )
+    assert score_expected_answer_fact(fact, "Inspect the motor shaft.")[
+        "deterministic_matched"
+    ]
+    assert not score_expected_answer_fact(fact, "Inspect the shaft motor.")[
+        "deterministic_matched"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("answer", "matched", "polarity"),
+    [
+        ("No hazards remain; protective equipment is installed and closed.", True, "positive"),
+        ("Protective equipment is not installed.", False, "negative"),
+        ("Do not verify that protective equipment is installed.", False, "negative"),
+        ("Not only installed but also closed protective equipment.", True, "positive"),
+        ("It was not installed before; protective equipment is now installed.", True, "positive"),
+        ("Protective equipment is not never installed.", False, "ambiguous"),
+        ("The motor is not energized; protective equipment is installed.", True, "positive"),
+    ],
+)
+def test_span_aware_negation_policy(answer, matched, polarity) -> None:
+    fact = ExpectedAnswerFact(
+        id="guard",
+        aliases=["protective equipment installed"],
+        required_token_groups=[["protective equipment"], ["installed"]],
+    )
+    result = score_expected_answer_fact(fact, answer)
+    assert result["deterministic_matched"] is matched
+    assert result["polarity"] == polarity
+
+
+def test_vietnamese_negation_is_boundary_aware() -> None:
+    fact = ExpectedAnswerFact(
+        id="installation",
+        aliases=["thiết bị lắp đặt"],
+        required_token_groups=[["thiết bị"], ["lắp đặt"]],
+    )
+    result = score_expected_answer_fact(fact, "Thiết bị chưa được lắp đặt.")
+    assert result["deterministic_matched"] is False
+    assert result["polarity"] == "negative"
+
+
 def test_fact_matcher_rejects_plain_negation_even_when_alias_tokens_are_present() -> None:
     fact = ExpectedAnswerFact(
         id="disconnect-power",
@@ -288,7 +431,7 @@ def test_fact_matcher_rejects_plain_negation_even_when_alias_tokens_are_present(
     )
     result = score_expected_answer_fact(fact, "Do not disconnect all power before electrical work.")
     assert result["deterministic_matched"] is False
-    assert result["matcher"] == "text_alias_token_set_v1_negation_guard_v1"
+    assert result["matcher"] == "text_alias_token_set_v2_negation_guard_v2"
 
 
 def test_document_contamination_metrics_and_gate_are_explicit() -> None:
@@ -311,7 +454,7 @@ def test_document_contamination_metrics_and_gate_are_explicit() -> None:
     assert gates["gates"]["wrong_document_citations"]["passed"] is False
 
 
-def test_phase7_v2_cli_preserves_historical_artifact_paths(monkeypatch) -> None:
+def test_phase7_v5_cli_uses_new_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -323,8 +466,8 @@ def test_phase7_v2_cli_preserves_historical_artifact_paths(monkeypatch) -> None:
         ],
     )
     args = evaluate_phase7_e2e._parse_args()
-    assert args.output.name == "phase-7-calibration-e2e-v3-phase74.json"
-    assert args.checkpoint.name == "phase-7-calibration-e2e-v3-phase74-checkpoint.jsonl"
+    assert args.output.name == "phase-7-calibration-e2e-v5.json"
+    assert args.checkpoint.name == "phase-7-calibration-e2e-v5-checkpoint.jsonl"
     settings = evaluate_phase7_e2e._phase7_settings(evaluate_phase7_e2e.Settings())
     assert settings.rerank_deduplicate_content is True
     assert settings.dense_candidate_limit == 60
@@ -342,10 +485,69 @@ def test_provider_execution_requires_dataset_specific_approval() -> None:
             provider_approval_token=evaluate_phase7_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
         )
     )
-    with pytest.raises(SystemExit, match="missing or invalid"):
+    with pytest.raises(SystemExit, match="BLOCKED_GOVERNANCE"):
         evaluate_phase7_e2e._validate_execution_approval(
             SimpleNamespace(
                 dataset="test",
-                provider_approval_token=evaluate_phase7_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
+                provider_approval_token=evaluate_phase7_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
             )
         )
+
+
+def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
+    opened = []
+    approved = SimpleNamespace(review_status="approved")
+
+    def fake_read(path):
+        opened.append(path)
+        if path == "poison-held-out":
+            raise AssertionError("held-out path was opened")
+        return [approved]
+
+    monkeypatch.setattr(evaluate_phase7_e2e, "read_phase7_dataset", fake_read)
+    monkeypatch.setattr(
+        evaluate_phase7_e2e,
+        "validate_phase7_dataset",
+        lambda dataset, chunks, *, kind: {"kind": kind},
+    )
+    monkeypatch.setattr(
+        evaluate_phase7_e2e,
+        "_validate_evaluation_manifest",
+        lambda path, chunks, dataset, *, kind: {"test_dataset_sha256": "a" * 64},
+    )
+    args = SimpleNamespace(
+        dataset="calibration",
+        calibration="active-calibration",
+        test="poison-held-out",
+        manifest="manifest",
+    )
+    dataset, validation, _ = evaluate_phase7_e2e._load_selected_dataset(args, [])
+    assert dataset == [approved]
+    assert validation == {"kind": "calibration"}
+    assert opened == ["active-calibration"]
+
+
+def test_item_id_is_calibration_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_phase7_e2e",
+            "--dataset",
+            "test",
+            "--item-id",
+            "phase7_test_001",
+            "--provider-approval-token",
+            evaluate_phase7_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        ],
+    )
+    with pytest.raises(SystemExit):
+        evaluate_phase7_e2e._parse_args()
+
+
+def test_checkpoint_fails_closed_when_provider_identity_changes(tmp_path) -> None:
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    identity = {"generation_configuration": {"temperature": 0.0}}
+    evaluate_phase7_e2e._write_checkpoint(checkpoint, identity, [])
+    changed = {"generation_configuration": {"temperature": 0.1}}
+    with pytest.raises(RuntimeError, match="different frozen run"):
+        evaluate_phase7_e2e._load_checkpoint(checkpoint, changed)

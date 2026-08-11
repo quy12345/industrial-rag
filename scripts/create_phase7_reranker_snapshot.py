@@ -9,20 +9,28 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
+import json
 import math
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.content_identity import evidence_content_fingerprint
 from app.evaluation import load_frozen_chunks
 from app.phase7 import (
     dataset_sha256,
     read_phase7_dataset,
-    validate_phase7_datasets,
+    validate_phase7_dataset,
     write_json_atomic,
 )
-from app.phase7_optimization import QUERY_ROLE_PROFILE, infer_query_role
+from app.phase7_optimization import (
+    LIST_COMPLETENESS_PROFILE,
+    QUERY_ROLE_PROFILE,
+    infer_list_intent,
+    infer_query_role,
+    list_completeness_features,
+)
 from app.reranking import PHASE7_CANDIDATE_TEXT_FORMAT, execute_rerank
 from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, build_union_rerank_runtime
 
@@ -30,20 +38,26 @@ from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, build_union_rerank_
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--calibration", type=Path, default=Path("data/eval/phase7/calibration.jsonl")
+        "--calibration", type=Path, default=Path("data/eval/phase7/calibration-v3.jsonl")
     )
-    parser.add_argument("--test", type=Path, default=Path("data/eval/phase7/test.jsonl"))
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("artifacts/metrics/phase-7-evaluation-manifest-v3.json"),
+    )
     parser.add_argument("--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl"))
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-reranker-snapshot-v1.json"),
+        default=Path("artifacts/metrics/phase-7-reranker-snapshot-v2.json"),
     )
     args = parser.parse_args()
 
     calibration = read_phase7_dataset(args.calibration)
-    held_out = read_phase7_dataset(args.test)
-    validation = validate_phase7_datasets(calibration, held_out, load_frozen_chunks(args.chunks))
+    validation = validate_phase7_dataset(
+        calibration, load_frozen_chunks(args.chunks), kind="calibration"
+    )
+    held_out_hash = _sealed_held_out_hash(args.manifest)
     selected = [item for item in calibration if item.answerable]
     settings = _phase7_settings(Settings())
     pipeline, runtime = build_union_rerank_runtime(settings, contract=PHASE7_RETRIEVAL_CONTRACT)
@@ -58,8 +72,13 @@ def main() -> int:
             batch_size=pipeline.rerank_batch_size,
         )
         inference = infer_query_role(item.question)
+        list_intent = infer_list_intent(item.question)
         candidates = [
-            _candidate_payload(candidate) for candidate in execution.candidates_after_rerank
+            _candidate_payload(
+                candidate,
+                technical_identifiers=list_intent.technical_identifiers,
+            )
+            for candidate in execution.candidates_after_rerank
         ]
         rows.append(
             {
@@ -69,22 +88,26 @@ def main() -> int:
                 "query_role": inference.role,
                 "query_role_confidence": inference.confidence,
                 "query_role_cue_ids": list(inference.cue_ids),
+                "list_intent_enabled": list_intent.enabled,
+                "list_intent_cue_ids": list(list_intent.cue_ids),
+                "query_technical_identifiers": list(list_intent.technical_identifiers),
                 "candidates": candidates,
             }
         )
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "timestamp": datetime.now(UTC).isoformat(),
         "scope": "approved answerable calibration rows only",
         "provider_calls": 0,
         "held_out_queries_executed": 0,
         "calibration_dataset_sha256": dataset_sha256(calibration),
-        "held_out_dataset_sha256": dataset_sha256(held_out),
+        "held_out_dataset_sha256": held_out_hash,
         "corpus": validation["corpus"],
         "runtime": runtime,
         "runtime_source_sha256": _file_sha256(Path("app/retrieval_runtime.py")),
         "candidate_text_format": PHASE7_CANDIDATE_TEXT_FORMAT,
         "query_role_profile": QUERY_ROLE_PROFILE,
+        "list_completeness_profile": LIST_COMPLETENESS_PROFILE,
         "libraries": _libraries(),
         "per_query": rows,
         "sanitization": {
@@ -98,7 +121,9 @@ def main() -> int:
     return 0
 
 
-def _candidate_payload(candidate: Any) -> dict[str, Any]:
+def _candidate_payload(
+    candidate: Any, *, technical_identifiers: tuple[str, ...]
+) -> dict[str, Any]:
     score = candidate.rerank_score
     rank = candidate.rerank_rank
     document_role = candidate.metadata.get("document_role")
@@ -112,11 +137,16 @@ def _candidate_payload(candidate: Any) -> dict[str, Any]:
         "chunk_id": candidate.chunk_id,
         "document_id": candidate.document_id,
         "document_role": document_role,
+        "content_fingerprint_sha256": evidence_content_fingerprint(candidate.text),
         "dense_rank": candidate.dense_rank,
         "sparse_rank": candidate.sparse_rank,
         "rrf_rank": candidate.rrf_rank,
         "cross_encoder_rank": rank,
         "rerank_score": score,
+        **list_completeness_features(
+            candidate.text,
+            technical_identifiers=technical_identifiers,
+        ),
     }
 
 
@@ -144,6 +174,17 @@ def _file_sha256(path: Path) -> str:
 def _libraries() -> dict[str, str]:
     names = ("fastembed", "onnxruntime", "qdrant-client")
     return {name: importlib.metadata.version(name) for name in names}
+
+
+def _sealed_held_out_hash(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Unable to read the frozen Phase 7 evaluation manifest.") from exc
+    value = payload.get("test_dataset_sha256")
+    if not isinstance(value, str) or len(value) != 64:
+        raise RuntimeError("Phase 7 manifest has no valid sealed held-out hash.")
+    return value
 
 
 if __name__ == "__main__":

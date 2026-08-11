@@ -383,11 +383,17 @@ def build_union_rerank_runtime(
                     "post_rerank_role_multiplier": (
                         contract.phase7_fusion_profile.post_rerank_role_multiplier
                     ),
+                    "post_rerank_rrf_multiplier": (
+                        contract.phase7_fusion_profile.post_rerank_rrf_multiplier
+                    ),
                     "post_rerank_rank_offset": (
                         contract.phase7_fusion_profile.post_rerank_rank_offset
                     ),
                     "post_rerank_confidence_mode": (
                         contract.phase7_fusion_profile.post_rerank_confidence_mode
+                    ),
+                    "list_completeness_enabled": (
+                        contract.phase7_fusion_profile.list_completeness_enabled
                     ),
                 }
             ),

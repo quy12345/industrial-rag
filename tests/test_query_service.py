@@ -130,6 +130,32 @@ def test_execution_keeps_full_final_and_pre_rerank_candidates_for_evaluation() -
         "final-1",
         "final-2",
     ]
+    assert [candidate.chunk_id for candidate in execution.evidence_candidates] == ["final-1"]
+
+
+def test_exact_cross_document_duplicate_is_removed_before_top_k() -> None:
+    programming = _candidate(
+        "programming-copy", document_id="programming", text="Disconnect before wiring."
+    ).model_copy(update={"metadata": {"document_role": "programming"}})
+    installation = _candidate(
+        "installation-copy", document_id="installation", text="Disconnect before wiring."
+    ).model_copy(update={"metadata": {"document_role": "installation"}})
+    unique = _candidate(
+        "unique", document_id="installation", text="Use terminal X1."
+    ).model_copy(update={"metadata": {"document_role": "installation"}})
+    execution = _service(FakeRetriever([programming, installation, unique])).execute(
+        question="Which wiring terminal is required?", document_id=None, top_k=2
+    )
+    assert [candidate.chunk_id for candidate in execution.candidates] == [
+        "programming-copy",
+        "installation-copy",
+        "unique",
+    ]
+    assert [candidate.chunk_id for candidate in execution.evidence_candidates] == [
+        "installation-copy",
+        "unique",
+    ]
+    assert execution.evidence_duplicate_groups[0].representative_chunk_id == "installation-copy"
 
 
 @pytest.mark.parametrize(

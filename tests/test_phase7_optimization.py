@@ -8,8 +8,11 @@ from app.models import RetrievalCandidate
 from app.phase7_optimization import (
     Phase7FusionProfile,
     Phase7OptimizationError,
+    apply_list_completeness_from_metadata,
     apply_role_aware_rank_fusion,
+    infer_list_intent,
     infer_query_role,
+    list_completeness_features,
     select_coverage_preserving_candidates,
 )
 from scripts.calibrate_phase7_weighted_fusion import _select_pareto_profiles
@@ -65,6 +68,63 @@ def test_query_role_is_bilingual_boundary_safe_and_confidence_aware() -> None:
     assert infer_query_role("Which MODE parameter controls power protection?").role == "neutral"
 
 
+def test_list_intent_is_bilingual_and_uses_only_boundary_safe_query_identifiers() -> None:
+    inferred = infer_list_intent("Phim MODE chuyen giua nhung nhom menu nao?")
+    assert inferred.enabled is True
+    assert inferred.technical_identifiers == ("mode",)
+    assert infer_list_intent("How does MODE work?").enabled is False
+    assert infer_list_intent("Which remodel groups are available?").technical_identifiers == ()
+
+
+def test_list_completeness_counts_bracketed_pairs_and_query_identifiers() -> None:
+    features = list_completeness_features(
+        "MODE selects [Reference speed] rEF and [Monitoring] MON.",
+        technical_identifiers=("mode",),
+    )
+    assert features == {
+        "query_identifier_match_count": 1,
+        "bracketed_label_code_pair_count": 2,
+    }
+
+
+def test_registered_list_fallback_only_reorders_ranks_five_to_ten() -> None:
+    candidates = [
+        _candidate(f"chunk-{rank}").model_copy(
+            update={
+                "rerank_rank": rank,
+                "rerank_score": float(100 - rank),
+                "score": float(100 - rank),
+                "metadata": {
+                    "document_role": "programming",
+                    "query_identifier_match_count": int(rank == 6),
+                    "bracketed_label_code_pair_count": 3 if rank == 6 else 10 if rank == 5 else 0,
+                },
+            }
+        )
+        for rank in range(1, 11)
+    ]
+    reordered = apply_list_completeness_from_metadata(candidates, enabled=True)
+    assert [candidate.chunk_id for candidate in reordered[:6]] == [
+        "chunk-1",
+        "chunk-2",
+        "chunk-3",
+        "chunk-4",
+        "chunk-6",
+        "chunk-5",
+    ]
+    assert reordered[4].rerank_score == 94.0
+    assert reordered[4].metadata["pre_list_completeness_rank"] == 6
+
+
+def test_list_fallback_rejects_non_contiguous_ranks() -> None:
+    candidates = [
+        _candidate("a").model_copy(update={"rerank_rank": 1}),
+        _candidate("b").model_copy(update={"rerank_rank": 3}),
+    ]
+    with pytest.raises(Phase7OptimizationError, match="contiguous one-based"):
+        apply_list_completeness_from_metadata(candidates, enabled=True)
+
+
 def test_selector_preserves_sparse_tail_evidence_inside_fixed_budget() -> None:
     dense = [_candidate("dense-1", dense_rank=1), _candidate("dense-2", dense_rank=2)]
     sparse = [
@@ -101,6 +161,36 @@ def test_role_prior_is_rank_only_and_preserves_cross_encoder_score() -> None:
     assert result[0].metadata["cross_encoder_rank"] == 2
     assert result[0].metadata["role_prior_score"] > 0
     assert result[0].score != result[0].rerank_score
+
+
+def test_post_rerank_rrf_prior_uses_only_one_based_ranks() -> None:
+    ce_first = _candidate("ce-first", role="programming").model_copy(
+        update={"rerank_rank": 1, "rerank_score": 99.0, "score": 99.0, "rrf_rank": 30}
+    )
+    rrf_first = _candidate("rrf-first", role="programming").model_copy(
+        update={"rerank_rank": 2, "rerank_score": -99.0, "score": -99.0, "rrf_rank": 1}
+    )
+    result = apply_role_aware_rank_fusion(
+        [ce_first, rrf_first],
+        query_role="neutral",
+        role_multiplier=0.0,
+        rrf_rank_multiplier=2.0,
+        rank_offset=10,
+    )
+    assert [candidate.chunk_id for candidate in result] == ["rrf-first", "ce-first"]
+    assert result[0].rerank_score == -99.0
+    assert result[0].metadata["rrf_rank_prior_score"] == pytest.approx(2 / 11)
+
+
+def test_post_rerank_rrf_prior_requires_a_positive_component_rank() -> None:
+    candidate = _candidate("missing-rank").model_copy(update={"rerank_rank": 1})
+    with pytest.raises(Phase7OptimizationError, match="one-based pre-rerank RRF"):
+        apply_role_aware_rank_fusion(
+            [candidate],
+            query_role="neutral",
+            role_multiplier=0.0,
+            rrf_rank_multiplier=0.25,
+        )
 
 
 def test_weak_and_neutral_roles_do_not_receive_strong_only_prior() -> None:
@@ -140,6 +230,8 @@ def test_selector_fails_instead_of_silently_truncating_mandatory_reserves() -> N
         {"dense_weight": 0.0},
         {"fusion_role_multiplier": 0.3},
         {"post_rerank_role_multiplier": 0.6},
+        {"post_rerank_rrf_multiplier": 2.1},
+        {"list_completeness_enabled": "yes"},
         {"post_rerank_rank_offset": 0},
         {"dense_reserve": -1},
     ],

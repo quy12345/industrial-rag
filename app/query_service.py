@@ -13,6 +13,11 @@ from typing import Literal
 from app.citations import build_citations, validate_generated_answer
 from app.config import Settings, get_settings
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
+from app.evidence_selection import (
+    EvidenceDuplicateGroup,
+    EvidenceSelectionError,
+    select_evidence_candidates,
+)
 from app.generation import (
     AnswerGenerator,
     LangChainOpenAIGenerator,
@@ -72,6 +77,9 @@ class QueryExecution:
     usage: TokenUsage | None
     candidates: tuple[RetrievalCandidate, ...] = ()
     candidate_pool: tuple[RetrievalCandidate, ...] = ()
+    evidence_candidates: tuple[RetrievalCandidate, ...] = ()
+    evidence_duplicate_groups: tuple[EvidenceDuplicateGroup, ...] = ()
+    generation_attempts: int = 0
 
 
 class EvidenceGate:
@@ -121,8 +129,20 @@ class QueryService:
         total_started = perf_counter()
         self.generator.ensure_configured()
         retrieved = self.retriever.retrieve(question, document_id=document_id)
-        candidates = retrieved.candidates[:top_k]
         candidate_pool = tuple(retrieved.candidate_pool or retrieved.candidates)
+        try:
+            selection = select_evidence_candidates(question, retrieved.candidates, top_k=top_k)
+        except EvidenceSelectionError:
+            return self._abstained_execution(
+                reason="invalid_candidate_metadata",
+                total_started=total_started,
+                retrieval_ms=retrieved.retrieval_ms,
+                rerank_ms=retrieved.rerank_ms,
+                gate_ms=0.0,
+                candidates=tuple(retrieved.candidates),
+                candidate_pool=candidate_pool,
+            )
+        candidates = list(selection.candidates)
 
         gate_started = perf_counter()
         gate = self.evidence_gate.evaluate(candidates, requested_document_id=document_id)
@@ -136,6 +156,8 @@ class QueryService:
                 gate_ms=gate_ms,
                 candidates=tuple(retrieved.candidates),
                 candidate_pool=candidate_pool,
+                evidence_candidates=selection.candidates,
+                evidence_duplicate_groups=selection.duplicate_groups,
             )
 
         try:
@@ -151,6 +173,8 @@ class QueryService:
                 gate_ms=gate_ms,
                 candidates=tuple(retrieved.candidates),
                 candidate_pool=candidate_pool,
+                evidence_candidates=selection.candidates,
+                evidence_duplicate_groups=selection.duplicate_groups,
             )
 
         generation_ms = 0.0
@@ -178,6 +202,9 @@ class QueryService:
                     usage=usage,
                     candidates=tuple(retrieved.candidates),
                     candidate_pool=candidate_pool,
+                    evidence_candidates=selection.candidates,
+                    evidence_duplicate_groups=selection.duplicate_groups,
+                    generation_attempts=attempt + 1,
                 )
             except GenerationValidationError as exc:
                 generation_ms += (perf_counter() - generation_started) * 1000
@@ -195,6 +222,9 @@ class QueryService:
                     usage=usage,
                     candidates=tuple(retrieved.candidates),
                     candidate_pool=candidate_pool,
+                    evidence_candidates=selection.candidates,
+                    evidence_duplicate_groups=selection.duplicate_groups,
+                    generation_attempts=attempt + 1,
                 )
             generation_ms += (perf_counter() - generation_started) * 1000
             usage = _combine_usage(usage, generated.usage)
@@ -217,6 +247,9 @@ class QueryService:
                         usage=usage,
                         candidates=tuple(retrieved.candidates),
                         candidate_pool=candidate_pool,
+                        evidence_candidates=selection.candidates,
+                        evidence_duplicate_groups=selection.duplicate_groups,
+                        generation_attempts=attempt + 1,
                     )
                 citations = build_citations(
                     validated.source_ids,
@@ -242,6 +275,9 @@ class QueryService:
                     usage=usage,
                     candidates=tuple(retrieved.candidates),
                     candidate_pool=candidate_pool,
+                    evidence_candidates=selection.candidates,
+                    evidence_duplicate_groups=selection.duplicate_groups,
+                    generation_attempts=attempt + 1,
                 )
             citation_ms += (perf_counter() - citation_started) * 1000
             response = QueryResponse(
@@ -265,6 +301,9 @@ class QueryService:
                 usage=usage,
                 candidates=tuple(retrieved.candidates),
                 candidate_pool=candidate_pool,
+                evidence_candidates=selection.candidates,
+                evidence_duplicate_groups=selection.duplicate_groups,
+                generation_attempts=attempt + 1,
             )
 
         raise RuntimeError("Correction loop terminated without a query result.")
@@ -282,6 +321,9 @@ class QueryService:
         usage: TokenUsage | None = None,
         candidates: tuple[RetrievalCandidate, ...] = (),
         candidate_pool: tuple[RetrievalCandidate, ...] = (),
+        evidence_candidates: tuple[RetrievalCandidate, ...] = (),
+        evidence_duplicate_groups: tuple[EvidenceDuplicateGroup, ...] = (),
+        generation_attempts: int = 0,
     ) -> QueryExecution:
         timings = _timings(
             total_started=total_started,
@@ -303,6 +345,9 @@ class QueryService:
             usage=usage,
             candidates=candidates,
             candidate_pool=candidate_pool,
+            evidence_candidates=evidence_candidates,
+            evidence_duplicate_groups=evidence_duplicate_groups,
+            generation_attempts=generation_attempts,
         )
 
 

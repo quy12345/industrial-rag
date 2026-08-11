@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 7.5 — provider-free calibration closure PASS; provider approval required**
+**Phase 7 calibration closure PARTIAL — held-out BLOCKED_GOVERNANCE**
 
 Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
 `GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
@@ -11,10 +11,17 @@ referential citation validation, and deterministic citations built from Qdrant p
 top-20 without reranking remains the explicit operational rollback.
 
 An interactive Gemini request has returned an answer through the full API path. Phase 7 added a
-separate two-manual ATV320 corpus and ran calibration once. That run exposed an evaluation-contract
-bug and low candidate-qrel recall, so the held-out benchmark remains unrun and the system is not
-called production-ready. Dataset v2 now separates reviewed answer facts from evidence phrases and
-adds exact-content qrel closure; it requires a new human review before any provider benchmark.
+separate two-manual ATV320 corpus and multiple calibration-only diagnostics. The latest closure fixes
+confirmed evaluator false negatives, seals calibration loading from held-out access, and removes
+exact cross-document duplicate evidence before the generation cutoff. It does not pass the final
+calibration gate: item 010 still has direct evidence at full rank 6 and therefore outside top 5, while
+the historical item-005 answer cannot be reconstructed from sanitized artifacts. No new provider run
+was authorized in this closure.
+
+The current held-out set is also `BLOCKED_GOVERNANCE`: historical tracked documentation mirrored its
+content and the old calibration CLI parsed both splits. The current CLI no longer opens the held-out
+JSONL in calibration mode and now refuses held-out execution, but Git history cannot be made unseen.
+Use a new access-controlled final set or explicitly downgrade the current one to diagnostic status.
 
 The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, direct-pinned FastEmbed
 `0.8.0`,
@@ -54,10 +61,10 @@ Phase 7 keeps the legacy 99-chunk development collections untouched. The new ATV
 points with stable-ID fingerprint
 `2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
 
-The calibration set has 12 answerable and 8 unanswerable cases. The separate held-out set has 30
-answerable and 15 unanswerable cases. Dataset v2 is source-reviewed and frozen: all 42 answerable
-rows have language-appropriate `expected_answer_facts`, all 65 rows are approved, and the held-out
-outputs remain unseen. Verify annotations locally without models or Qdrant:
+The active calibration-v3 set has 12 answerable and 8 unanswerable cases. The current held-out set
+has 30 answerable and 15 unanswerable cases. The files remain frozen, but the held-out split must not
+be described as statistically unseen because of historical repository exposure. Verify the approved
+dataset contract locally without models or Qdrant:
 
 ```powershell
 python -m scripts.validate_phase7_dataset
@@ -71,18 +78,19 @@ python -m scripts.freeze_phase7_dataset `
   --approval-token "APPROVE PHASE 7 DATASET V2"
 ```
 
-The real end-to-end evaluator refuses draft datasets. After review and an explicit v2 freeze, it
-validates dataset hashes and live Qdrant hashes before startup, then writes a sanitized resumable
-artifact containing only IDs/ranks/metrics:
+The real end-to-end evaluator refuses draft datasets. Calibration mode validates only
+`calibration-v3.jsonl`, frozen chunks, and manifest metadata; it obtains the held-out hash from the
+manifest without opening `test.jsonl`. It then validates live Qdrant hashes and writes a sanitized
+resumable artifact containing only IDs/ranks/metrics:
 
 ```powershell
-python -m scripts.evaluate_phase7_e2e --dataset calibration
-python -m scripts.evaluate_phase7_e2e --dataset test
+python -m scripts.evaluate_phase7_e2e --dataset calibration `
+  --provider-approval-token "APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS"
 ```
 
-These commands send the selected question and retrieved manual evidence to the configured generation
-provider. They require separate corpus-owner approval for that external data transfer. Run calibration
-first and do not tune using the held-out test set.
+This command sends calibration questions and retrieved manual evidence to the configured generation
+provider. Do not run it until the code is reviewed and the exact new approval is granted. Held-out
+execution is currently refused with `BLOCKED_GOVERNANCE`, even if the historical token is supplied.
 
 The historical dataset-v1 Gemini calibration on 2026-08-09 completed all 20 records but failed its
 quality gate: Hit@5 `0.583`, MRR@5 `0.444`, direct-evidence citation rate `0.500`, and total p95
@@ -91,14 +99,14 @@ incorrectly compared Vietnamese answers with English evidence wording. It must n
 the dataset-v2 answer-fact metric. The held-out benchmark has not been run; see
 `docs/walkthrough-phase-7.md`.
 
-The current evaluator writes `phase-7-<split>-e2e-v2-diagnostics.json` and a separate diagnostics
-checkpoint, so rerunning it cannot overwrite either dataset-v1 or initial dataset-v2 evidence.
+The sealed evaluator now writes `phase-7-calibration-e2e-v5.json` and a separate v5 checkpoint, so
+rerunning it cannot overwrite v1--v4 evidence. Its identity includes prompt/evaluator/runtime hashes,
+provider settings, library versions, top-k, and correction count.
 
-Frozen dataset-v2 hashes are calibration
-`7ae670a705dcda2ff63f7e16f67bd8c308b5f58079b4a4b3066dd0f15d9f3999` and held-out
-`68c9c52e745a7616a869a2f55024964501dfb0cb537bbe6ff91dac5fbcae3c54`. Calibration questions
-011/012 were corrected from an unrelated page-355 qrel to direct evidence on page 45 during source
-review. No retrieval result or provider output was used for that correction.
+The active calibration-v3 SHA-256 is
+`8e3e7798d667cccef0b3ac16aa292fb1f18381dc6e754a7b9dace1250755fa46`. The manifest records held-out
+SHA-256 `68c9c52e745a7616a869a2f55024964501dfb0cb537bbe6ff91dac5fbcae3c54`; calibration code reads this
+hash from the manifest and does not open the held-out dataset.
 
 The historical dataset-v2 diagnostics calibration completed all 20 rows with candidate recall/Hit@5
 `0.667`, strict contiguous fact accuracy `0.500`, direct-evidence citation rate `0.667`, and
@@ -125,16 +133,23 @@ separate one-pass closure run measures rerank p95 `9.706 s`; it is not statistic
 the repeated CPU benchmark. The corpus, datasets, collections, MiniLM, Jina, and FastEmbed `0.8.0` remain frozen. Artifacts are
 sanitized and contain zero provider calls and zero held-out questions.
 
-Typed facts remain a review-required calibration-v3 draft: qrels/pages/phrases are preserved, but it
-was frozen after corpus-owner approval without modifying calibration-v2 or held-out. The fresh Gemini
-calibration E2E completed all 20 rows but failed the release gate: typed deterministic fact accuracy
-was `7/12 = 0.583` and two answerable responses cited an additional wrong-document source. Citation
-IDs were valid, direct-evidence citation rate was `0.917`, and abstention precision/recall were both
-`1.000`. Held-out remains sealed. See `docs/walkthrough-phase-7-5.md` for the selected profile,
-replay, CPU methodology, artifact boundaries, and next action.
+Typed calibration-v3 is approved and active; qrels/pages/phrases remain unchanged. Historical
+calibration v4 completed all 20 rows but failed release: deterministic fact accuracy was `8/12`,
+wrong-document citations were `2`, and item 010 direct evidence was excluded by the actual top-5
+generation cutoff. The new generic evaluator makes `block`/`blocked` and `contact`/`contacts` match,
+while identifier, numeric/unit, ordering, sign, and negation controls remain strict. Historical item
+005 remains unknown because v4 intentionally stored no raw answer or match span.
 
-Canonical Python 3.11.15 offline validation: Ruff PASS and pytest `239 passed, 1 warning`. The
-warning is the known third-party Starlette/TestClient deprecation.
+The 2026-08-11 provider-free snapshot-v2/replay tested the registered CE-rank/RRF-rank grid and the
+single `list_completeness_v1` fallback. Neither moves item 010 from full rank 6 into actual evidence
+top 5, so the fallback is not activated and no failed profile becomes a runtime default. Exact
+cross-document duplicate selection does reduce active-profile wrong-document evidence from `8/60`
+to `7/60`, while preserving candidate recall `12/12`, Hit@5 `11/12`, and MRR@5 `0.875`.
+
+Canonical ingestion-container Python 3.11.15 validation: Ruff PASS and pytest
+`279 passed, 1 warning`. The repository `.venv` is Python 3.13.5 and independently produced the same
+result, but it is not the canonical interpreter and was not overwritten. The warning is the known
+third-party Starlette/TestClient deprecation.
 
 Run the provider-free Phase 7.4.1--7.5 diagnostics only after Qdrant and the shared FastEmbed cache are
 available. These commands never call Gemini/OpenAI and never execute held-out questions:
@@ -145,15 +160,14 @@ python -m scripts.evaluate_phase7_retrieval_closure `
   --output artifacts/metrics/phase-7-contamination-closure-v4.json
 python -m scripts.create_phase7_reranker_snapshot
 python -m scripts.calibrate_phase7_role_prior
-python -m scripts.benchmark_phase7_reranker_cpu --stage micro
-python -m scripts.benchmark_phase7_reranker_cpu --stage full
-python -m scripts.freeze_phase7_calibration_v3 `
-  --approval-token "APPROVE PHASE 7 CALIBRATION V3 AND PROVIDER EGRESS"
-python -m scripts.evaluate_phase7_e2e --dataset calibration `
-  --calibration data/eval/phase7/calibration-v3.jsonl `
-  --manifest artifacts/metrics/phase-7-evaluation-manifest-v3.json `
-  --provider-approval-token "APPROVE PHASE 7 CALIBRATION V3 AND PROVIDER EGRESS"
+python -m scripts.generate_phase7_calibration_closure_readiness
 ```
+
+`diagnose_phase7_calibration_005` and full v5 calibration require new, separate provider-egress
+approvals and are intentionally not included in provider-free reproduction. Three full runs must be
+aggregated with `scripts.aggregate_phase7_calibration_stability`; the worst run, not the best run, is
+the release headline. See `docs/walkthrough-phase-7-calibration-closure.md` for the sealed data flow,
+matcher policy, replay evidence, stop decision, artifacts, and governance boundary.
 
 ## Quickstart: khởi động, test, chạy demo và dừng
 
@@ -174,6 +188,7 @@ GEMINI_API_KEY=YOUR_NEW_GEMINI_API_KEY
 GEMINI_MODEL=gemini-3.5-flash-lite
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 GEMINI_REASONING_EFFORT=minimal
+GEMINI_TEMPERATURE=0
 
 OPENAI_MAX_OUTPUT_TOKENS=800
 OPENAI_TIMEOUT_SECONDS=60
@@ -305,6 +320,26 @@ docker compose down
 
 Không dùng `docker compose down -v`, `docker system prune` hoặc `docker volume prune`; các lệnh đó có
 thể xóa Qdrant collection hoặc FastEmbed model cache cần giữ lại.
+
+### Rebuild the tools ingestion image when needed
+
+The `ingestion` Docker target now installs `.[retrieval,ingestion,llm]`. It can therefore run the
+on-demand Phase 7 E2E CLI, which imports `langchain-core` and `langchain-openai`, as well as Docling
+ingestion. This makes only the profile-gated tools image heavier; the API target remains Docling-free.
+
+Run this manually from the repository root after pulling this change. It does not download FastEmbed
+or Jina model weights during the Docker build:
+
+```powershell
+docker compose --progress plain --profile tools build ingestion
+```
+
+The 2026-08-11 rebuilt tools image passed Python 3.11.15 plus Docling/`langchain-core`/
+`langchain-openai` import checks. Docker reports `9.66 GB` total and `9.515 GB` unique disk usage via
+`docker system df -v`; image metadata reports `3,255,679,310` bytes via `docker image inspect`.
+These values use different Docker storage accounting, so both are retained rather than presenting a
+single misleading number. Size optimization is deferred; correctness came first, and no prune was
+run.
 
 ## Ingestion and dense indexing
 
@@ -539,6 +574,7 @@ GEMINI_API_KEY=<YOUR_GEMINI_API_KEY>
 GEMINI_MODEL=gemini-3.5-flash-lite
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 GEMINI_REASONING_EFFORT=minimal
+GEMINI_TEMPERATURE=0
 OPENAI_MAX_OUTPUT_TOKENS=800
 OPENAI_TIMEOUT_SECONDS=60
 OPENAI_MAX_RETRIES=1

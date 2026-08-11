@@ -32,7 +32,9 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM retrieval-runtime AS ingestion
 
-RUN pip install --no-cache-dir ".[retrieval,ingestion]"
+# The on-demand Phase 7 E2E CLI uses the same structured generator as the API.
+# Keep this runtime-only: no model weights are initialized or downloaded at build time.
+RUN pip install --no-cache-dir ".[retrieval,ingestion,llm]"
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends libgl1 libglib2.0-0t64 libxcb1 \

@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.5-flash-lite"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     gemini_reasoning_effort: Literal["minimal", "low", "medium", "high"] = "minimal"
+    gemini_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     openai_max_output_tokens: int = Field(default=800, gt=0, le=4_096)
     openai_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     openai_max_retries: int = Field(default=1, ge=0, le=2)

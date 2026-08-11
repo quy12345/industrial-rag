@@ -14,6 +14,8 @@ def _row(chunk_id: str, rank: int, score: float, role: str = "installation") -> 
         "document_role": role,
         "cross_encoder_rank": rank,
         "rerank_score": score,
+        "query_identifier_match_count": 0,
+        "bracketed_label_code_pair_count": 0,
     }
 
 
