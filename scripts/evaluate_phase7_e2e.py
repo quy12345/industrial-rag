@@ -38,9 +38,13 @@ from app.retrieval_runtime import (
     validate_frozen_runtime,
 )
 
+CALIBRATION_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 CALIBRATION V3 AND PROVIDER EGRESS"
+HELDOUT_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 HELDOUT PROVIDER EGRESS"
+
 
 def main() -> int:
     args = _parse_args()
+    _validate_execution_approval(args)
     calibration = read_phase7_dataset(args.calibration)
     test = read_phase7_dataset(args.test)
     chunks = load_frozen_chunks(args.chunks)
@@ -148,6 +152,11 @@ def _parse_args() -> argparse.Namespace:
         "--manifest", type=Path, default=Path("artifacts/metrics/phase-7-evaluation-manifest.json")
     )
     parser.add_argument("--top-k", type=int, default=5, choices=range(1, 11))
+    parser.add_argument(
+        "--provider-approval-token",
+        required=True,
+        help="Required exact approval before a question/evidence is sent to a provider.",
+    )
     parser.add_argument("--max-queries", type=int, default=None)
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
@@ -163,6 +172,15 @@ def _parse_args() -> argparse.Namespace:
             f"artifacts/metrics/phase-7-{args.dataset}-e2e-v3-phase74-checkpoint.jsonl"
         )
     return args
+
+
+def _validate_execution_approval(args: argparse.Namespace) -> None:
+    if args.dataset == "calibration":
+        expected = CALIBRATION_PROVIDER_APPROVAL_TOKEN
+    else:
+        expected = HELDOUT_PROVIDER_APPROVAL_TOKEN
+    if args.provider_approval_token != expected:
+        raise SystemExit("Phase 7 provider approval token is missing or invalid for this dataset.")
 
 
 def _phase7_settings(settings: Settings) -> Settings:

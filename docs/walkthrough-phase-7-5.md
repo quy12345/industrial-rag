@@ -107,15 +107,20 @@ docker compose config --quiet
 
 ## What is still blocked intentionally
 
-The typed `calibration-v3-draft.jsonl` is not activated yet: its typed facts require separate human
-review even though qrels, pages, and expected phrases are unchanged. Do not edit its ground truth from
-system outputs.
+The typed `calibration-v3-draft.jsonl` was approved into a separate `calibration-v3.jsonl`; it did not
+change calibration-v2, qrels, pages, phrases, chunks, or held-out. The new freezer requires the exact
+calibration/provider approval token and writes a distinct v3 manifest. The held-out file is only read
+for schema/hash validation and is never rewritten.
 
-The next action needs explicit corpus-owner approval to send the 12 answerable and 8 unanswerable
-calibration questions plus selected excerpts to Gemini/OpenAI. Only after that fresh calibration E2E
-passes deterministic fact accuracy, citation validity, document-citation, and abstention gates may a
-new held-out readiness artifact request a separate one-time held-out approval. Phase 7.5 does not run
-a provider or held-out benchmark.
+Gemini 3.5 Flash Lite then completed the approved 20-row calibration E2E. Its sanitized artifact
+reports candidate recall `1.000`, valid citation IDs `1.000`, direct-evidence citation rate `0.917`,
+and abstention precision/recall `1.000`. It still fails release: deterministic typed-fact accuracy is
+`7/12 = 0.583` and two answerable outputs carry a wrong-document citation. No raw question, answer,
+prompt, evidence, or provider response is stored.
+
+Do not run held-out. A new readiness decision is required only after calibration fixes meet all fact,
+citation-document, and abstention gates. The E2E CLI now requires a different held-out provider token,
+so the calibration token cannot authorize it accidentally.
 
 ## Remaining limitations
 

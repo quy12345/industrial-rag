@@ -126,12 +126,14 @@ the repeated CPU benchmark. The corpus, datasets, collections, MiniLM, Jina, and
 sanitized and contain zero provider calls and zero held-out questions.
 
 Typed facts remain a review-required calibration-v3 draft: qrels/pages/phrases are preserved, but it
-is deliberately not active. A fresh calibration E2E run requires separate corpus-owner approval
-because it sends questions and retrieved excerpts to the configured provider. Held-out remains sealed
-until that E2E gate passes. See `docs/walkthrough-phase-7-5.md` for the selected profile, replay,
-CPU methodology, artifact boundaries, and next approval.
+was frozen after corpus-owner approval without modifying calibration-v2 or held-out. The fresh Gemini
+calibration E2E completed all 20 rows but failed the release gate: typed deterministic fact accuracy
+was `7/12 = 0.583` and two answerable responses cited an additional wrong-document source. Citation
+IDs were valid, direct-evidence citation rate was `0.917`, and abstention precision/recall were both
+`1.000`. Held-out remains sealed. See `docs/walkthrough-phase-7-5.md` for the selected profile,
+replay, CPU methodology, artifact boundaries, and next action.
 
-Canonical Python 3.11.15 offline validation: Ruff PASS and pytest `236 passed, 1 warning`. The
+Canonical Python 3.11.15 offline validation: Ruff PASS and pytest `239 passed, 1 warning`. The
 warning is the known third-party Starlette/TestClient deprecation.
 
 Run the provider-free Phase 7.4.1--7.5 diagnostics only after Qdrant and the shared FastEmbed cache are
@@ -145,6 +147,12 @@ python -m scripts.create_phase7_reranker_snapshot
 python -m scripts.calibrate_phase7_role_prior
 python -m scripts.benchmark_phase7_reranker_cpu --stage micro
 python -m scripts.benchmark_phase7_reranker_cpu --stage full
+python -m scripts.freeze_phase7_calibration_v3 `
+  --approval-token "APPROVE PHASE 7 CALIBRATION V3 AND PROVIDER EGRESS"
+python -m scripts.evaluate_phase7_e2e --dataset calibration `
+  --calibration data/eval/phase7/calibration-v3.jsonl `
+  --manifest artifacts/metrics/phase-7-evaluation-manifest-v3.json `
+  --provider-approval-token "APPROVE PHASE 7 CALIBRATION V3 AND PROVIDER EGRESS"
 ```
 
 ## Quickstart: khởi động, test, chạy demo và dừng

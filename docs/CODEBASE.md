@@ -88,8 +88,11 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `scripts/query_smoke.py`: bounded real-provider smoke and sanitized Phase 6 artifact writer.
 - `scripts/audit_phase7_corpus.py`, `scripts/index_phase7_corpus.py`: source audit and guarded
   indexing for the isolated ATV320 collections.
+- `scripts/freeze_phase7_calibration_v3.py`: copies the review-required typed calibration draft to an
+  approved v3 file and manifest only after an exact human token; it cannot modify held-out.
 - `scripts/evaluate_phase7_e2e.py`: resumable integration evaluator that validates the approved
-  manifest and live frozen hash before it sends anything to a provider.
+  manifest and live frozen hash before it sends anything to a provider. Calibration and held-out use
+  distinct provider-approval tokens, so held-out cannot run accidentally after calibration approval.
 - `scripts/calibrate_phase7_retrieval.py`: provider-free, calibration-only dense/sparse 20--60
   union/RRF/expanded-RRF ablation, including the fixed top-30 reranker budget; it never loads the
   cross-encoder or executes held-out queries.
@@ -219,5 +222,5 @@ calls Qdrant, FastEmbed, a reranker, or a generation provider.
 
 Phase 7.4.1--7.5 adds offline Unicode/boundary role-inference, confidence, rank-prior replay,
 malformed-snapshot, CPU-profile selection, fact-readiness, and runtime-readiness tests. Canonical
-Python 3.11.15 validation passes 236 tests with the same one third-party warning; default pytest
+Python 3.11.15 validation passes 239 tests with the same one third-party warning; default pytest
 still performs no network/model/Qdrant call.

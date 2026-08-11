@@ -683,7 +683,7 @@ structured-output details, validation evidence, and rollback.
 - Implemented: multi-document frozen-runtime validation, sanitized resumable E2E scorer, Qdrant
   readiness, request correlation IDs, bounded Qdrant timeout, optional bearer auth, and API Docker
   liveness healthcheck.
-- Current Python 3.11.15 validation: Ruff `PASS`; pytest `236 passed, 1 warning`; Compose config and
+- Current Python 3.11.15 validation: Ruff `PASS`; pytest `239 passed, 1 warning`; Compose config and
   `git diff --check` PASS. The warning is the known third-party Starlette/TestClient deprecation.
 - Historical Gemini dataset-v2 diagnostics calibration completed all 20 rows:
   candidate recall/Hit@5 0.667, MRR@5 0.583, strict answer-fact accuracy 0.500,
@@ -705,9 +705,14 @@ structured-output details, validation evidence, and rollback.
   microbenchmark and three full repetitions of every calibration question. Rerank p95 is `6.996 s`
   and total p95 is `7.027 s`, a 47.8% improvement from the 13.399-second baseline with no quality
   regression. FastEmbed remains direct-pinned at `0.8.0`; no re-index or model/pooling change occurs.
-- Typed calibration-v3 facts are an inactive human-review draft that preserves qrels/pages/phrases.
-  Provider E2E has not run, because it requires a separate data-egress approval. Held-out remains
-  sealed until the fresh calibration fact/citation/abstention gate passes.
+- Before approval, typed calibration-v3 facts were an inactive human-review draft that preserved
+  qrels/pages/phrases. Held-out remains sealed until the fresh calibration fact/citation/abstention
+  gate passes.
+- Calibration-v3 was subsequently frozen after explicit approval and Gemini 3.5 Flash Lite evaluated
+  all 20 calibration rows. It failed the E2E release gate: deterministic fact accuracy `7/12 = 0.583`
+  and wrong-document citations `2`, despite valid citation IDs `100%`, direct-evidence citations
+  `0.917`, and abstention precision/recall `1.000`. Held-out was not executed. The evaluator now
+  requires a dataset-specific provider token; a calibration token cannot authorize held-out.
 - Phase 7 union runtime now supports same-document exact-normalized content deduplication before
   reranking. The setting defaults off globally and is enabled explicitly only by the Phase 7 E2E CLI,
   preserving legacy Phase 5/6 behavior.

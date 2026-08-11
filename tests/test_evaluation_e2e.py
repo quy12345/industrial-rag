@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from app.evaluation_e2e import (
     aggregate_phase7_records,
     evaluate_phase7_quality_gates,
@@ -309,7 +313,14 @@ def test_document_contamination_metrics_and_gate_are_explicit() -> None:
 
 def test_phase7_v2_cli_preserves_historical_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
-        "sys.argv", ["evaluate_phase7_e2e", "--dataset", "calibration"]
+        "sys.argv",
+        [
+            "evaluate_phase7_e2e",
+            "--dataset",
+            "calibration",
+            "--provider-approval-token",
+            evaluate_phase7_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
+        ],
     )
     args = evaluate_phase7_e2e._parse_args()
     assert args.output.name == "phase-7-calibration-e2e-v3-phase74.json"
@@ -318,3 +329,23 @@ def test_phase7_v2_cli_preserves_historical_artifact_paths(monkeypatch) -> None:
     assert settings.rerank_deduplicate_content is True
     assert settings.dense_candidate_limit == 60
     assert settings.sparse_candidate_limit == 40
+
+
+def test_provider_execution_requires_dataset_specific_approval() -> None:
+    with pytest.raises(SystemExit, match="missing or invalid"):
+        evaluate_phase7_e2e._validate_execution_approval(
+            SimpleNamespace(dataset="calibration", provider_approval_token="wrong")
+        )
+    evaluate_phase7_e2e._validate_execution_approval(
+        SimpleNamespace(
+            dataset="calibration",
+            provider_approval_token=evaluate_phase7_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
+        )
+    )
+    with pytest.raises(SystemExit, match="missing or invalid"):
+        evaluate_phase7_e2e._validate_execution_approval(
+            SimpleNamespace(
+                dataset="test",
+                provider_approval_token=evaluate_phase7_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
+            )
+        )
