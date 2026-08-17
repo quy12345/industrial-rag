@@ -52,6 +52,15 @@ def build_readiness(
         and diagnostic.get("run_identity", {}).get("provider_attempts") == 3
         and len(diagnostic.get("attempts", [])) == 3
     )
+    diagnostic_positive = diagnostic_complete and all(
+        attempt.get("status") == "completed"
+        and attempt.get("deterministic_fact_match") is True
+        and all(
+            fact.get("polarity") == "positive"
+            for fact in attempt.get("fact_results", [])
+        )
+        for attempt in diagnostic.get("attempts", [])
+    )
     stability_pass = bool(
         stability is not None
         and stability.get("quality_gates", {}).get("overall_pass") is True
@@ -70,6 +79,7 @@ def build_readiness(
         )
         is True,
         "calibration_005_three_attempt_diagnostic_complete": diagnostic_complete,
+        "calibration_005_positive_in_all_attempts": diagnostic_positive,
         "three_run_worst_case_stability_pass": stability_pass,
         "active_calibration_hash_present": _valid_hash(
             manifest.get("calibration_dataset_sha256")

@@ -4,15 +4,17 @@
 
 The 2026-08-11 closure is intentionally `PARTIAL`, not a release pass. It improves evaluator
 correctness, seals calibration from held-out reads, separates full reranker output from actual LLM
-evidence, and removes exact cross-document duplicate evidence. It does not make calibration 010
-direct evidence enter top 5, and calibration 005 still needs a separately approved diagnostic.
+evidence, and removes exact cross-document duplicate evidence. The separately approved calibration
+005 diagnostic is complete and stable across three generations over one fixed evidence bundle. The
+closure still does not make calibration 010 direct evidence enter top 5.
 
 Held-out status is `BLOCKED_GOVERNANCE`. Historical tracked documentation mirrored held-out content,
 and the old calibration CLI loaded both JSONL files. The current code closes those paths, but changing
 the present revision cannot erase statistical exposure in Git history.
 
 No qrel, chunk, embedding model, Jina model, Qdrant collection, volume, public Query API, or Docker
-image was changed. No provider call, held-out run, re-index, image build, or prune was performed.
+image was changed. Exactly three approved provider generations were made for calibration 005; no
+held-out run, re-index, image build, or prune was performed.
 The user-built ingestion image was only inspected: Python 3.11.15 and Docling/LangChain imports pass.
 Docker storage accounting reports 9.66 GB total, 9.515 GB unique, while image metadata reports
 3,255,679,310 bytes; image-size optimization remains a separate follow-up.
@@ -64,6 +66,12 @@ The new diagnostic script retrieves/reranks once, freezes one evidence bundle, a
 three provider attempts against it. Raw answers may be written only beneath ignored
 `artifacts/private-debug/`; the metrics artifact excludes question, answer, evidence, prompt, and
 provider response.
+
+The approved 2026-08-11 diagnostic completed all three attempts. Every attempt cited `S1`; every
+typed-fact result matched with `polarity=positive`, exact match mode, and no local negation. Because
+the evidence manifest was fixed and retrieval/reranking each executed once, this is not a best-run
+selection. It classifies the current 005 path as evaluator closure, not a generation failure or
+provider-instability case. The historical v4 answer remains unknowable by design.
 
 ## Actual evidence selection and citations
 
@@ -136,12 +144,12 @@ Generated ignored artifacts:
 | `phase-7-reranker-snapshot-v2.json` | One sanitized real-Jina replay source |
 | `phase-7-role-prior-ablation-v2.json` | Finite rank grid plus one registered fallback |
 | `phase-7-heldout-readiness-v2.json` | Technical gates and governance block |
-| `phase-7-calibration-005-diagnostic-v1.json` | Pending separate 005 provider approval |
+| `phase-7-calibration-005-diagnostic-v1.json` | Completed: 3/3 positive fact matches on one fixed evidence bundle |
 | `phase-7-calibration-e2e-v5-run-{1,2,3}.json` | Pending three independent approved runs |
 | `phase-7-calibration-stability-v1.json` | Pending worst-run aggregation |
 
-The diagnostic and stability artifacts do not exist until their provider runs are explicitly
-approved. Historical artifacts are not overwritten.
+The diagnostic artifact now exists after explicit approval. Stability artifacts remain absent until
+their separate provider runs are approved. Historical artifacts are not overwritten.
 
 Final read-only validation passed the frozen runtime checker for all collections:
 
@@ -168,15 +176,14 @@ resident `com.docker.build` process is Docker Desktop's background service, not 
 ## What must happen next
 
 1. Review and commit the closure implementation; Codex does not commit automatically.
-2. Approve 005 separately with `APPROVE PHASE 7 CALIBRATION 005 DIAGNOSTIC EGRESS` if sending that
-   question and fixed excerpts to the configured provider is acceptable.
-3. Do not select the best of three outputs. Classify 005 as evaluator, generation, ambiguity, or
-   provider instability from all attempts.
-4. If technical gates can be resolved without qrel/model/dataset gaming, grant the separate full-run
+2. Treat 005 as closed for the current evaluator/provider path: 3/3 fixed-evidence attempts passed;
+   do not reinterpret the unavailable historical v4 output.
+3. Resolve calibration 010 without qrel/model/dataset gaming. If the technical gates then pass, grant
+   the separate full-run
    token `APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS` and create three independent outputs.
-5. Aggregate them with `scripts.aggregate_phase7_calibration_stability`; the worst run must reach
+4. Aggregate them with `scripts.aggregate_phase7_calibration_stability`; the worst run must reach
    11/12 facts and every hard citation/abstention gate.
-6. Resolve governance with a new access-controlled final set or explicitly stop calling the existing
+5. Resolve governance with a new access-controlled final set or explicitly stop calling the existing
    held-out set unseen. Until then, held-out execution remains blocked regardless of technical pass.
 
 After approval, use distinct checkpoints and outputs; never reuse a completed checkpoint as another

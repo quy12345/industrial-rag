@@ -20,6 +20,20 @@ def _rank_ablation(*, rank_010: bool = True) -> dict:
     }
 
 
+def _positive_diagnostic() -> dict:
+    return {
+        "run_identity": {"provider_attempts": 3},
+        "attempts": [
+            {
+                "status": "completed",
+                "deterministic_fact_match": True,
+                "fact_results": [{"polarity": "positive"}],
+            }
+            for _ in range(3)
+        ],
+    }
+
+
 def test_readiness_remains_governance_blocked_even_when_technical_gates_pass() -> None:
     result = build_readiness(
         rank_ablation=_rank_ablation(),
@@ -27,7 +41,7 @@ def test_readiness_remains_governance_blocked_even_when_technical_gates_pass() -
             "calibration_dataset_sha256": "a" * 64,
             "test_dataset_sha256": "b" * 64,
         },
-        diagnostic={"run_identity": {"provider_attempts": 3}, "attempts": [{}, {}, {}]},
+        diagnostic=_positive_diagnostic(),
         stability={"quality_gates": {"overall_pass": True}},
     )
     assert result["technical_pass"] is True
@@ -51,3 +65,23 @@ def test_readiness_reports_missing_diagnostic_stability_and_rank_gate() -> None:
     assert result["technical_gates"][
         "calibration_005_three_attempt_diagnostic_complete"
     ] is False
+    assert result["technical_gates"]["calibration_005_positive_in_all_attempts"] is False
+
+
+def test_readiness_rejects_completed_but_negative_or_unmatched_diagnostic() -> None:
+    diagnostic = _positive_diagnostic()
+    diagnostic["attempts"][1]["fact_results"][0]["polarity"] = "negative"
+    result = build_readiness(
+        rank_ablation=_rank_ablation(),
+        manifest={
+            "calibration_dataset_sha256": "a" * 64,
+            "test_dataset_sha256": "b" * 64,
+        },
+        diagnostic=diagnostic,
+        stability={"quality_gates": {"overall_pass": True}},
+    )
+    assert result["technical_gates"][
+        "calibration_005_three_attempt_diagnostic_complete"
+    ] is True
+    assert result["technical_gates"]["calibration_005_positive_in_all_attempts"] is False
+    assert result["technical_pass"] is False

@@ -13,10 +13,12 @@ top-20 without reranking remains the explicit operational rollback.
 An interactive Gemini request has returned an answer through the full API path. Phase 7 added a
 separate two-manual ATV320 corpus and multiple calibration-only diagnostics. The latest closure fixes
 confirmed evaluator false negatives, seals calibration loading from held-out access, and removes
-exact cross-document duplicate evidence before the generation cutoff. It does not pass the final
-calibration gate: item 010 still has direct evidence at full rank 6 and therefore outside top 5, while
-the historical item-005 answer cannot be reconstructed from sanitized artifacts. No new provider run
-was authorized in this closure.
+exact cross-document duplicate evidence before the generation cutoff. A separately approved 005
+diagnostic then reused one frozen evidence bundle for three provider generations: all three completed,
+cited `S1`, and matched the expected fact with positive polarity. This confirms the new span-aware
+matcher closes 005 for newly observed output; it cannot reconstruct the historical v4 answer. The
+final calibration gate still fails because item 010 has direct evidence at full rank 6 and therefore
+outside top 5, and the required three-run stability calibration has not been authorized or run.
 
 The current held-out set is also `BLOCKED_GOVERNANCE`: historical tracked documentation mirrored its
 content and the old calibration CLI parsed both splits. The current CLI no longer opens the held-out
@@ -137,8 +139,10 @@ Typed calibration-v3 is approved and active; qrels/pages/phrases remain unchange
 calibration v4 completed all 20 rows but failed release: deterministic fact accuracy was `8/12`,
 wrong-document citations were `2`, and item 010 direct evidence was excluded by the actual top-5
 generation cutoff. The new generic evaluator makes `block`/`blocked` and `contact`/`contacts` match,
-while identifier, numeric/unit, ordering, sign, and negation controls remain strict. Historical item
-005 remains unknown because v4 intentionally stored no raw answer or match span.
+while identifier, numeric/unit, ordering, sign, and negation controls remain strict. The approved 005
+diagnostic completed three independent generations over one fixed evidence bundle; all three were
+positive deterministic matches using `S1`. The old v4 output remains unreconstructable, but the
+current evaluator/provider path is stable for this targeted replay.
 
 The 2026-08-11 provider-free snapshot-v2/replay tested the registered CE-rank/RRF-rank grid and the
 single `list_completeness_v1` fallback. Neither moves item 010 from full rank 6 into actual evidence
@@ -163,11 +167,13 @@ python -m scripts.calibrate_phase7_role_prior
 python -m scripts.generate_phase7_calibration_closure_readiness
 ```
 
-`diagnose_phase7_calibration_005` and full v5 calibration require new, separate provider-egress
-approvals and are intentionally not included in provider-free reproduction. Three full runs must be
-aggregated with `scripts.aggregate_phase7_calibration_stability`; the worst run, not the best run, is
-the release headline. See `docs/walkthrough-phase-7-calibration-closure.md` for the sealed data flow,
-matcher policy, replay evidence, stop decision, artifacts, and governance boundary.
+The separately approved `diagnose_phase7_calibration_005` run is complete; its sanitized artifact is
+`artifacts/metrics/phase-7-calibration-005-diagnostic-v1.json`, while raw debug data remains only in
+the ignored private-debug directory. Full v5 calibration still requires the separate token
+`APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS`. Three full runs must be aggregated with
+`scripts.aggregate_phase7_calibration_stability`; the worst run, not the best run, is the release
+headline. See `docs/walkthrough-phase-7-calibration-closure.md` for the sealed data flow, matcher
+policy, replay evidence, stop decision, artifacts, and governance boundary.
 
 ## Quickstart: khởi động, test, chạy demo và dừng
 

@@ -747,10 +747,11 @@ Status: `PARTIAL`; held-out: `BLOCKED_GOVERNANCE`.
   pre-registered `list_completeness_v1` fallback also fails because rank 5 has the same query-derived
   `MODE` identifier and a larger generic list-pair count. It is not activated; no query-specific or
   qrel-aware rule is added.
-- Historical calibration 005 cannot be classified from v4 because raw answers were intentionally
-  omitted. `diagnose_phase7_calibration_005.py` implements a three-attempt, one-evidence diagnostic,
-  but it requires the separate token `APPROVE PHASE 7 CALIBRATION 005 DIAGNOSTIC EGRESS` and was not
-  run in this implementation.
+- Historical calibration 005 still cannot be reconstructed from v4 because raw answers were
+  intentionally omitted. The separately approved `diagnose_phase7_calibration_005.py` run reused one
+  retrieved/reranked evidence bundle for three provider attempts. All three completed, cited `S1`,
+  and matched the expected fact with positive polarity. The current matcher/provider path therefore
+  closes 005 without selecting a best attempt; the private raw file remains ignored.
 - Three-run worst-case aggregation is implemented but not run. Full calibration requires a new token
   `APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS`; each run must independently pass at least 11/12
   facts and all citation/abstention gates.
@@ -758,7 +759,8 @@ Status: `PARTIAL`; held-out: `BLOCKED_GOVERNANCE`.
   Current documentation is metadata-only and the CLI refuses held-out execution, but history cannot
   be made unseen. A new access-controlled final set or an explicit reporting downgrade is required.
 - No qrel, chunk, model, Qdrant collection, volume, public Query API, Docker image, or embedding
-  behavior was changed. No provider call, held-out run, re-index, build, or prune occurred.
+  behavior was changed. Exactly three approved provider generations were made for calibration 005;
+  no held-out run, re-index, build, or prune occurred.
 - Final canonical ingestion-container Python 3.11.15 validation: Ruff PASS; pytest
   `279 passed, 1 warning`; `git diff --check` and `docker compose config --quiet` PASS. The local
   `.venv` is Python 3.13.5 and also passes, but was not used as canonical or overwritten. The warning

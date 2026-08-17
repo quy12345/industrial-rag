@@ -120,7 +120,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   grid fails. The fold mapping is evaluation-only and never imported by the runtime.
 - `scripts/diagnose_phase7_calibration_005.py`: separately approved three-attempt provider diagnostic
   that reuses one retrieved/reranked evidence bundle. Raw answer debugging is restricted to ignored
-  `artifacts/private-debug/`; the metrics artifact is sanitized.
+  `artifacts/private-debug/`; the metrics artifact is sanitized. The completed run produced three
+  positive deterministic matches with one retrieval and one reranker execution.
 - `scripts/aggregate_phase7_calibration_stability.py`: validates three independent schema-v5 runs,
   rejects identity/duplicate mismatches, and gates on the worst run instead of selecting the best.
 - `scripts/generate_phase7_calibration_closure_readiness.py`: writes the fail-closed technical and
