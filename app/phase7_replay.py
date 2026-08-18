@@ -44,6 +44,15 @@ def snapshot_candidates_to_retrieval(
             bracketed_pair_count = _non_negative_count(
                 value.get("bracketed_label_code_pair_count")
             )
+            key_anchor_matches = _non_negative_count(
+                value.get("query_key_anchor_match_count", 0)
+            )
+            relation_matches = _non_negative_count(
+                value.get("scoped_relation_match_count", 0)
+            )
+            relation_targets = _non_negative_count(
+                value.get("scoped_relation_target_count", 0)
+            )
         except (KeyError, TypeError, ValueError) as exc:
             raise Phase7ReplayError("Snapshot candidate is malformed.") from exc
         if not chunk_id or not document_id or document_role not in {"installation", "programming"}:
@@ -75,6 +84,9 @@ def snapshot_candidates_to_retrieval(
                     "document_role": document_role,
                     "query_identifier_match_count": query_identifier_matches,
                     "bracketed_label_code_pair_count": bracketed_pair_count,
+                    "query_key_anchor_match_count": key_anchor_matches,
+                    "scoped_relation_match_count": relation_matches,
+                    "scoped_relation_target_count": relation_targets,
                     **(
                         {"content_fingerprint_sha256": content_fingerprint}
                         if content_fingerprint is not None

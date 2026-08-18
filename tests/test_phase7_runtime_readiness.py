@@ -14,7 +14,7 @@ def _rows() -> list[dict]:
                 "language": "en" if index % 2 else "vi",
                 "final_candidate_count": 30,
                 "candidate_direct_evidence_rank": 1,
-                "final_direct_evidence_rank": 6 if index == 10 else 1,
+                "final_direct_evidence_rank": 5 if index == 10 else 1,
                 "wrong_document_candidate_count_at_5": 0,
             }
         )

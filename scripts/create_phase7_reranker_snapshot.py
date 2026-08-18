@@ -27,9 +27,12 @@ from app.phase7 import (
 from app.phase7_optimization import (
     LIST_COMPLETENESS_PROFILE,
     QUERY_ROLE_PROFILE,
+    RELATION_LIST_COMPLETENESS_PROFILE,
     infer_list_intent,
     infer_query_role,
+    infer_relation_list_intent,
     list_completeness_features,
+    relation_list_completeness_features,
 )
 from app.reranking import PHASE7_CANDIDATE_TEXT_FORMAT, execute_rerank
 from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, build_union_rerank_runtime
@@ -49,7 +52,7 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-reranker-snapshot-v2.json"),
+        default=Path("artifacts/metrics/phase-7-reranker-snapshot-v3.json"),
     )
     args = parser.parse_args()
 
@@ -73,6 +76,7 @@ def main() -> int:
         )
         inference = infer_query_role(item.question)
         list_intent = infer_list_intent(item.question)
+        relation_list_intent = infer_relation_list_intent(item.question)
         candidates = [
             _candidate_payload(
                 candidate,
@@ -91,11 +95,13 @@ def main() -> int:
                 "list_intent_enabled": list_intent.enabled,
                 "list_intent_cue_ids": list(list_intent.cue_ids),
                 "query_technical_identifiers": list(list_intent.technical_identifiers),
+                "relation_list_intent_enabled": relation_list_intent.enabled,
+                "relation_list_intent_cue_ids": list(relation_list_intent.cue_ids),
                 "candidates": candidates,
             }
         )
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "timestamp": datetime.now(UTC).isoformat(),
         "scope": "approved answerable calibration rows only",
         "provider_calls": 0,
@@ -108,6 +114,7 @@ def main() -> int:
         "candidate_text_format": PHASE7_CANDIDATE_TEXT_FORMAT,
         "query_role_profile": QUERY_ROLE_PROFILE,
         "list_completeness_profile": LIST_COMPLETENESS_PROFILE,
+        "relation_list_completeness_profile": RELATION_LIST_COMPLETENESS_PROFILE,
         "libraries": _libraries(),
         "per_query": rows,
         "sanitization": {
@@ -144,6 +151,10 @@ def _candidate_payload(
         "cross_encoder_rank": rank,
         "rerank_score": score,
         **list_completeness_features(
+            candidate.text,
+            technical_identifiers=technical_identifiers,
+        ),
+        **relation_list_completeness_features(
             candidate.text,
             technical_identifiers=technical_identifiers,
         ),

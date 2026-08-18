@@ -151,7 +151,12 @@ def test_multi_document_frozen_contract_hashes_the_union_of_stable_ids(monkeypat
     assert PHASE7_RETRIEVAL_CONTRACT.rrf_k == 40
     assert PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile is not None
     assert PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile.name == (
-        "weighted_rrf_k40_s1.25_frole0.1_prole0.5_offset20_strong_and_weak_d5_s24"
+        "weighted_rrf_k40_s1.25_frole0.1_prole0.5_offset40_"
+        "strong_and_weak_d5_s24_relation_list_v1"
+    )
+    assert (
+        PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile.relation_list_completeness_enabled
+        is True
     )
     assert PHASE7_RETRIEVAL_CONTRACT.frozen_rerank_batch_size == 8
     assert PHASE7_RETRIEVAL_CONTRACT.freeze_rerank_threads is True

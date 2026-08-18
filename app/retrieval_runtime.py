@@ -395,6 +395,9 @@ def build_union_rerank_runtime(
                     "list_completeness_enabled": (
                         contract.phase7_fusion_profile.list_completeness_enabled
                     ),
+                    "relation_list_completeness_enabled": (
+                        contract.phase7_fusion_profile.relation_list_completeness_enabled
+                    ),
                 }
             ),
         }

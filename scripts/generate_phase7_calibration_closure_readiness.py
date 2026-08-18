@@ -163,7 +163,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rank-ablation",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-role-prior-ablation-v2.json"),
+        default=Path("artifacts/metrics/phase-7-relation-list-ablation-v1.json"),
     )
     parser.add_argument(
         "--manifest",

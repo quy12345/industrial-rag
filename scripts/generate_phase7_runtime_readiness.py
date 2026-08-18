@@ -23,7 +23,7 @@ def main() -> int:
     parser.add_argument(
         "--closure",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-contamination-closure-v3.json"),
+        default=Path("artifacts/metrics/phase-7-contamination-closure-v5.json"),
     )
     parser.add_argument(
         "--cpu",
@@ -112,7 +112,7 @@ def _gates(closure: dict[str, Any], cpu: dict[str, Any], facts: dict[str, Any]) 
         ),
         "closure_english_hit_6_of_6": per_language["en"]["hit_rate_at_5"] == 1.0,
         "closure_vietnamese_hit_5_of_6": per_language["vi"]["hit_rate_at_5"] >= 5 / 6,
-        "closure_010_rank_at_most_6": _rank(closure_rows, "phase7_calibration_010") <= 6,
+        "closure_010_rank_at_most_5": _rank(closure_rows, "phase7_calibration_010") <= 5,
         "cpu_full_stage": cpu.get("stage") == "full",
         "cpu_provider_free": (
             cpu.get("provider_calls") == 0 and cpu.get("held_out_queries_executed") == 0

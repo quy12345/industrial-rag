@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 7 calibration closure PARTIAL — held-out BLOCKED_GOVERNANCE**
+**Phase 7 technical calibration PASS — held-out BLOCKED_GOVERNANCE**
 
 Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
 `GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
@@ -16,14 +16,38 @@ confirmed evaluator false negatives, seals calibration loading from held-out acc
 exact cross-document duplicate evidence before the generation cutoff. A separately approved 005
 diagnostic then reused one frozen evidence bundle for three provider generations: all three completed,
 cited `S1`, and matched the expected fact with positive polarity. This confirms the new span-aware
-matcher closes 005 for newly observed output; it cannot reconstruct the historical v4 answer. The
-final calibration gate still fails because item 010 has direct evidence at full rank 6 and therefore
-outside top 5, and the required three-run stability calibration has not been authorized or run.
+matcher closes 005 for newly observed output; it cannot reconstruct the historical v4 answer. A
+provider-free relation-scoped list selector now moves item 010 from rank 6 to actual evidence rank 5
+without qrel/model/chunk changes. Retrieval closure passes; the required three-run provider stability
+calibration has now passed on Gemini. The worst-run fact result is `12/12`; all three runs have valid
+citation IDs, zero unsupported/wrong-document citations, and abstention precision/recall `1.000`.
 
 The current held-out set is also `BLOCKED_GOVERNANCE`: historical tracked documentation mirrored its
 content and the old calibration CLI parsed both splits. The current CLI no longer opens the held-out
 JSONL in calibration mode and now refuses held-out execution, but Git history cannot be made unseen.
-Use a new access-controlled final set or explicitly downgrade the current one to diagnostic status.
+
+### Replacement held-out v2 (private draft)
+
+A replacement v2 draft is stored only in the locally ignored
+`data/eval/phase7/private-heldout-v2/` directory. It has 30 answerable and 15
+unanswerable items, was validated against the frozen 2,753-chunk corpus, and is
+not tracked by Git. Git ignore prevents accidental repository exposure; it is
+not an operating-system access-control list. Freeze it only after a human
+review with:
+
+```powershell
+docker compose --profile tools run --rm --no-deps `
+  -v "${PWD}:/workspace" -w /workspace ingestion `
+  python -m scripts.freeze_phase7_heldout_v2 `
+  --approval-token "APPROVE PHASE 7 HELDOUT V2 DATASET"
+```
+
+Freezing is separate from provider egress. The user approved one final Gemini execution after freeze.
+The sanitized v2 artifact reports candidate recall `0.900`, Hit@5 `0.800`, MRR@5 `0.725`, deterministic
+fact accuracy `0.786` across 28 answered answerable items, valid citation IDs `1.000`, two
+wrong-document citations, and abstention precision/recall `0.882`/`1.000`. This is an honest final
+measurement for this v2 set, not a runtime-tuning input: the results do **not** meet the calibration
+release targets. Any further tuning needs a separately created and sealed future benchmark.
 
 The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, direct-pinned FastEmbed
 `0.8.0`,
@@ -120,13 +144,16 @@ provider run.
 Phase 7.4.1 preserves that retrieval profile but separates the weak fusion role signal from a strong
 post-rerank rank-only prior. The selected profile is weighted RRF `k=40`, sparse weight `1.25`,
 dense@5/sparse@24 coverage reserves, fusion multiplier `0.10`, then a `0.50` document-role prior with
-rank offset `20` for strong and weak inferences. It is selected from a sanitized Jina snapshot using
-six bilingual intent folds; raw Jina scores remain intact for diagnostics.
+rank offset `40` for strong and weak inferences. A relation-scoped list fallback is enabled only when
+the query itself contains list, key/button, switch/change, and technical-identifier cues. It counts
+only bracketed targets after that relation in the same clause; raw Jina scores remain unchanged.
 
-The final provider-free closure measures candidate recall `12/12 = 1.000`, Hit@5 `11/12 = 0.917`,
-MRR@5 `0.875`, wrong-document top-1 `0/12`, and wrong-document top-5 `8/60 = 0.133`. English is
-`6/6`; Vietnamese is `5/6`; calibration 010 is rank 6; reranker input is capped at 30. This passes
-the contamination gate without an expected-document filter, qrel change, re-index, or model change.
+The 2026-08-17 provider-free closure measures candidate recall `12/12 = 1.000`, Hit@5
+`12/12 = 1.000`, MRR@5 `0.892`, wrong-document top-1 `0/12`, and wrong-document top-5
+`4/60 = 0.067`. English and Vietnamese are both `6/6`; calibration 010 is actual evidence rank 5;
+reranker input remains capped at 30. This passes every retrieval/contamination gate without an
+expected-document filter, qrel change, re-index, or model change. The real one-pass rerank p95 was
+`11.178 s`, so CPU latency remains a production limitation.
 
 Phase 7.5 freezes the final reranker budget at 30 and batch size 8 (runtime-default ONNX threads).
 Three repetitions of all 12 calibration questions measure rerank p95 `6.996 s` and total p95
@@ -144,15 +171,15 @@ diagnostic completed three independent generations over one fixed evidence bundl
 positive deterministic matches using `S1`. The old v4 output remains unreconstructable, but the
 current evaluator/provider path is stable for this targeted replay.
 
-The 2026-08-11 provider-free snapshot-v2/replay tested the registered CE-rank/RRF-rank grid and the
-single `list_completeness_v1` fallback. Neither moves item 010 from full rank 6 into actual evidence
-top 5, so the fallback is not activated and no failed profile becomes a runtime default. Exact
-cross-document duplicate selection does reduce active-profile wrong-document evidence from `8/60`
-to `7/60`, while preserving candidate recall `12/12`, Hit@5 `11/12`, and MRR@5 `0.875`.
+The historical 2026-08-11 snapshot-v2 replay showed why global `list_completeness_v1` failed: it
+counted unrelated labels across an entire chunk. Snapshot v3 adds only sanitized relation-scoped
+counts. The winning generic rule distinguishes a conditional two-menu sentence from the direct
+three-menu MODE-key sentence, moving 010 `6 → 5`; the real Qdrant/Jina closure confirms all 12 rows
+hit top 5. No query ID, qrel, expected page/document, or answer fact is available to runtime logic.
 
 Canonical ingestion-container Python 3.11.15 validation: Ruff PASS and pytest
-`279 passed, 1 warning`. The repository `.venv` is Python 3.13.5 and independently produced the same
-result, but it is not the canonical interpreter and was not overwritten. The warning is the known
+`286 passed, 1 warning`. The repository `.venv` is Python 3.13.5 and was used only for targeted fast
+checks; it is not the canonical interpreter and was not overwritten. The warning is the known
 third-party Starlette/TestClient deprecation.
 
 Run the provider-free Phase 7.4.1--7.5 diagnostics only after Qdrant and the shared FastEmbed cache are
@@ -161,7 +188,7 @@ available. These commands never call Gemini/OpenAI and never execute held-out qu
 ```powershell
 python -m scripts.calibrate_phase7_weighted_fusion
 python -m scripts.evaluate_phase7_retrieval_closure `
-  --output artifacts/metrics/phase-7-contamination-closure-v4.json
+  --output artifacts/metrics/phase-7-contamination-closure-v5.json
 python -m scripts.create_phase7_reranker_snapshot
 python -m scripts.calibrate_phase7_role_prior
 python -m scripts.generate_phase7_calibration_closure_readiness
@@ -169,11 +196,12 @@ python -m scripts.generate_phase7_calibration_closure_readiness
 
 The separately approved `diagnose_phase7_calibration_005` run is complete; its sanitized artifact is
 `artifacts/metrics/phase-7-calibration-005-diagnostic-v1.json`, while raw debug data remains only in
-the ignored private-debug directory. Full v5 calibration still requires the separate token
-`APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS`. Three full runs must be aggregated with
-`scripts.aggregate_phase7_calibration_stability`; the worst run, not the best run, is the release
-headline. See `docs/walkthrough-phase-7-calibration-closure.md` for the sealed data flow, matcher
-policy, replay evidence, stop decision, artifacts, and governance boundary.
+the ignored private-debug directory. The authorized V5 calibration ran three independent Gemini calls
+and passed worst-run aggregation: `12/12` deterministic answerable facts in every run, valid citation
+IDs `100%`, no unsupported/wrong-document citations, and abstention precision/recall `1.000`. The
+three sanitized run artifacts and stability artifact are ignored under `artifacts/metrics/`. See
+`docs/walkthrough-phase-7-calibration-closure.md` for the sealed data flow and remaining governance
+boundary.
 
 ## Quickstart: khởi động, test, chạy demo và dừng
 

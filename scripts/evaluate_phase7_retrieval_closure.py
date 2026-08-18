@@ -135,7 +135,7 @@ def main() -> int:
             "vietnamese_wrong_document_top5_at_most_5_of_30": (
                 per_language["vi"]["wrong_document_candidate_rate_at_5"] <= 5 / 30
             ),
-            "calibration_010_rank_at_most_6": _rank(rows, "phase7_calibration_010") <= 6,
+            "calibration_010_rank_at_most_5": _rank(rows, "phase7_calibration_010") <= 5,
         },
         "per_query": rows,
         "provider_calls": 0,

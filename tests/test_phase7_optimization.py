@@ -9,10 +9,14 @@ from app.phase7_optimization import (
     Phase7FusionProfile,
     Phase7OptimizationError,
     apply_list_completeness_from_metadata,
+    apply_relation_list_completeness_fallback,
+    apply_relation_list_completeness_from_metadata,
     apply_role_aware_rank_fusion,
     infer_list_intent,
     infer_query_role,
+    infer_relation_list_intent,
     list_completeness_features,
+    relation_list_completeness_features,
     select_coverage_preserving_candidates,
 )
 from scripts.calibrate_phase7_weighted_fusion import _select_pareto_profiles
@@ -85,6 +89,85 @@ def test_list_completeness_counts_bracketed_pairs_and_query_identifiers() -> Non
         "query_identifier_match_count": 1,
         "bracketed_label_code_pair_count": 2,
     }
+
+
+def test_relation_list_intent_requires_list_key_switch_and_identifier_cues() -> None:
+    vi = infer_relation_list_intent("Phim MODE chuyen giua nhung nhom menu nao?")
+    assert vi.enabled is True
+    assert vi.technical_identifiers == ("mode",)
+    assert infer_relation_list_intent("Which menus are available?").enabled is False
+    assert infer_relation_list_intent("Which menus can MODE switch between?").enabled is False
+    assert infer_relation_list_intent("How does the MODE key switch menus?").enabled is False
+
+
+def test_relation_list_features_scope_targets_after_direct_key_relation() -> None:
+    complete = relation_list_completeness_features(
+        "MODE key (1): used to switch [Reference speed] rEF, [MONITORING] MON and "
+        "[Configuration] CONF.",
+        technical_identifiers=("mode",),
+    )
+    conditional = relation_list_completeness_features(
+        "[PIN code 1] COD is active; pressing the MODE key enables you to switch from "
+        "[MONITORING] MON to [Reference speed] rEF.",
+        technical_identifiers=("mode",),
+    )
+    unrelated = relation_list_completeness_features(
+        "All menus are available in multipoint mode: [Communication] COM.",
+        technical_identifiers=("mode",),
+    )
+    assert complete == {
+        "query_key_anchor_match_count": 1,
+        "scoped_relation_match_count": 1,
+        "scoped_relation_target_count": 3,
+    }
+    assert conditional["scoped_relation_target_count"] == 2
+    assert unrelated == {
+        "query_key_anchor_match_count": 0,
+        "scoped_relation_match_count": 0,
+        "scoped_relation_target_count": 0,
+    }
+
+
+def test_relation_list_fallback_moves_more_complete_rank_six_into_top_five() -> None:
+    candidates = [
+        _candidate(f"chunk-{rank}").model_copy(
+            update={
+                "text": (
+                    "MODE key: switch [Reference] rEF, [Monitoring] MON and "
+                    "[Configuration] CONF."
+                    if rank == 6
+                    else "Unrelated menu content."
+                ),
+                "rerank_rank": rank,
+                "rerank_score": float(100 - rank),
+                "score": float(100 - rank),
+            }
+        )
+        for rank in range(1, 11)
+    ]
+    reordered = apply_relation_list_completeness_fallback(
+        candidates,
+        query="Which menu groups can the MODE key switch between?",
+    )
+    assert [candidate.chunk_id for candidate in reordered[:6]] == [
+        "chunk-1",
+        "chunk-2",
+        "chunk-3",
+        "chunk-4",
+        "chunk-6",
+        "chunk-5",
+    ]
+    assert reordered[4].rerank_score == 94.0
+    assert reordered[4].metadata["pre_relation_list_rank"] == 6
+
+
+def test_relation_list_replay_rejects_missing_sanitized_features() -> None:
+    candidates = [
+        _candidate(f"chunk-{rank}").model_copy(update={"rerank_rank": rank})
+        for rank in range(1, 6)
+    ]
+    with pytest.raises(Phase7OptimizationError, match="sanitized feature counts"):
+        apply_relation_list_completeness_from_metadata(candidates, enabled=True)
 
 
 def test_registered_list_fallback_only_reorders_ranks_five_to_ten() -> None:
@@ -232,6 +315,8 @@ def test_selector_fails_instead_of_silently_truncating_mandatory_reserves() -> N
         {"post_rerank_role_multiplier": 0.6},
         {"post_rerank_rrf_multiplier": 2.1},
         {"list_completeness_enabled": "yes"},
+        {"relation_list_completeness_enabled": "yes"},
+        {"list_completeness_enabled": True, "relation_list_completeness_enabled": True},
         {"post_rerank_rank_offset": 0},
         {"dense_reserve": -1},
     ],

@@ -26,6 +26,7 @@ from app.phase7_optimization import (
     Phase7OptimizationError,
     QueryRoleInference,
     apply_list_completeness_fallback,
+    apply_relation_list_completeness_fallback,
     apply_role_aware_rank_fusion,
     infer_query_role,
     select_coverage_preserving_candidates,
@@ -197,6 +198,11 @@ class RerankPipeline:
             )
             if self.phase7_fusion_profile.list_completeness_enabled:
                 candidates = apply_list_completeness_fallback(candidates, query=question)
+            if self.phase7_fusion_profile.relation_list_completeness_enabled:
+                candidates = apply_relation_list_completeness_fallback(
+                    candidates,
+                    query=question,
+                )
         except Phase7OptimizationError as exc:
             raise RerankingError(str(exc)) from exc
         stages = dict(execution.stage_latency_ms)

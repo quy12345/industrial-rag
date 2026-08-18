@@ -27,6 +27,7 @@ from app.phase7_optimization import (
     PHASE7_CALIBRATION_FUSION_PROFILE,
     Phase7FusionProfile,
     apply_list_completeness_from_metadata,
+    apply_relation_list_completeness_from_metadata,
 )
 from app.phase7_replay import Phase7ReplayError, replay_role_prior, snapshot_candidates_to_retrieval
 from scripts.evaluate_phase7_retrieval_closure import aggregate_closure_rows
@@ -46,7 +47,7 @@ def main() -> int:
     parser.add_argument(
         "--snapshot",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-reranker-snapshot-v2.json"),
+        default=Path("artifacts/metrics/phase-7-reranker-snapshot-v3.json"),
     )
     parser.add_argument(
         "--calibration", type=Path, default=Path("data/eval/phase7/calibration-v3.jsonl")
@@ -60,7 +61,7 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-role-prior-ablation-v2.json"),
+        default=Path("artifacts/metrics/phase-7-relation-list-ablation-v1.json"),
     )
     args = parser.parse_args()
 
@@ -87,6 +88,7 @@ def main() -> int:
     best_experimental_profile = recommended_profile
     quality = _quality(summaries[recommended_profile], stable=bool(folds["stable_consensus"]))
     fallback: dict[str, Any] | None = None
+    relation_fallback: dict[str, Any] | None = None
     if not quality["overall_pass"]:
         base_profile = next(profile for profile in profiles if profile.name == recommended_profile)
         fallback_profile = replace(
@@ -110,9 +112,32 @@ def main() -> int:
             recommended_profile = fallback_profile.name
             best_experimental_profile = fallback_profile.name
             quality = fallback_quality
+    if not quality["overall_pass"]:
+        base_profile = next(profile for profile in profiles if profile.name == recommended_profile)
+        relation_profile = replace(
+            base_profile,
+            name=f"{base_profile.name}_relation_list_completeness_v1",
+            relation_list_completeness_enabled=True,
+        )
+        relation_summary = _evaluate_profile(relation_profile, selected, snapshot_rows)
+        relation_quality = _quality(
+            relation_summary,
+            stable=bool(folds["stable_consensus"]),
+        )
+        summaries[relation_profile.name] = relation_summary
+        relation_fallback = {
+            "triggered": True,
+            "base_profile": recommended_profile,
+            "profile": relation_profile.name,
+            "quality": relation_quality,
+        }
+        if relation_quality["overall_pass"]:
+            recommended_profile = relation_profile.name
+            best_experimental_profile = relation_profile.name
+            quality = relation_quality
     released_profile = recommended_profile if quality["overall_pass"] else None
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "timestamp": datetime.now(UTC).isoformat(),
         "scope": "approved answerable calibration rows only",
         "provider_calls": 0,
@@ -129,6 +154,7 @@ def main() -> int:
         "profiles": summaries,
         "cross_validation": folds,
         "registered_fallback": fallback,
+        "relation_list_fallback": relation_fallback,
         "recommended_profile": released_profile,
         "best_experimental_profile": best_experimental_profile,
         "quality": quality,
@@ -180,6 +206,11 @@ def _evaluate_profile(
             replayed = apply_list_completeness_from_metadata(
                 replayed,
                 enabled=bool(snapshot["list_intent_enabled"]),
+            )
+        if profile.relation_list_completeness_enabled:
+            replayed = apply_relation_list_completeness_from_metadata(
+                replayed,
+                enabled=bool(snapshot["relation_list_intent_enabled"]),
             )
         evidence = select_evidence_candidates_for_role(
             replayed,
@@ -368,25 +399,42 @@ def _read_snapshot(path: Path, *, calibration_sha: str) -> dict[str, Any]:
         raise ValueError("Unable to read Phase 7 reranker snapshot.") from exc
     if payload.get("provider_calls") != 0 or payload.get("held_out_queries_executed") != 0:
         raise ValueError("Snapshot must be calibration-only with zero provider/held-out calls.")
-    if payload.get("schema_version") != 2:
-        raise ValueError("Final rank calibration requires a schema-v2 reranker snapshot.")
+    if payload.get("schema_version") != 3:
+        raise ValueError("Final rank calibration requires a schema-v3 reranker snapshot.")
     if payload.get("calibration_dataset_sha256") != calibration_sha:
         raise ValueError("Snapshot calibration dataset hash does not match current frozen dataset.")
     if payload.get("candidate_text_format") != "document_context_heading_content_v2":
         raise ValueError("Snapshot candidate text format is not the frozen Phase 7.4.1 format.")
     if payload.get("list_completeness_profile") != "phase7_list_completeness_v1":
         raise ValueError("Snapshot list-completeness profile is not the registered fallback.")
+    if (
+        payload.get("relation_list_completeness_profile")
+        != "phase7_relation_list_completeness_v1"
+    ):
+        raise ValueError("Snapshot relation-list profile is not the registered fallback.")
     rows = payload.get("per_query")
     if not isinstance(rows, list):
         raise ValueError("Snapshot per-query rows are malformed.")
     try:
         for row in rows:
             candidates = snapshot_candidates_to_retrieval(row["candidates"])
+            if not isinstance(row.get("relation_list_intent_enabled"), bool):
+                raise ValueError("Snapshot relation-list intent flag is malformed.")
             if any(
                 "content_fingerprint_sha256" not in candidate.metadata
                 for candidate in candidates
             ):
                 raise ValueError("Snapshot candidate is missing its content fingerprint.")
+            if any(
+                field not in value
+                for value in row["candidates"]
+                for field in (
+                    "query_key_anchor_match_count",
+                    "scoped_relation_match_count",
+                    "scoped_relation_target_count",
+                )
+            ):
+                raise ValueError("Snapshot candidate is missing relation-list features.")
     except (KeyError, TypeError, Phase7ReplayError) as exc:
         raise ValueError("Snapshot candidate data is invalid.") from exc
     return payload
@@ -407,6 +455,7 @@ def _profile_payload(profile: Phase7FusionProfile) -> dict[str, Any]:
         "post_rerank_rank_offset": profile.post_rerank_rank_offset,
         "post_rerank_confidence_mode": profile.post_rerank_confidence_mode,
         "list_completeness_enabled": profile.list_completeness_enabled,
+        "relation_list_completeness_enabled": profile.relation_list_completeness_enabled,
     }
 
 

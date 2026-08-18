@@ -696,11 +696,12 @@ structured-output details, validation evidence, and rollback.
   deterministic matches; it is derived evidence because raw answers are intentionally absent.
 - Phase 7.4.1 closes the cross-document contamination gate without changing chunks, qrels, models,
   schemas, collections, or candidate budget. Fusion uses a weak role multiplier `0.10`; a separate
-  rank-only post-rerank role prior uses multiplier `0.50`, offset `20`, and strong-and-weak
-  confidence. It was selected by six bilingual intent folds from a sanitized Jina snapshot, not from
-  qrels at runtime. The provider-free closure is candidate recall `12/12`, Hit@5 `11/12`, MRR@5
-  `0.875`, wrong-document top-1 `0/12`, wrong-document top-5 `8/60 = 0.133`, EN Hit@5 `6/6`, VI
-  Hit@5 `5/6`, and calibration 010 rank `6`; all contamination gates pass.
+  rank-only post-rerank role prior uses multiplier `0.50`, offset `40`, and strong-and-weak
+  confidence. A bounded relation-scoped list fallback uses only query key/button, switch/change,
+  list-intent and technical-identifier cues, then counts targets after that relation in one candidate
+  clause. The 2026-08-17 real closure is candidate recall `12/12`, Hit@5 `12/12`, MRR@5 `0.892`,
+  wrong-document top-1 `0/12`, wrong-document top-5 `4/60 = 0.067`, EN/VI Hit@5 `6/6` each, and
+  calibration 010 rank `5`; all retrieval and contamination gates pass.
 - Phase 7.5 freezes reranker budget `30`, batch size `8`, and runtime-default ONNX threads after a
   microbenchmark and three full repetitions of every calibration question. Rerank p95 is `6.996 s`
   and total p95 is `7.027 s`, a 47.8% improvement from the 13.399-second baseline with no quality
@@ -724,7 +725,21 @@ structured-output details, validation evidence, and rollback.
 
 ### Calibration-closure checkpoint (2026-08-11)
 
-Status: `PARTIAL`; held-out: `BLOCKED_GOVERNANCE`.
+Status: `TECHNICAL PASS`; held-out: `BLOCKED_GOVERNANCE`.
+
+Replacement held-out v2: a new Git-ignored private draft contains 30 answerable
+and 15 unanswerable rows and has been checked against the frozen 2,753-chunk
+corpus. It is `DRAFT / NEEDS_HUMAN_REVIEW`, not a metric source. The separate
+`freeze_phase7_heldout_v2` command requires an exact dataset approval token;
+provider egress remains a second, independent approval.
+
+Update 2026-08-17: v2 was frozen after explicit dataset approval and executed
+exactly once after separate Gemini-egress approval. Its sanitized result is
+candidate recall `0.900`, Hit@5 `0.800`, MRR@5 `0.725`, deterministic fact
+accuracy `0.786` (28 answered answerable rows), valid citation IDs `1.000`,
+wrong-document citations `2`, and abstention precision/recall `0.882`/`1.000`.
+This is below calibration release targets and must not be used to tune the
+frozen runtime; a future corrective iteration requires a new sealed benchmark.
 
 - Calibration mode is sealed to `calibration-v3.jsonl`. It validates one split and obtains only the
   held-out SHA-256 from `phase-7-evaluation-manifest-v3.json`; it does not open `test.jsonl`.
@@ -739,32 +754,43 @@ Status: `PARTIAL`; held-out: `BLOCKED_GOVERNANCE`.
   Exact normalized content duplicated across different documents is represented once before top-k;
   the query-derived document role chooses provenance, and equivalent chunk/document IDs remain in
   diagnostics. Same-document duplicates and near-duplicates are not collapsed.
-- Snapshot v2 was executed against real Qdrant/Jina with zero provider calls and zero held-out reads.
+- Historical snapshot v2 was executed against real Qdrant/Jina with zero provider calls and zero
+  held-out reads.
   The finite CE-rank/RRF-rank grid preserves candidate recall `12/12`, Hit@5 `11/12`, MRR@5 `0.875`,
-  EN `6/6`, VI `5/6`, and wrong-document top-1 `0`. The active offset-20 profile has
+  EN `6/6`, VI `5/6`, and wrong-document top-1 `0`. That historical offset-20 profile has
   wrong-document actual evidence `7/60 = 0.117` after cross-document dedup.
 - No grid profile moves calibration 010 from full rank 6 into actual evidence top 5. The single
   pre-registered `list_completeness_v1` fallback also fails because rank 5 has the same query-derived
   `MODE` identifier and a larger generic list-pair count. It is not activated; no query-specific or
   qrel-aware rule is added.
+- The 2026-08-17 continuation replaces that whole-chunk diagnostic with
+  `phase7_relation_list_completeness_v1`. It activates only for generic query-derived key/list/switch
+  intent, scopes counting to targets after the relation in one clause, and never reads qrels or
+  expected facts at runtime. Snapshot-v3 replay and a fresh real Qdrant/Jina run both put 010 at
+  actual evidence rank 5. Final retrieval metrics are Hit@5 `12/12`, MRR@5 `0.892`, and
+  wrong-document top-5 `4/60`; all registered retrieval gates pass.
 - Historical calibration 005 still cannot be reconstructed from v4 because raw answers were
   intentionally omitted. The separately approved `diagnose_phase7_calibration_005.py` run reused one
   retrieved/reranked evidence bundle for three provider attempts. All three completed, cited `S1`,
   and matched the expected fact with positive polarity. The current matcher/provider path therefore
   closes 005 without selecting a best attempt; the private raw file remains ignored.
-- Three-run worst-case aggregation is implemented but not run. Full calibration requires a new token
-  `APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS`; each run must independently pass at least 11/12
-  facts and all citation/abstention gates.
+- The authorized 2026-08-17 V5 calibration ran three independent Gemini calls against
+  `calibration-v3.jsonl` only. Worst-run aggregation passed: deterministic answerable facts
+  `12/12` in every run; valid citation IDs `100%`; unsupported and wrong-document citations `0`;
+  abstention precision/recall `1.000`; and retrieval ranks/evidence stable across all runs. The
+  per-run total p95 values were `8.358 s`, `11.052 s`, and `8.424 s`; CPU reranking remains a
+  production limitation, not a calibration correctness failure.
 - Historical tracked documentation exposed held-out row content and the old CLI parsed both splits.
   Current documentation is metadata-only and the CLI refuses held-out execution, but history cannot
   be made unseen. A new access-controlled final set or an explicit reporting downgrade is required.
 - No qrel, chunk, model, Qdrant collection, volume, public Query API, Docker image, or embedding
-  behavior was changed. Exactly three approved provider generations were made for calibration 005;
-  no held-out run, re-index, build, or prune occurred.
+  behavior was changed. Three approved provider generations were made for calibration 005, followed
+  by three independent approved 20-item calibration runs; no held-out run, re-index, build, or prune
+  occurred.
 - Final canonical ingestion-container Python 3.11.15 validation: Ruff PASS; pytest
-  `279 passed, 1 warning`; `git diff --check` and `docker compose config --quiet` PASS. The local
-  `.venv` is Python 3.13.5 and also passes, but was not used as canonical or overwritten. The warning
-  is the known Starlette/TestClient deprecation.
+  `286 passed, 1 warning`; `git diff --check` and `docker compose config --quiet` PASS. The local
+  `.venv` is Python 3.13.5 and was used only for targeted checks, not as canonical or overwritten.
+  The warning is the known Starlette/TestClient deprecation.
 
 ### Evaluation dataset
 

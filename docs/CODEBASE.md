@@ -57,10 +57,11 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   expected answers, model call, or held-out-specific rule.
 - `app/phase7_optimization.py`: query-only bilingual document-role inference with Unicode-safe cue
   boundaries and strong/weak confidence, bounded weighted RRF, coverage-preserving candidate
-  membership, post-rerank rank-only role prior, and the bounded query-derived
-  `list_completeness_v1` fallback. The fallback remains disabled because its provider-free gate did
-  not recover calibration 010. This module has no Qdrant, provider, qrel, expected-page, or
-  answer-fact dependency.
+  membership, post-rerank rank-only role prior, historical whole-chunk `list_completeness_v1`, and
+  active `relation_list_completeness_v1`. The active fallback requires query-derived list,
+  key/button, switch/change and technical-ID cues, then counts only targets after that relation in
+  one candidate clause. It moved calibration 010 from rank 6 to 5 without runtime qrel access. This
+  module has no Qdrant, provider, qrel, expected-page, expected-document, or answer-fact dependency.
 - `app/phase7_replay.py`: validates sanitized reranker snapshots and replays rank-only priors without
   a model, Qdrant, provider, raw question, or chunk text.
 - `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
