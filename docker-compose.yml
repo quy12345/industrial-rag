@@ -13,10 +13,27 @@ services:
     environment:
       QDRANT_URL: http://qdrant
       EMBEDDING_CACHE_DIR: /models/fastembed
+      RETRIEVAL_PROFILE: phase7
     depends_on:
       - qdrant
     volumes:
       - fastembed_cache:/models/fastembed
+
+  ui:
+    image: industrial-rag-ui:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ui
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      RAG_API_URL: http://api:8000/api/v1
+      RAG_API_TIMEOUT_SECONDS: "180"
+      RAG_API_AUTH_TOKEN: ${API_AUTH_KEY:-}
+    depends_on:
+      api:
+        condition: service_healthy
 
   ingestion:
     image: industrial-rag-ingestion:local

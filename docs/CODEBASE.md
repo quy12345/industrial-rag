@@ -12,6 +12,9 @@ Query -> dense top-20 + sparse top-20 -> client-side RRF -> RetrievalCandidate
       -> evidence gate -> structured grounded generation
       -> source-ID validation -> trusted citation builder -> QueryResponse
 
+Browser -> Streamlit UI -> FastAPI health/ready/query HTTP endpoints
+        -> no direct Qdrant, embedding, reranker, ingestion, or provider import
+
 Phase 7.4.1--7.5 frozen calibration/runtime override:
 Query -> dense top-60 + expanded sparse top-40 after vi_technical_glossary_v1
       -> query-only role inference -> weighted RRF k=40 + dense@5/sparse@24 reserves
@@ -27,9 +30,9 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 
 ## Main modules
 
-- `app/config.py`: Pydantic settings for retrieval, reranking, evidence/generation limits, and the
-  selected OpenAI or Gemini provider. Union+rerank is the Phase 6 default; sparse/no-rerank is
-  rollback.
+- `app/config.py`: Pydantic settings for retrieval, reranking, evidence/generation limits, selected
+  OpenAI or Gemini provider, and `phase6|phase7` retrieval profile. Python defaults to Phase 6 for
+  compatibility; Docker Compose explicitly selects Phase 7.
 - `app/ingestion.py`: input validation, Docling conversion, batched PDF processing, stable
   content-based chunk IDs, and atomic JSONL output.
 - `app/models.py`: ingestion/retrieval models plus the public query request, response, and trusted
@@ -69,8 +72,9 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
   sparse/hybrid/union pool construction, strict output validation, deterministic reranking, stage
   latency, and direct-evidence failure classification.
-- `app/retrieval_runtime.py`: artifact-independent frozen contract, live Qdrant hash/schema checks,
-  lazy union runtime, and sparse rollback composition shared by API and Phase 5 scripts.
+- `app/retrieval_runtime.py`: artifact-independent Phase 6/Phase 7 frozen contracts, atomic profile
+  resolution, live Qdrant hash/schema checks, lazy union runtime, and sparse rollback composition
+  shared by API and integration scripts.
 - `app/generation.py`: deterministic bounded evidence blocks, strict `GeneratedAnswer`, prompt
   injection boundary, and a lazy LangChain adapter. OpenAI uses Responses with `store=false`;
   Gemini uses Google's OpenAI-compatible Chat Completions endpoint.
@@ -81,6 +85,12 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   internal stage timings.
 - `app/api/query.py`: threadpool handoff and sanitized HTTP error mapping only.
 - `app/api/auth.py`: optional constant-time bearer-token guard, disabled unless configured.
+- `ui/config.py`: server-side API URL/timeout/token settings and stable ATV320 document labels.
+- `ui/api_client.py`: one-shot HTTPX health/readiness/query client with strict response parsing and
+  sanitized error mapping; it never logs request/response content.
+- `ui/state.py`: dependency-light bounded display-history and citation page helpers.
+- `ui/streamlit_app.py`: chat/session/sidebar rendering only; all retrieval and generation stays
+  behind the FastAPI boundary.
 - `scripts/index_document.py`, `scripts/search_dense.py`: v1 dense integration CLIs.
 - `scripts/index_hybrid.py`, `scripts/search_hybrid.py`, `scripts/evaluate.py`: v2 indexing/search
   and shared dense/sparse/hybrid evaluation CLIs.
@@ -214,8 +224,10 @@ client used by the successful Phase 4 Python 3.11 integration; Qdrant server rem
 `Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. API adds the
 LLM extra without Docling. Ingestion now adds Docling and the LLM extra, because its on-demand Phase 7
 E2E CLI uses the same structured generator; this deliberately makes only the profile-gated tools image
-heavier. Compose starts API/Qdrant by default. The shared `fastembed_cache` volume supplies models at
-runtime; weights are not baked into either image.
+heavier. The independent `ui` target starts again from `python:3.11-slim` and installs only base plus
+`.[ui]`; it contains no retrieval, Docling or LangChain stack. Compose can start API/Qdrant/UI, and
+keeps ingestion profile-gated. The shared `fastembed_cache` volume supplies models to API/ingestion
+at runtime; weights are not baked into images.
 
 The ingestion target installs Debian runtime packages `libxcb1`, `libgl1`, and
 `libglib2.0-0t64`; Docling's PDF/image stack needs the shared libraries they provide when running
@@ -244,3 +256,9 @@ Phase 7.4.1--7.5 adds offline Unicode/boundary role-inference, confidence, rank-
 malformed-snapshot, CPU-profile selection, fact-readiness, and runtime-readiness tests. Canonical
 Python 3.11.15 validation passes 239 tests with the same one third-party warning; default pytest
 still performs no network/model/Qdrant call.
+
+The Streamlit layer adds offline tests for frozen profile selection/readiness, HTTP payload/auth
+behavior, response schema validation, sanitized 401/422/503/504/network errors, bounded Unicode
+session history, and citation page ordering. Tests import only the client/pure state helpers; the
+actual Streamlit module is imported and health-checked in its dedicated image. The 2026-08-19
+canonical Python 3.11 run passes `308 tests` with the same one third-party warning.

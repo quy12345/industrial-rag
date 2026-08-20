@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 7 technical calibration PASS — held-out BLOCKED_GOVERNANCE**
+**Phase 7 held-out v2 measured — Streamlit demo implemented**
 
 Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
 `GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
@@ -75,7 +75,8 @@ Extras are separated by responsibility:
 - `.[retrieval]`: Qdrant client, FastEmbed, dense retrieval, sparse BM25, and RRF.
 - `.[ingestion]`: Docling document parsing.
 - `.[llm]`: `langchain-core` and `langchain-openai` for Responses structured generation.
-- `.[dev]`: test/lint tooling plus retrieval, ingestion, and LLM dependencies.
+- `.[ui]`: Streamlit and HTTPX for the HTTP-only demo frontend.
+- `.[dev]`: test/lint tooling plus retrieval, ingestion, LLM, and UI dependencies.
 
 `EMBEDDING_CACHE_DIR` is optional locally. In Docker it is set to `/models/fastembed` and backed by
 a shared named volume; model weights are never baked into either image.
@@ -241,15 +242,19 @@ chat. Nếu key từng xuất hiện trong log, phải revoke và tạo key mớ
 Build riêng API sau lần checkout đầu tiên hoặc sau khi source/Dockerfile/dependencies thay đổi:
 
 ```powershell
-docker compose --progress plain build api
+docker compose --progress plain build api ui
 ```
 
-Không cần build ingestion để chạy query API. Khởi động Qdrant và API:
+Không cần build ingestion để chạy query API/UI. Khởi động Qdrant, API và Streamlit:
 
 ```powershell
-docker compose up -d qdrant api
+docker compose up -d qdrant api ui
 docker compose ps
 ```
+
+Mở `http://localhost:8501`. Compose cấu hình API bằng frozen `RETRIEVAL_PROFILE=phase7`; Python
+local vẫn mặc định `phase6` để giữ backward compatibility. `GET /api/v1/ready` xác nhận trực tiếp
+hai Phase 7 collections, 2.753 points và chunk hash trước khi demo được coi là ready.
 
 Kiểm tra health và UTF-8 response header:
 
@@ -337,7 +342,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d qdrant api
 Dừng hằng ngày nhưng giữ container, collection, Qdrant storage và model cache:
 
 ```powershell
-docker compose stop api qdrant
+docker compose stop ui api qdrant
 ```
 
 Khởi động lại các container đã dừng:
@@ -564,6 +569,39 @@ selects union as its accuracy-first API path and keeps sparse as the low-latency
 See `docs/walkthrough-phase-5.md` for scenario metrics, critical ranks, failure classes, commands,
 and the full validation record.
 
+## Streamlit demo
+
+The demo is deliberately a thin HTTP client:
+
+```text
+Browser → Streamlit :8501 → FastAPI :8000 → Qdrant/Jina → Gemini
+```
+
+It never imports retrieval/model/provider code and never receives the Gemini key. The sidebar shows
+API and Phase 7 readiness, selects all manuals or one ATV320 document, controls `top_k`, and clears
+the display-only session history. Answers use safe Markdown; citation excerpts are rendered as text
+with filename, pages, headings, stable chunk ID, and document ID. Each question is independent and
+the UI never retries a query automatically.
+
+Local UI workflow with an already-running API:
+
+```powershell
+python -m pip install -e ".[ui]"
+$env:RAG_API_URL="http://localhost:8000/api/v1"
+python -m streamlit run ui/streamlit_app.py
+```
+
+The first query can be slow while the API initializes dense/reranker models. The UI is localhost-only
+demo software, not an authenticated production frontend. See
+[`docs/walkthrough-streamlit-demo.md`](docs/walkthrough-streamlit-demo.md) for setup, health checks,
+error mapping, citation interpretation, and safe shutdown.
+
+Latest measured validation (2026-08-19): Python 3.11 Ruff PASS, `308 passed, 1 warning`, Compose and
+diff checks PASS, API/UI builds and all three health/readiness endpoints PASS. Both Phase 7
+collections remain at 2.753 points with frozen hash `2a972d…f56d`. API/UI image sizes are
+150.553.757 and 190.268.831 bytes. Provider-free VI/Installation and EN/Programming filter smokes
+PASS; new Streamlit-to-Gemini demo requests remain `NOT RUN` pending separate data-egress approval.
+
 ## Grounded query API
 
 Phase 6 deliberately keeps retrieval, reranking, evidence gating, and citation validation in
@@ -670,13 +708,18 @@ the prompt-injection boundary, citation contract, retry behavior, smoke status, 
 ## Docker
 
 The default Compose file is production-like: source is not bind-mounted and API reload is off.
-It contains Qdrant, the API runtime, and an on-demand `ingestion` service in the `tools` profile.
+It contains Qdrant, the API runtime, a lightweight Streamlit UI, and an on-demand `ingestion`
+service in the `tools` profile.
 Qdrant is pinned to `qdrant/qdrant:v1.18.3` and its named volume is persistent.
 
 ```powershell
-docker compose --progress plain build api
-docker compose up -d qdrant api
+docker compose --progress plain build api ui
+docker compose up -d qdrant api ui
 ```
+
+The independent `ui` target installs base + `.[ui]` only. It does not contain FastEmbed, Jina,
+Docling, LangChain, model weights, raw manuals, or artifacts. The UI calls the API over the Compose
+network and is published only on `127.0.0.1:8501`.
 
 The API image installs base + `.[retrieval]` + `.[llm]`, but not Docling. Build and run ingestion
 only when needed:

@@ -59,7 +59,8 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 5 | Implementation complete; quality PARTIAL | Ba multilingual reranking strategies đã benchmark; ranking gates và critical 3/3 PASS, CPU latency FAIL, không đặt runtime default |
 | Phase 5.1 | Deferred | Reranker optimization/quantization/license replacement không nằm trong Phase 6 |
 | Phase 6 | Implementation/offline/Docker correctness complete; real provider NOT RUN | Query API, evidence gate, Responses structured generation, citations, abstention, sparse rollback |
-| Phase 7 | Đang thực hiện | Provider-free calibration closure PASS; typed-fact draft và provider calibration đang chờ review/approval trước held-out |
+| Phase 7 | Hoàn thành với measured limitations | Frozen 2.753-chunk ATV320 runtime, calibration closure và one-shot private held-out v2; Hit@5 0.800, fact accuracy 0.786, citation validity 1.000 |
+| Streamlit demo | Implementation/Docker/provider-free PASS; Gemini UI queries NOT RUN | HTTP-only chat UI, Phase 7 runtime profile, document filter, citations, abstention và localhost Compose service |
 
 Thứ tự triển khai đã chốt:
 
@@ -69,6 +70,9 @@ Phase 3A.2 → Phase 4 → Phase 4.1 closure → Phase 5 → Phase 6 → Phase 7
 
 Phase 6 trước đây được gọi là Phase 3B. Tên lịch sử chỉ được giữ tại đây; roadmap hiện hành dùng
 Phase 6 cho query/generation và Phase 7 cho final evaluation/hardening.
+
+Streamlit là lớp demo sau Phase 7, không phải một retrieval phase mới và không làm thay đổi held-out
+metrics, qrels, chunks, models hoặc Qdrant collections.
 
 ---
 
@@ -833,6 +837,34 @@ Unsupported citation IDs: 0
 - Real Qdrant, FastEmbed và OpenAI tests dùng integration marker riêng.
 - Calibrate evidence/abstention policy from answerable and truly unanswerable held-out data.
 - Resolve reranker CPU latency and non-commercial license before commercial deployment.
+
+---
+
+## Streamlit demo layer
+
+The post-Phase-7 demo preserves `POST /api/v1/query` and adds no retrieval logic. A new
+`RETRIEVAL_PROFILE=phase6|phase7` resolver keeps Python backward-compatible at `phase6`, while
+Compose selects the complete frozen Phase 7 contract atomically. `/ready` and the lazy query service
+resolve the same contract and fail closed on Qdrant count/hash/schema drift.
+
+The `ui/` package contains a small HTTP client, environment/document configuration, pure session
+helpers, and a Streamlit chat view. It supports all/Installation/Programming filters, `top_k` 1–10,
+bounded display-only history, abstentions, and trusted citation metadata. It has no upload,
+ingestion, benchmark or raw JSON controls.
+
+Docker adds an independent Python 3.11 `ui` target and localhost-only Compose service. It installs
+only base + `.[ui]`; FastEmbed, Jina, Docling, LangChain, provider keys, model weights, raw manuals,
+and artifacts remain outside the image. Unit tests use HTTP fakes and pure helpers, with live Qdrant,
+models and Gemini restricted to explicit integration smoke.
+
+Acceptance record and commands are maintained in `docs/walkthrough-streamlit-demo.md`. The held-out
+v2 result remains immutable and UI work must not be used to tune it.
+
+Validation ngày 2026-08-19: Python 3.11 Ruff PASS; pytest `308 passed, 1 warning`; diff/Compose PASS;
+API/UI builds PASS; API/UI/Qdrant health PASS; both Phase 7 collections remain 2.753 points with hash
+`2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`. Provider-free VI
+Installation và EN Programming filters PASS. Four live Gemini UI queries were not run because demo
+egress for those questions/excerpts was not separately approved.
 
 ---
 

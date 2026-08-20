@@ -131,6 +131,39 @@ PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
 )
 
 
+def resolve_retrieval_runtime(
+    settings: Settings,
+) -> tuple[Settings, FrozenRetrievalContract]:
+    """Resolve one frozen profile while ignoring conflicting mutable overrides."""
+
+    contract = (
+        PHASE7_RETRIEVAL_CONTRACT
+        if settings.retrieval_profile == "phase7"
+        else PHASE6_RETRIEVAL_CONTRACT
+    )
+    resolved = settings.model_copy(
+        update={
+            "qdrant_collection": contract.dense_collection,
+            "qdrant_hybrid_collection": contract.hybrid_collection,
+            "dense_vector_name": contract.dense_vector_name,
+            "sparse_vector_name": contract.sparse_vector_name,
+            "embedding_model": contract.dense_model,
+            "sparse_model": contract.sparse_model,
+            "rerank_model": contract.rerank_model,
+            "dense_candidate_limit": contract.dense_candidate_limit,
+            "sparse_candidate_limit": contract.sparse_candidate_limit,
+            "rrf_k": contract.rrf_k,
+            "bm25_k": contract.bm25_k,
+            "bm25_b": contract.bm25_b,
+            "bm25_avg_len": contract.bm25_avg_len,
+            "bm25_disable_stemmer": contract.bm25_disable_stemmer,
+            "rerank_deduplicate_content": contract is PHASE7_RETRIEVAL_CONTRACT,
+        }
+    )
+    _validate_settings(resolved, contract)
+    return resolved, contract
+
+
 @dataclass(frozen=True)
 class QueryRetrievalResult:
     """Final ordered candidates plus independently measured stage latency."""

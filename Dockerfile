@@ -30,6 +30,32 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
+FROM python:3.11-slim AS ui
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN useradd --create-home appuser
+
+COPY pyproject.toml README.md ./
+COPY app ./app
+COPY ui ./ui
+
+RUN pip install --no-cache-dir ".[ui]"
+
+USER appuser
+
+EXPOSE 8501
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)" || exit 1
+
+CMD ["streamlit", "run", "ui/streamlit_app.py", "--server.address=0.0.0.0", \
+    "--server.port=8501", "--browser.gatherUsageStats=false"]
+
+
 FROM retrieval-runtime AS ingestion
 
 # The on-demand Phase 7 E2E CLI uses the same structured generator as the API.

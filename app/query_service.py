@@ -30,6 +30,7 @@ from app.retrieval_runtime import (
     LazyQueryRetriever,
     QueryRetriever,
     build_query_retriever,
+    resolve_retrieval_runtime,
 )
 
 logger = logging.getLogger(__name__)
@@ -355,9 +356,11 @@ class QueryService:
 def get_query_service() -> QueryService:
     """Return a lightweight cached service whose heavy retrieval dependencies remain lazy."""
 
-    settings = get_settings()
+    settings, contract = resolve_retrieval_runtime(get_settings())
     return QueryService(
-        retriever=LazyQueryRetriever(lambda: build_query_retriever(settings)),
+        retriever=LazyQueryRetriever(
+            lambda: build_query_retriever(settings, contract=contract)
+        ),
         evidence_gate=EvidenceGate(score_threshold=settings.evidence_score_threshold),
         generator=LangChainOpenAIGenerator(settings),
         settings=settings,

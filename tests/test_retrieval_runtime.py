@@ -22,6 +22,7 @@ from app.retrieval_runtime import (
     _expand_phase7_query,
     _validate_frozen_collection,
     _validate_settings,
+    resolve_retrieval_runtime,
 )
 
 
@@ -100,6 +101,32 @@ def test_runtime_settings_accept_only_default_and_explicit_rollback() -> None:
         _validate_settings(Settings(retrieval_strategy="sparse", rerank_enabled=True), contract)
     with pytest.raises(RetrievalUnavailableError, match="frozen"):
         _validate_settings(Settings(dense_candidate_limit=21), contract)
+
+
+def test_runtime_profile_defaults_to_phase6_and_resolves_phase7_atomically() -> None:
+    phase6_settings, phase6_contract = resolve_retrieval_runtime(Settings())
+    assert phase6_contract is PHASE6_RETRIEVAL_CONTRACT
+    assert phase6_settings.qdrant_collection == "industrial_manual_chunks"
+    assert phase6_settings.rerank_deduplicate_content is False
+
+    phase7_settings, phase7_contract = resolve_retrieval_runtime(
+        Settings(
+            retrieval_profile="phase7",
+            qdrant_collection="ignored-dense",
+            qdrant_hybrid_collection="ignored-hybrid",
+            dense_candidate_limit=999,
+            sparse_candidate_limit=999,
+            rrf_k=999,
+        )
+    )
+    assert phase7_contract is PHASE7_RETRIEVAL_CONTRACT
+    assert phase7_settings.qdrant_collection == "industrial_manual_phase7_dense_v1"
+    assert phase7_settings.qdrant_hybrid_collection == "industrial_manual_phase7_hybrid_v1"
+    assert phase7_settings.dense_candidate_limit == 60
+    assert phase7_settings.sparse_candidate_limit == 40
+    assert phase7_settings.rrf_k == 40
+    assert phase7_settings.bm25_avg_len == 81.33599709407919
+    assert phase7_settings.rerank_deduplicate_content is True
 
 
 def test_frozen_collection_rejects_count_and_hash_mismatch(monkeypatch) -> None:

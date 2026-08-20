@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     rerank_candidate_strategy: Literal["sparse", "hybrid", "union"] | None = None
     rerank_final_limit: int = Field(default=5, gt=0)
     retrieval_strategy: Literal["union", "sparse"] = "union"
+    retrieval_profile: Literal["phase6", "phase7"] = "phase6"
     rerank_enabled: bool = True
     evidence_score_threshold: float | None = None
     generation_max_context_chars: int = Field(default=24_000, ge=4_000)

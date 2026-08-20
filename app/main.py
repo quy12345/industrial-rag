@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.models import HealthResponse, ReadinessResponse
 from app.request_context import request_id
 from app.retrieval import RetrievalError, create_qdrant_client
-from app.retrieval_runtime import validate_frozen_runtime
+from app.retrieval_runtime import resolve_retrieval_runtime, validate_frozen_runtime
 
 settings = get_settings()
 
@@ -63,10 +63,15 @@ def ready() -> ReadinessResponse:
     """Check frozen Qdrant collection identity without loading any model or provider."""
 
     try:
-        client = create_qdrant_client(settings)
+        runtime_settings, contract = resolve_retrieval_runtime(settings)
+        client = create_qdrant_client(runtime_settings)
         validate_frozen_runtime(
             client,
-            collection_names=(settings.qdrant_collection, settings.qdrant_hybrid_collection),
+            collection_names=(
+                runtime_settings.qdrant_collection,
+                runtime_settings.qdrant_hybrid_collection,
+            ),
+            contract=contract,
         )
     except RetrievalError:
         return JSONResponse(
