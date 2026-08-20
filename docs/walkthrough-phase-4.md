@@ -167,5 +167,6 @@ hybrid CLI smoke                    PASS
 
 The host `.venv` remains Python 3.13.5. Python 3.11 validation was performed in Docker because the
 Windows `py` launcher was unavailable. Phase 4.1 closes the API build-source gap with explicit plain
-progress and baked-image checks. Its ingestion rebuild is separately pending a slow registry download;
-no Docker prune or Qdrant-volume deletion is performed.
+progress and baked-image checks. Its ingestion rebuild was cancelled during a slow external registry
+download; rerun it before claiming full ingestion baked-image closure. No Docker prune or
+Qdrant-volume deletion is performed.

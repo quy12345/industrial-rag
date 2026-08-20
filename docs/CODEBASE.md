@@ -6,6 +6,8 @@
 PDF/DOCX -> Docling -> structure-aware DocumentChunk
         -> dense FastEmbed vector + BM25 sparse vector -> Qdrant collection v2
 Query -> dense top-20 + sparse top-20 -> client-side RRF -> RetrievalCandidate
+      -> sparse | hybrid | dense/sparse union candidate pool
+      -> lazy multilingual cross-encoder -> full reranked pool -> display cutoff
 ```
 
 The current API is deliberately small: `app.main` exposes only `/api/v1/health`. Retrieval remains
@@ -14,7 +16,8 @@ phases.
 
 ## Main modules
 
-- `app/config.py`: Pydantic settings for v1 dense and v2 hybrid contracts, BM25 and RRF limits.
+- `app/config.py`: Pydantic settings for v1 dense, v2 hybrid, BM25/RRF, and optional reranker
+  contracts. No reranking strategy is configured by default.
 - `app/ingestion.py`: input validation, Docling conversion, batched PDF processing, stable
   content-based chunk IDs, and atomic JSONL output.
 - `app/models.py`: `DocumentChunk`, backward-compatible `RetrievedChunk`, one-based
@@ -27,6 +30,9 @@ phases.
   retrieval metrics, group metrics, and latency percentiles.
 - `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
   diagnostics, and RRF-demotion aggregation for the Phase 5 handoff.
+- `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
+  sparse/hybrid/union pool construction, strict output validation, deterministic reranking, stage
+  latency, and direct-evidence failure classification.
 - `scripts/index_document.py`, `scripts/search_dense.py`: v1 dense integration CLIs.
 - `scripts/index_hybrid.py`, `scripts/search_hybrid.py`, `scripts/evaluate.py`: v2 indexing/search
   and shared dense/sparse/hybrid evaluation CLIs.
@@ -34,6 +40,11 @@ phases.
   hybrid@20, and dense@20 ∪ sparse@20; not part of default pytest.
 - `scripts/generate_phase5_readiness.py`: validates the frozen contract and writes the Phase 5 JSON
   handoff from measured artifacts and live collection metadata.
+- `scripts/rerank_runtime.py`: validates both frozen collection manifests and constructs the real
+  retrieval/reranking runtime without changing either collection.
+- `scripts/search_reranked.py`: explicit-strategy search CLI with component and rerank diagnostics.
+- `scripts/evaluate_reranking.py`: evaluates one or all three Phase 5 pools and writes additive
+  strategy/comparison JSON artifacts; `--comparison-only` never loads a model.
 
 ## Dense-index contract
 
@@ -64,6 +75,21 @@ vector, upserts new deterministic points, and only then removes stale points for
 The hybrid manifest validates all index/fusion settings and the chunk hash before sparse or hybrid
 search begins.
 
+## Reranking contract
+
+- Model: `jinaai/jina-reranker-v2-base-multilingual` through FastEmbed 0.8.0
+  `fastembed.rerank.cross_encoder.TextCrossEncoder`.
+- License: `CC-BY-NC-4.0`; benchmark/demo use only unless commercial rights are resolved.
+- Input format ID: `heading_content_v1`, rendered as `heading > breadcrumb`, two newlines, and the
+  unchanged raw chunk text; heading-less chunks use raw text only.
+- Sparse pool: v2 sparse top 20. Hybrid pool: v2 dense top 20 plus sparse top 20, RRF `k=60`, then
+  top 20. Union pool: v1 dense top 20 plus v2 sparse top 20 with stable-ID de-duplication and no
+  pre-rerank truncation.
+- The cross-encoder output must contain one indexed, finite score for every input. Final ordering is
+  score descending, previous one-based rank ascending, then chunk ID.
+- `rerank_score` becomes the final ranking signal while dense, sparse, and RRF scores/ranks remain
+  available. The full pool is returned; CLI `--limit` affects display only. No error fallback exists.
+
 ## Evaluation boundary
 
 `data/eval/dense_smoke.jsonl` is a retrieval-development set, not a Phase 6 held-out test set.
@@ -85,7 +111,8 @@ client used by the successful Phase 4 Python 3.11 integration; Qdrant server rem
 
 `Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. Compose starts
 only API/Qdrant by default; ingestion is profile-gated. The shared `fastembed_cache` volume avoids
-downloading the same model separately for API and ingestion.
+downloading the same model separately for API and ingestion. Phase 5 downloaded the reranker at
+runtime into that volume; the model is not baked into an image.
 
 The ingestion target installs Debian runtime packages `libxcb1`, `libgl1`, and
 `libglib2.0-0t64`; Docling's PDF/image stack needs the shared libraries they provide when running
@@ -100,3 +127,7 @@ schema/IDF, safe re-indexing, document filters, metadata preservation, manifest 
 duplicate/tie/empty-list behavior. Phase 4.1 adds offline candidate-pool tests for deterministic
 rank/score preservation, union de-duplication, qrel-only candidate recall, scenario aggregation,
 critical rows, and RRF-demotion diagnostics.
+Phase 5 adds fake indexed cross-encoder tests for malformed outputs, finite scores, ordering and
+ties, metadata preservation, no fallback, all candidate pools, document filtering, failure classes,
+latency aggregation, CLI contracts, and no eager model initialization. Real model/Qdrant evaluation
+remains separate from default pytest.
