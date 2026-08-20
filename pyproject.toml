@@ -21,9 +21,15 @@ retrieval = [
 ingestion = [
     "docling>=2.117,<2.118",
 ]
+llm = [
+    "langchain-core>=1.5.1,<1.6.0",
+    "langchain-openai>=1.4.1,<1.5.0",
+]
 dev = [
     "qdrant-client[fastembed]>=1.19.0,<1.20.0",
     "docling>=2.117,<2.118",
+    "langchain-core>=1.5.1,<1.6.0",
+    "langchain-openai>=1.4.1,<1.5.0",
     "pytest>=8.0,<9.0",
     "httpx>=0.27,<1.0",
     "ruff>=0.6,<1.0",

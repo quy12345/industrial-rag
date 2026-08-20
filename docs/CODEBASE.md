@@ -8,20 +8,23 @@ PDF/DOCX -> Docling -> structure-aware DocumentChunk
 Query -> dense top-20 + sparse top-20 -> client-side RRF -> RetrievalCandidate
       -> sparse | hybrid | dense/sparse union candidate pool
       -> lazy multilingual cross-encoder -> full reranked pool -> display cutoff
+      -> evidence gate -> structured grounded generation
+      -> source-ID validation -> trusted citation builder -> QueryResponse
 ```
 
-The current API is deliberately small: `app.main` exposes only `/api/v1/health`. Retrieval remains
-explicit Python code so it can be inspected and benchmarked before later orchestration/generation
-phases.
+`app.main` exposes `/api/v1/health` and `/api/v1/query`. Retrieval, reranking, evidence gating, and
+citations remain explicit Python; LangChain is limited to prompt orchestration, OpenAI Responses or
+Gemini OpenAI-compatible Chat Completions invocation, and provider-native structured output.
 
 ## Main modules
 
-- `app/config.py`: Pydantic settings for v1 dense, v2 hybrid, BM25/RRF, and optional reranker
-  contracts. No reranking strategy is configured by default.
+- `app/config.py`: Pydantic settings for retrieval, reranking, evidence/generation limits, and the
+  selected OpenAI or Gemini provider. Union+rerank is the Phase 6 default; sparse/no-rerank is
+  rollback.
 - `app/ingestion.py`: input validation, Docling conversion, batched PDF processing, stable
   content-based chunk IDs, and atomic JSONL output.
-- `app/models.py`: `DocumentChunk`, backward-compatible `RetrievedChunk`, one-based
-  `RetrievalCandidate`, and health models.
+- `app/models.py`: ingestion/retrieval models plus the public query request, response, and trusted
+  citation contracts.
 - `app/retrieval.py`: embedding input, FastEmbed initialization, Qdrant collection/index/search,
   stable UUIDv5 point IDs, safe re-indexing, and index-manifest validation.
 - `app/hybrid_retrieval.py`: FastEmbed BM25 configuration and exact avg-length calculation, v2
@@ -33,6 +36,16 @@ phases.
 - `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
   sparse/hybrid/union pool construction, strict output validation, deterministic reranking, stage
   latency, and direct-evidence failure classification.
+- `app/retrieval_runtime.py`: artifact-independent frozen contract, live Qdrant hash/schema checks,
+  lazy union runtime, and sparse rollback composition shared by API and Phase 5 scripts.
+- `app/generation.py`: deterministic bounded evidence blocks, strict `GeneratedAnswer`, prompt
+  injection boundary, and a lazy LangChain adapter. OpenAI uses Responses with `store=false`;
+  Gemini uses Google's OpenAI-compatible Chat Completions endpoint.
+- `app/citations.py`: referential source-ID validation and deterministic citation construction from
+  retrieved metadata.
+- `app/query_service.py`: retrieve → gate → generate → validate/retry → respond orchestration,
+  abstention policy, and internal stage timings.
+- `app/api/query.py`: threadpool handoff and sanitized HTTP error mapping only.
 - `scripts/index_document.py`, `scripts/search_dense.py`: v1 dense integration CLIs.
 - `scripts/index_hybrid.py`, `scripts/search_hybrid.py`, `scripts/evaluate.py`: v2 indexing/search
   and shared dense/sparse/hybrid evaluation CLIs.
@@ -45,6 +58,8 @@ phases.
 - `scripts/search_reranked.py`: explicit-strategy search CLI with component and rerank diagnostics.
 - `scripts/evaluate_reranking.py`: evaluates one or all three Phase 5 pools and writes additive
   strategy/comparison JSON artifacts; `--comparison-only` never loads a model.
+- `scripts/validate_query_runtime.py`: read-only real union/sparse runtime smoke without OpenAI.
+- `scripts/query_smoke.py`: bounded real-provider smoke and sanitized Phase 6 artifact writer.
 
 ## Dense-index contract
 
@@ -92,7 +107,7 @@ search begins.
 
 ## Evaluation boundary
 
-`data/eval/dense_smoke.jsonl` is a retrieval-development set, not a Phase 6 held-out test set.
+`data/eval/dense_smoke.jsonl` is a retrieval-development set, not a Phase 7 held-out test set.
 Ground truth is `relevant_chunk_ids`; expected phrase/page metadata validates and diagnoses qrels but
 never changes Hit@k or MRR. Ranks are one-based and reciprocal rank is zero when direct evidence is
 outside the candidate limit. The evaluator reports Hit@1/3/5/20, Candidate Recall@20, MRR@5/20,
@@ -103,16 +118,17 @@ per-language, and per-retrieval-scenario (`vi -> vi` monolingual; `en -> vi` cro
 - Core package: FastAPI runtime/settings only.
 - `retrieval` extra: Qdrant/FastEmbed.
 - `ingestion` extra: Docling.
-- `dev` extra: complete local test/lint dependencies.
+- `llm` extra: `langchain-core` and `langchain-openai`.
+- `dev` extra: complete local test/lint, retrieval, ingestion, and LLM dependencies.
 
 The canonical post-closure retrieval dependency is `qdrant-client >=1.19.0,<1.20.0`. It was the
 client used by the successful Phase 4 Python 3.11 integration; Qdrant server remains pinned to
 `v1.18.3`. Historic metrics artifacts are immutable even where older runtime metadata says `1.18.0`.
 
-`Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. Compose starts
-only API/Qdrant by default; ingestion is profile-gated. The shared `fastembed_cache` volume avoids
-downloading the same model separately for API and ingestion. Phase 5 downloaded the reranker at
-runtime into that volume; the model is not baked into an image.
+`Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. API adds only
+the LLM extra; ingestion does not receive LangChain/OpenAI. Compose starts API/Qdrant by default;
+ingestion is profile-gated. The shared `fastembed_cache` volume supplies models at runtime; weights
+are not baked into either image.
 
 The ingestion target installs Debian runtime packages `libxcb1`, `libgl1`, and
 `libglib2.0-0t64`; Docling's PDF/image stack needs the shared libraries they provide when running
@@ -131,3 +147,8 @@ Phase 5 adds fake indexed cross-encoder tests for malformed outputs, finite scor
 ties, metadata preservation, no fallback, all candidate pools, document filtering, failure classes,
 latency aggregation, CLI contracts, and no eager model initialization. Real model/Qdrant evaluation
 remains separate from default pytest.
+Phase 6 adds fake generation, evidence, citation, correction-retry, query-service, HTTP mapping, lazy
+runtime, and security/logging tests. The original canonical Python 3.11 run passes 160 tests with one
+known third-party Starlette/TestClient deprecation warning. The additive Gemini and UTF-8 response
+regressions bring the local suite to 162, and the real adapter constructs in the Python 3.11 API image; no default test
+calls Qdrant, FastEmbed, a reranker, or a generation provider.

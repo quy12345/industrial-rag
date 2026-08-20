@@ -26,3 +26,4 @@ artifacts/metrics/*
 artifacts/figures/*
 !artifacts/figures/.gitkeep
 artifacts/*.jsonl
+artifacts/*.log

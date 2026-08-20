@@ -18,6 +18,8 @@ RUN pip install --no-cache-dir ".[retrieval]"
 
 FROM retrieval-runtime AS api
 
+RUN pip install --no-cache-dir ".[llm]"
+
 USER appuser
 
 EXPOSE 8000
