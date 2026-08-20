@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -13,11 +14,15 @@ from app.reranking import RerankingError
 from app.retrieval import RetrievalError
 from app.retrieval_runtime import (
     PHASE6_RETRIEVAL_CONTRACT,
+    PHASE7_RETRIEVAL_CONTRACT,
+    FrozenRetrievalContract,
     LazyQueryRetriever,
     QueryRetrievalResult,
     UnionRerankRetriever,
+    _expand_phase7_query,
     _validate_frozen_collection,
     _validate_settings,
+    resolve_retrieval_runtime,
 )
 
 
@@ -60,6 +65,7 @@ def test_union_adapter_preserves_full_order_and_stage_timings() -> None:
                     "dense_retrieval": 2.0,
                     "sparse_retrieval": 1.0,
                     "union_preparation": 0.5,
+                    "content_deduplication": 0.25,
                     "rerank": 4.0,
                     "total": 7.5,
                 },
@@ -67,7 +73,7 @@ def test_union_adapter_preserves_full_order_and_stage_timings() -> None:
 
     result = UnionRerankRetriever(Pipeline()).retrieve("q", document_id="manual-a")
     assert [item.chunk_id for item in result.candidates] == ["b", "a"]
-    assert result.retrieval_ms == 3.5
+    assert result.retrieval_ms == 3.75
     assert result.rerank_ms == 4.0
 
 
@@ -97,6 +103,32 @@ def test_runtime_settings_accept_only_default_and_explicit_rollback() -> None:
         _validate_settings(Settings(dense_candidate_limit=21), contract)
 
 
+def test_runtime_profile_defaults_to_phase6_and_resolves_phase7_atomically() -> None:
+    phase6_settings, phase6_contract = resolve_retrieval_runtime(Settings())
+    assert phase6_contract is PHASE6_RETRIEVAL_CONTRACT
+    assert phase6_settings.qdrant_collection == "industrial_manual_chunks"
+    assert phase6_settings.rerank_deduplicate_content is False
+
+    phase7_settings, phase7_contract = resolve_retrieval_runtime(
+        Settings(
+            retrieval_profile="phase7",
+            qdrant_collection="ignored-dense",
+            qdrant_hybrid_collection="ignored-hybrid",
+            dense_candidate_limit=999,
+            sparse_candidate_limit=999,
+            rrf_k=999,
+        )
+    )
+    assert phase7_contract is PHASE7_RETRIEVAL_CONTRACT
+    assert phase7_settings.qdrant_collection == "industrial_manual_phase7_dense_v1"
+    assert phase7_settings.qdrant_hybrid_collection == "industrial_manual_phase7_hybrid_v1"
+    assert phase7_settings.dense_candidate_limit == 60
+    assert phase7_settings.sparse_candidate_limit == 40
+    assert phase7_settings.rrf_k == 40
+    assert phase7_settings.bm25_avg_len == 81.33599709407919
+    assert phase7_settings.rerank_deduplicate_content is True
+
+
 def test_frozen_collection_rejects_count_and_hash_mismatch(monkeypatch) -> None:
     contract = PHASE6_RETRIEVAL_CONTRACT
 
@@ -114,6 +146,48 @@ def test_frozen_collection_rejects_count_and_hash_mismatch(monkeypatch) -> None:
     )
     with pytest.raises(RetrievalError, match="frozen"):
         _validate_frozen_collection(Client(99), "v1", contract)
+
+
+def test_multi_document_frozen_contract_hashes_the_union_of_stable_ids(monkeypatch) -> None:
+    contract = FrozenRetrievalContract(
+        document_id="a-doc",
+        document_ids=("a-doc", "b-doc"),
+        chunk_count=2,
+        chunk_ids_sha256=hashlib.sha256(b"a\nb").hexdigest(),
+    )
+
+    class Client:
+        def get_collection(self, name):
+            return SimpleNamespace(points_count=2)
+
+    monkeypatch.setattr(
+        "app.retrieval_runtime.get_indexed_chunk_ids",
+        lambda *args, document_id, **kwargs: {"a"} if document_id == "a-doc" else {"b"},
+    )
+    _validate_frozen_collection(Client(), "phase7", contract)
+    assert PHASE7_RETRIEVAL_CONTRACT.chunk_count == 2753
+    assert (
+        PHASE7_RETRIEVAL_CONTRACT.document_context_by_id[PHASE7_RETRIEVAL_CONTRACT.document_ids[0]][
+            "document_role"
+        ]
+        == "installation"
+    )
+    assert PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit == 60
+    assert PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit == 40
+    assert PHASE7_RETRIEVAL_CONTRACT.union_rrf_prune_limit == 30
+    assert PHASE7_RETRIEVAL_CONTRACT.rrf_k == 40
+    assert PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile is not None
+    assert PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile.name == (
+        "weighted_rrf_k40_s1.25_frole0.1_prole0.5_offset40_"
+        "strong_and_weak_d5_s24_relation_list_v1"
+    )
+    assert (
+        PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile.relation_list_completeness_enabled
+        is True
+    )
+    assert PHASE7_RETRIEVAL_CONTRACT.frozen_rerank_batch_size == 8
+    assert PHASE7_RETRIEVAL_CONTRACT.freeze_rerank_threads is True
+    assert _expand_phase7_query("Phím MODE chuyển nhóm menu") != ("Phím MODE chuyển nhóm menu")
 
 
 def test_importing_runtime_does_not_construct_models() -> None:

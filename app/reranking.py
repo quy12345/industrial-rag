@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Literal, Protocol
 
 from app.candidate_audit import dense_results_to_candidates, union_dense_sparse_candidates
+from app.content_identity import evidence_content_fingerprint
 from app.evaluation import (
     EvaluationCase,
     EvaluationError,
@@ -20,11 +21,22 @@ from app.evaluation import (
 )
 from app.hybrid_retrieval import fuse_rrf, sparse_search
 from app.models import RetrievalCandidate, RetrievedChunk
+from app.phase7_optimization import (
+    Phase7FusionProfile,
+    Phase7OptimizationError,
+    QueryRoleInference,
+    apply_list_completeness_fallback,
+    apply_relation_list_completeness_fallback,
+    apply_role_aware_rank_fusion,
+    infer_query_role,
+    select_coverage_preserving_candidates,
+)
 from app.retrieval import dense_search
 
 RerankStrategy = Literal["sparse", "hybrid", "union"]
 FailureClass = Literal["candidate_miss", "reranker_miss_top5", "reranker_miss_top20", "hit"]
 CANDIDATE_TEXT_FORMAT = "heading_content_v1"
+PHASE7_CANDIDATE_TEXT_FORMAT = "document_context_heading_content_v2"
 
 
 class RerankingError(ValueError):
@@ -129,6 +141,12 @@ class RerankPipeline:
         sparse_candidate_limit: int = 20,
         rrf_k: int = 60,
         rerank_batch_size: int = 16,
+        deduplicate_content: bool = False,
+        document_contexts: Mapping[str, Mapping[str, str]] | None = None,
+        sparse_query_transform: Callable[[str], str] | None = None,
+        union_rrf_prune_limit: int | None = None,
+        phase7_fusion_profile: Phase7FusionProfile | None = None,
+        query_role_inferer: Callable[[str], QueryRoleInference] = infer_query_role,
         dense_search_fn: Callable[..., list[RetrievedChunk]] = dense_search,
         sparse_search_fn: Callable[..., list[RetrievalCandidate]] = sparse_search,
     ) -> None:
@@ -144,6 +162,12 @@ class RerankPipeline:
         self.sparse_candidate_limit = sparse_candidate_limit
         self.rrf_k = rrf_k
         self.rerank_batch_size = rerank_batch_size
+        self.deduplicate_content = deduplicate_content
+        self.document_contexts = dict(document_contexts or {})
+        self.sparse_query_transform = sparse_query_transform
+        self.union_rrf_prune_limit = union_rrf_prune_limit
+        self.phase7_fusion_profile = phase7_fusion_profile
+        self.query_role_inferer = query_role_inferer
         self.dense_search_fn = dense_search_fn
         self.sparse_search_fn = sparse_search_fn
 
@@ -151,13 +175,39 @@ class RerankPipeline:
         self, question: str, *, strategy: RerankStrategy, document_id: str | None = None
     ) -> RerankExecution:
         pool = self.prepare_pool(question, strategy=strategy, document_id=document_id)
-        return execute_rerank(
+        execution = execute_rerank(
             question,
             pool=pool,
             cross_encoder=self.cross_encoder,
             strategy=strategy,
             batch_size=self.rerank_batch_size,
         )
+        if strategy != "union" or self.phase7_fusion_profile is None:
+            return execution
+        inference_started = perf_counter()
+        inference = self.query_role_inferer(question)
+        try:
+            candidates = apply_role_aware_rank_fusion(
+                execution.candidates_after_rerank,
+                query_role=inference.role,
+                role_multiplier=self.phase7_fusion_profile.post_rerank_role_multiplier,
+                rrf_rank_multiplier=self.phase7_fusion_profile.post_rerank_rrf_multiplier,
+                rank_offset=self.phase7_fusion_profile.post_rerank_rank_offset,
+                confidence=inference.confidence,
+                confidence_mode=self.phase7_fusion_profile.post_rerank_confidence_mode,
+            )
+            if self.phase7_fusion_profile.list_completeness_enabled:
+                candidates = apply_list_completeness_fallback(candidates, query=question)
+            if self.phase7_fusion_profile.relation_list_completeness_enabled:
+                candidates = apply_relation_list_completeness_fallback(
+                    candidates,
+                    query=question,
+                )
+        except Phase7OptimizationError as exc:
+            raise RerankingError(str(exc)) from exc
+        stages = dict(execution.stage_latency_ms)
+        stages["role_aware_rank_fusion"] = (perf_counter() - inference_started) * 1000
+        return RerankExecution(execution.candidates_before_rerank, candidates, stages)
 
     def prepare_pool(
         self, question: str, *, strategy: RerankStrategy, document_id: str | None = None
@@ -183,10 +233,15 @@ class RerankPipeline:
             )
             stages["dense_retrieval"] = (perf_counter() - dense_started) * 1000
 
+        sparse_query = question
+        if self.sparse_query_transform is not None:
+            expansion_started = perf_counter()
+            sparse_query = self.sparse_query_transform(question)
+            stages["query_expansion"] = (perf_counter() - expansion_started) * 1000
         sparse_started = perf_counter()
         sparse_candidates = self.sparse_search_fn(
             self.client,
-            question,
+            sparse_query,
             collection_name=self.hybrid_collection,
             sparse_vector_name=self.sparse_vector_name,
             sparse_embedding_model=self.sparse_embedding_model,
@@ -196,17 +251,62 @@ class RerankPipeline:
         stages["sparse_retrieval"] = (perf_counter() - sparse_started) * 1000
 
         preparation_started = perf_counter()
-        candidates = build_candidate_pool(
-            strategy,
-            dense_results=dense_results,
-            sparse_candidates=sparse_candidates,
-            rrf_k=self.rrf_k,
-            hybrid_limit=max(self.dense_candidate_limit, self.sparse_candidate_limit),
-        )
-        stages["fusion" if strategy == "hybrid" else "union_preparation"] = (
-            perf_counter() - preparation_started
-        ) * 1000
-        if strategy == "sparse":
+        pending_prune_limit: int | None = None
+        dense_candidates = [
+            _with_document_context(candidate, self.document_contexts.get(candidate.document_id))
+            for candidate in dense_results_to_candidates(dense_results)
+        ]
+        contextual_sparse_candidates = [
+            _with_document_context(candidate, self.document_contexts.get(candidate.document_id))
+            for candidate in sparse_candidates
+        ]
+        if strategy == "union" and self.phase7_fusion_profile is not None:
+            role_started = perf_counter()
+            query_role = self.query_role_inferer(question)
+            stages["query_role_inference"] = (perf_counter() - role_started) * 1000
+            try:
+                candidates = select_coverage_preserving_candidates(
+                    dense_candidates,
+                    contextual_sparse_candidates,
+                    profile=self.phase7_fusion_profile,
+                    query_role=query_role.role,
+                )
+            except Phase7OptimizationError as exc:
+                raise RerankingError(str(exc)) from exc
+            preparation_stage = "coverage_preserving_weighted_rrf"
+        elif strategy == "union" and self.union_rrf_prune_limit is not None:
+            if self.union_rrf_prune_limit <= 0:
+                raise RerankingError("Union RRF prune limit must be greater than 0.")
+            candidates = fuse_rrf(
+                dense_candidates,
+                contextual_sparse_candidates,
+                rrf_k=self.rrf_k,
+                final_limit=len(dense_results) + len(sparse_candidates),
+            )
+            pending_prune_limit = self.union_rrf_prune_limit
+            preparation_stage = "rrf_pruning"
+        else:
+            candidates = build_candidate_pool(
+                strategy,
+                dense_results=dense_results,
+                sparse_candidates=contextual_sparse_candidates,
+                rrf_k=self.rrf_k,
+                hybrid_limit=max(self.dense_candidate_limit, self.sparse_candidate_limit),
+            )
+            preparation_stage = "fusion" if strategy == "hybrid" else "union_preparation"
+        if not (strategy == "union" and self.phase7_fusion_profile is not None):
+            candidates = [
+                _with_document_context(candidate, self.document_contexts.get(candidate.document_id))
+                for candidate in candidates
+            ]
+        stages[preparation_stage] = (perf_counter() - preparation_started) * 1000
+        if self.deduplicate_content:
+            deduplication_started = perf_counter()
+            candidates = deduplicate_candidates_by_content(candidates)
+            stages["content_deduplication"] = (perf_counter() - deduplication_started) * 1000
+        if pending_prune_limit is not None:
+            candidates = candidates[:pending_prune_limit]
+        if strategy == "sparse" and "union_preparation" in stages:
             stages.pop("union_preparation")
         return CandidatePool(candidates, stages)
 
@@ -233,10 +333,37 @@ def fastembed_model_metadata(model_name: str) -> dict[str, Any]:
 
 
 def build_candidate_text(candidate: RetrievalCandidate) -> str:
-    """Build the frozen heading-breadcrumb plus raw-content reranker input."""
+    """Build trusted document context, heading breadcrumb, and raw-content input."""
 
     heading = " > ".join(value.strip() for value in candidate.headings if value.strip())
-    return f"{heading}\n\n{candidate.text}" if heading else candidate.text
+    context: list[str] = []
+    title = candidate.metadata.get("document_title")
+    role = candidate.metadata.get("document_role")
+    if isinstance(title, str) and title.strip():
+        context.append(f"Document title: {title.strip()}")
+    if isinstance(role, str) and role.strip():
+        context.append(f"Document role: {role.strip()}")
+    sections = ["\n".join(context)] if context else []
+    if heading:
+        sections.append(heading)
+    sections.append(candidate.text)
+    return "\n\n".join(sections)
+
+
+def _with_document_context(
+    candidate: RetrievalCandidate, context: Mapping[str, str] | None
+) -> RetrievalCandidate:
+    if context is None:
+        return candidate
+    title = str(context.get("document_title", "")).strip()
+    role = str(context.get("document_role", "")).strip()
+    if not title or role not in {"installation", "programming"}:
+        raise RerankingError(
+            f"Invalid trusted document context for candidate {candidate.chunk_id}."
+        )
+    metadata = dict(candidate.metadata)
+    metadata.update({"document_title": title, "document_role": role})
+    return candidate.model_copy(update={"metadata": metadata})
 
 
 def build_candidate_pool(
@@ -262,6 +389,60 @@ def build_candidate_pool(
     if strategy == "union":
         return union_dense_sparse_candidates(dense_candidates, sparse_candidates)
     raise RerankingError(f"Unsupported rerank candidate strategy: {strategy}")
+
+
+def deduplicate_candidates_by_content(
+    candidates: Sequence[RetrievalCandidate],
+) -> list[RetrievalCandidate]:
+    """Collapse exact-normalized text duplicates while preserving provenance IDs."""
+
+    groups: dict[tuple[str, str], list[RetrievalCandidate]] = {}
+    order: list[tuple[str, str]] = []
+    for candidate in candidates:
+        fingerprint = evidence_content_fingerprint(candidate.text)
+        key = (candidate.document_id, fingerprint)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(candidate)
+
+    deduplicated: list[RetrievalCandidate] = []
+    for document_id, fingerprint in order:
+        equivalents = groups[(document_id, fingerprint)]
+        representative = equivalents[0]
+        equivalent_ids = sorted({candidate.chunk_id for candidate in equivalents})
+        metadata = dict(representative.metadata)
+        metadata.update(
+            {
+                "content_fingerprint": fingerprint,
+                "equivalent_chunk_ids": equivalent_ids,
+                "equivalent_chunk_count": len(equivalent_ids),
+            }
+        )
+        deduplicated.append(
+            representative.model_copy(
+                update={
+                    "metadata": metadata,
+                    "dense_rank": _minimum_optional(
+                        candidate.dense_rank for candidate in equivalents
+                    ),
+                    "dense_score": _maximum_optional(
+                        candidate.dense_score for candidate in equivalents
+                    ),
+                    "sparse_rank": _minimum_optional(
+                        candidate.sparse_rank for candidate in equivalents
+                    ),
+                    "sparse_score": _maximum_optional(
+                        candidate.sparse_score for candidate in equivalents
+                    ),
+                    "rrf_rank": _minimum_optional(candidate.rrf_rank for candidate in equivalents),
+                    "rrf_score": _maximum_optional(
+                        candidate.rrf_score for candidate in equivalents
+                    ),
+                }
+            )
+        )
+    return deduplicated
 
 
 def rerank_candidates(
@@ -534,3 +715,13 @@ def _mrr(ranks: Sequence[int | None], cutoff: int) -> float:
     return sum(1 / rank if rank is not None and rank <= cutoff else 0.0 for rank in ranks) / len(
         ranks
     )
+
+
+def _minimum_optional(values: Iterable[int | None]) -> int | None:
+    present = [value for value in values if value is not None]
+    return min(present) if present else None
+
+
+def _maximum_optional(values: Iterable[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    return max(present) if present else None

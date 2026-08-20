@@ -13,6 +13,11 @@ from typing import Literal
 from app.citations import build_citations, validate_generated_answer
 from app.config import Settings, get_settings
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
+from app.evidence_selection import (
+    EvidenceDuplicateGroup,
+    EvidenceSelectionError,
+    select_evidence_candidates,
+)
 from app.generation import (
     AnswerGenerator,
     LangChainOpenAIGenerator,
@@ -20,10 +25,12 @@ from app.generation import (
     format_evidence,
 )
 from app.models import QueryResponse, RetrievalCandidate
+from app.request_context import request_id
 from app.retrieval_runtime import (
     LazyQueryRetriever,
     QueryRetriever,
     build_query_retriever,
+    resolve_retrieval_runtime,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +76,11 @@ class QueryExecution:
     response: QueryResponse
     timings: QueryTimings
     usage: TokenUsage | None
+    candidates: tuple[RetrievalCandidate, ...] = ()
+    candidate_pool: tuple[RetrievalCandidate, ...] = ()
+    evidence_candidates: tuple[RetrievalCandidate, ...] = ()
+    evidence_duplicate_groups: tuple[EvidenceDuplicateGroup, ...] = ()
+    generation_attempts: int = 0
 
 
 class EvidenceGate:
@@ -118,12 +130,23 @@ class QueryService:
         total_started = perf_counter()
         self.generator.ensure_configured()
         retrieved = self.retriever.retrieve(question, document_id=document_id)
-        candidates = retrieved.candidates[:top_k]
+        candidate_pool = tuple(retrieved.candidate_pool or retrieved.candidates)
+        try:
+            selection = select_evidence_candidates(question, retrieved.candidates, top_k=top_k)
+        except EvidenceSelectionError:
+            return self._abstained_execution(
+                reason="invalid_candidate_metadata",
+                total_started=total_started,
+                retrieval_ms=retrieved.retrieval_ms,
+                rerank_ms=retrieved.rerank_ms,
+                gate_ms=0.0,
+                candidates=tuple(retrieved.candidates),
+                candidate_pool=candidate_pool,
+            )
+        candidates = list(selection.candidates)
 
         gate_started = perf_counter()
-        gate = self.evidence_gate.evaluate(
-            candidates, requested_document_id=document_id
-        )
+        gate = self.evidence_gate.evaluate(candidates, requested_document_id=document_id)
         gate_ms = (perf_counter() - gate_started) * 1000
         if not gate.passed:
             return self._abstained_execution(
@@ -132,6 +155,10 @@ class QueryService:
                 retrieval_ms=retrieved.retrieval_ms,
                 rerank_ms=retrieved.rerank_ms,
                 gate_ms=gate_ms,
+                candidates=tuple(retrieved.candidates),
+                candidate_pool=candidate_pool,
+                evidence_candidates=selection.candidates,
+                evidence_duplicate_groups=selection.duplicate_groups,
             )
 
         try:
@@ -145,6 +172,10 @@ class QueryService:
                 retrieval_ms=retrieved.retrieval_ms,
                 rerank_ms=retrieved.rerank_ms,
                 gate_ms=gate_ms,
+                candidates=tuple(retrieved.candidates),
+                candidate_pool=candidate_pool,
+                evidence_candidates=selection.candidates,
+                evidence_duplicate_groups=selection.duplicate_groups,
             )
 
         generation_ms = 0.0
@@ -170,6 +201,11 @@ class QueryService:
                     generation_ms=generation_ms,
                     citation_ms=citation_ms,
                     usage=usage,
+                    candidates=tuple(retrieved.candidates),
+                    candidate_pool=candidate_pool,
+                    evidence_candidates=selection.candidates,
+                    evidence_duplicate_groups=selection.duplicate_groups,
+                    generation_attempts=attempt + 1,
                 )
             except GenerationValidationError as exc:
                 generation_ms += (perf_counter() - generation_started) * 1000
@@ -185,6 +221,11 @@ class QueryService:
                     generation_ms=generation_ms,
                     citation_ms=citation_ms,
                     usage=usage,
+                    candidates=tuple(retrieved.candidates),
+                    candidate_pool=candidate_pool,
+                    evidence_candidates=selection.candidates,
+                    evidence_duplicate_groups=selection.duplicate_groups,
+                    generation_attempts=attempt + 1,
                 )
             generation_ms += (perf_counter() - generation_started) * 1000
             usage = _combine_usage(usage, generated.usage)
@@ -205,6 +246,11 @@ class QueryService:
                         generation_ms=generation_ms,
                         citation_ms=citation_ms,
                         usage=usage,
+                        candidates=tuple(retrieved.candidates),
+                        candidate_pool=candidate_pool,
+                        evidence_candidates=selection.candidates,
+                        evidence_duplicate_groups=selection.duplicate_groups,
+                        generation_attempts=attempt + 1,
                     )
                 citations = build_citations(
                     validated.source_ids,
@@ -228,6 +274,11 @@ class QueryService:
                     generation_ms=generation_ms,
                     citation_ms=citation_ms,
                     usage=usage,
+                    candidates=tuple(retrieved.candidates),
+                    candidate_pool=candidate_pool,
+                    evidence_candidates=selection.candidates,
+                    evidence_duplicate_groups=selection.duplicate_groups,
+                    generation_attempts=attempt + 1,
                 )
             citation_ms += (perf_counter() - citation_started) * 1000
             response = QueryResponse(
@@ -245,7 +296,16 @@ class QueryService:
                 citation_ms=citation_ms,
             )
             _log_completion(timings, abstention_reason=None)
-            return QueryExecution(response=response, timings=timings, usage=usage)
+            return QueryExecution(
+                response=response,
+                timings=timings,
+                usage=usage,
+                candidates=tuple(retrieved.candidates),
+                candidate_pool=candidate_pool,
+                evidence_candidates=selection.candidates,
+                evidence_duplicate_groups=selection.duplicate_groups,
+                generation_attempts=attempt + 1,
+            )
 
         raise RuntimeError("Correction loop terminated without a query result.")
 
@@ -260,6 +320,11 @@ class QueryService:
         generation_ms: float = 0.0,
         citation_ms: float = 0.0,
         usage: TokenUsage | None = None,
+        candidates: tuple[RetrievalCandidate, ...] = (),
+        candidate_pool: tuple[RetrievalCandidate, ...] = (),
+        evidence_candidates: tuple[RetrievalCandidate, ...] = (),
+        evidence_duplicate_groups: tuple[EvidenceDuplicateGroup, ...] = (),
+        generation_attempts: int = 0,
     ) -> QueryExecution:
         timings = _timings(
             total_started=total_started,
@@ -279,6 +344,11 @@ class QueryService:
             ),
             timings=timings,
             usage=usage,
+            candidates=candidates,
+            candidate_pool=candidate_pool,
+            evidence_candidates=evidence_candidates,
+            evidence_duplicate_groups=evidence_duplicate_groups,
+            generation_attempts=generation_attempts,
         )
 
 
@@ -286,9 +356,11 @@ class QueryService:
 def get_query_service() -> QueryService:
     """Return a lightweight cached service whose heavy retrieval dependencies remain lazy."""
 
-    settings = get_settings()
+    settings, contract = resolve_retrieval_runtime(get_settings())
     return QueryService(
-        retriever=LazyQueryRetriever(lambda: build_query_retriever(settings)),
+        retriever=LazyQueryRetriever(
+            lambda: build_query_retriever(settings, contract=contract)
+        ),
         evidence_gate=EvidenceGate(score_threshold=settings.evidence_score_threshold),
         generator=LangChainOpenAIGenerator(settings),
         settings=settings,
@@ -316,8 +388,7 @@ def _valid_candidate_metadata(
         if any(not isinstance(page, int) or page <= 0 for page in candidate.page_numbers):
             return False
         if any(
-            not isinstance(heading, str) or not heading.strip()
-            for heading in candidate.headings
+            not isinstance(heading, str) or not heading.strip() for heading in candidate.headings
         ):
             return False
     return True
@@ -331,9 +402,7 @@ def _combine_usage(current: TokenUsage | None, new: TokenUsage | None) -> TokenU
     return TokenUsage(
         input_tokens=_sum_optional(current.input_tokens, new.input_tokens),
         output_tokens=_sum_optional(current.output_tokens, new.output_tokens),
-        cached_input_tokens=_sum_optional(
-            current.cached_input_tokens, new.cached_input_tokens
-        ),
+        cached_input_tokens=_sum_optional(current.cached_input_tokens, new.cached_input_tokens),
     )
 
 
@@ -362,11 +431,11 @@ def _timings(
     )
 
 
-def _log_completion(
-    timings: QueryTimings, *, abstention_reason: AbstentionReason | None
-) -> None:
+def _log_completion(timings: QueryTimings, *, abstention_reason: AbstentionReason | None) -> None:
     logger.info(
-        "query_completed total_ms=%.2f retrieval_ms=%.2f rerank_ms=%.2f abstention=%s",
+        "query_completed request_id=%s total_ms=%.2f retrieval_ms=%.2f rerank_ms=%.2f "
+        "abstention=%s",
+        request_id.get() or "none",
         timings.total_ms,
         timings.retrieval_ms,
         timings.rerank_ms,

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 6 — Query API, Grounded Generation, Citations and Abstention**
+**Phase 7 held-out v2 measured — Streamlit demo implemented**
 
 Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
 `GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
@@ -10,13 +10,47 @@ multilingual cross-encoder reranking, an evidence gate, OpenAI/Gemini structured
 referential citation validation, and deterministic citations built from Qdrant payloads. Sparse
 top-20 without reranking remains the explicit operational rollback.
 
-An interactive Gemini request has returned an answer through the full API path. The sanitized,
-bounded provider smoke artifact is still not recorded, and the OpenAI path is not run. This is not
-called production-ready: semantic citation evaluation, unanswerable calibration, a real industrial
-corpus, and production hardening remain Phase 7 work. Phase 5.1 reranker optimization remains
-deferred.
+An interactive Gemini request has returned an answer through the full API path. Phase 7 added a
+separate two-manual ATV320 corpus and multiple calibration-only diagnostics. The latest closure fixes
+confirmed evaluator false negatives, seals calibration loading from held-out access, and removes
+exact cross-document duplicate evidence before the generation cutoff. A separately approved 005
+diagnostic then reused one frozen evidence bundle for three provider generations: all three completed,
+cited `S1`, and matched the expected fact with positive polarity. This confirms the new span-aware
+matcher closes 005 for newly observed output; it cannot reconstruct the historical v4 answer. A
+provider-free relation-scoped list selector now moves item 010 from rank 6 to actual evidence rank 5
+without qrel/model/chunk changes. Retrieval closure passes; the required three-run provider stability
+calibration has now passed on Gemini. The worst-run fact result is `12/12`; all three runs have valid
+citation IDs, zero unsupported/wrong-document citations, and abstention precision/recall `1.000`.
 
-The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, FastEmbed `0.8.0`,
+The current held-out set is also `BLOCKED_GOVERNANCE`: historical tracked documentation mirrored its
+content and the old calibration CLI parsed both splits. The current CLI no longer opens the held-out
+JSONL in calibration mode and now refuses held-out execution, but Git history cannot be made unseen.
+
+### Replacement held-out v2 (private draft)
+
+A replacement v2 draft is stored only in the locally ignored
+`data/eval/phase7/private-heldout-v2/` directory. It has 30 answerable and 15
+unanswerable items, was validated against the frozen 2,753-chunk corpus, and is
+not tracked by Git. Git ignore prevents accidental repository exposure; it is
+not an operating-system access-control list. Freeze it only after a human
+review with:
+
+```powershell
+docker compose --profile tools run --rm --no-deps `
+  -v "${PWD}:/workspace" -w /workspace ingestion `
+  python -m scripts.freeze_phase7_heldout_v2 `
+  --approval-token "APPROVE PHASE 7 HELDOUT V2 DATASET"
+```
+
+Freezing is separate from provider egress. The user approved one final Gemini execution after freeze.
+The sanitized v2 artifact reports candidate recall `0.900`, Hit@5 `0.800`, MRR@5 `0.725`, deterministic
+fact accuracy `0.786` across 28 answered answerable items, valid citation IDs `1.000`, two
+wrong-document citations, and abstention precision/recall `0.882`/`1.000`. This is an honest final
+measurement for this v2 set, not a runtime-tuning input: the results do **not** meet the calibration
+release targets. Any further tuning needs a separately created and sealed future benchmark.
+
+The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, direct-pinned FastEmbed
+`0.8.0`,
 and Qdrant server `v1.18.3`. The historic dense artifact that records client `1.18.0` is retained
 unchanged; it is a historic measurement, not the dependency declaration used after closure.
 
@@ -41,10 +75,134 @@ Extras are separated by responsibility:
 - `.[retrieval]`: Qdrant client, FastEmbed, dense retrieval, sparse BM25, and RRF.
 - `.[ingestion]`: Docling document parsing.
 - `.[llm]`: `langchain-core` and `langchain-openai` for Responses structured generation.
-- `.[dev]`: test/lint tooling plus retrieval, ingestion, and LLM dependencies.
+- `.[ui]`: Streamlit and HTTPX for the HTTP-only demo frontend.
+- `.[dev]`: test/lint tooling plus retrieval, ingestion, LLM, and UI dependencies.
 
 `EMBEDDING_CACHE_DIR` is optional locally. In Docker it is set to `/models/fastembed` and backed by
 a shared named volume; model weights are never baked into either image.
+
+## Phase 7 isolated industrial-corpus evaluation
+
+Phase 7 keeps the legacy 99-chunk development collections untouched. The new ATV320 corpus uses
+`industrial_manual_phase7_dense_v1` and `industrial_manual_phase7_hybrid_v1`, both frozen at 2,753
+points with stable-ID fingerprint
+`2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
+
+The active calibration-v3 set has 12 answerable and 8 unanswerable cases. The current held-out set
+has 30 answerable and 15 unanswerable cases. The files remain frozen, but the held-out split must not
+be described as statistically unseen because of historical repository exposure. Verify the approved
+dataset contract locally without models or Qdrant:
+
+```powershell
+python -m scripts.validate_phase7_dataset
+```
+
+The reproducible freeze command is shown below. It has already completed for the current files; the
+historical v1 approval token is intentionally rejected:
+
+```powershell
+python -m scripts.freeze_phase7_dataset `
+  --approval-token "APPROVE PHASE 7 DATASET V2"
+```
+
+The real end-to-end evaluator refuses draft datasets. Calibration mode validates only
+`calibration-v3.jsonl`, frozen chunks, and manifest metadata; it obtains the held-out hash from the
+manifest without opening `test.jsonl`. It then validates live Qdrant hashes and writes a sanitized
+resumable artifact containing only IDs/ranks/metrics:
+
+```powershell
+python -m scripts.evaluate_phase7_e2e --dataset calibration `
+  --provider-approval-token "APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS"
+```
+
+This command sends calibration questions and retrieved manual evidence to the configured generation
+provider. Do not run it until the code is reviewed and the exact new approval is granted. Held-out
+execution is currently refused with `BLOCKED_GOVERNANCE`, even if the historical token is supplied.
+
+The historical dataset-v1 Gemini calibration on 2026-08-09 completed all 20 records but failed its
+quality gate: Hit@5 `0.583`, MRR@5 `0.444`, direct-evidence citation rate `0.500`, and total p95
+`11.585 s`. Its reported phrase accuracy `0.417` is retained only as historical evidence: that metric
+incorrectly compared Vietnamese answers with English evidence wording. It must not be compared with
+the dataset-v2 answer-fact metric. The held-out benchmark has not been run; see
+`docs/walkthrough-phase-7.md`.
+
+The sealed evaluator now writes `phase-7-calibration-e2e-v5.json` and a separate v5 checkpoint, so
+rerunning it cannot overwrite v1--v4 evidence. Its identity includes prompt/evaluator/runtime hashes,
+provider settings, library versions, top-k, and correction count.
+
+The active calibration-v3 SHA-256 is
+`8e3e7798d667cccef0b3ac16aa292fb1f18381dc6e754a7b9dace1250755fa46`. The manifest records held-out
+SHA-256 `68c9c52e745a7616a869a2f55024964501dfb0cb537bbe6ff91dac5fbcae3c54`; calibration code reads this
+hash from the manifest and does not open the held-out dataset.
+
+The historical dataset-v2 diagnostics calibration completed all 20 rows with candidate recall/Hit@5
+`0.667`, strict contiguous fact accuracy `0.500`, direct-evidence citation rate `0.667`, and
+abstention precision/recall `1.000/1.000`. Phase 7.4 now keeps strict phrase matching as a diagnostic
+and uses deterministic typed facts as the headline metric. A sanitized rescore of the same answers
+raises deterministic fact accuracy to `8/12 = 0.667`; this is a derived evaluator result, not a new
+provider run.
+
+Phase 7.4.1 preserves that retrieval profile but separates the weak fusion role signal from a strong
+post-rerank rank-only prior. The selected profile is weighted RRF `k=40`, sparse weight `1.25`,
+dense@5/sparse@24 coverage reserves, fusion multiplier `0.10`, then a `0.50` document-role prior with
+rank offset `40` for strong and weak inferences. A relation-scoped list fallback is enabled only when
+the query itself contains list, key/button, switch/change, and technical-identifier cues. It counts
+only bracketed targets after that relation in the same clause; raw Jina scores remain unchanged.
+
+The 2026-08-17 provider-free closure measures candidate recall `12/12 = 1.000`, Hit@5
+`12/12 = 1.000`, MRR@5 `0.892`, wrong-document top-1 `0/12`, and wrong-document top-5
+`4/60 = 0.067`. English and Vietnamese are both `6/6`; calibration 010 is actual evidence rank 5;
+reranker input remains capped at 30. This passes every retrieval/contamination gate without an
+expected-document filter, qrel change, re-index, or model change. The real one-pass rerank p95 was
+`11.178 s`, so CPU latency remains a production limitation.
+
+Phase 7.5 freezes the final reranker budget at 30 and batch size 8 (runtime-default ONNX threads).
+Three repetitions of all 12 calibration questions measure rerank p95 `6.996 s` and total p95
+`7.027 s`, a 47.8% improvement from the 13.399 s baseline while retaining the closure metrics. A
+separate one-pass closure run measures rerank p95 `9.706 s`; it is not statistically comparable to
+the repeated CPU benchmark. The corpus, datasets, collections, MiniLM, Jina, and FastEmbed `0.8.0` remain frozen. Artifacts are
+sanitized and contain zero provider calls and zero held-out questions.
+
+Typed calibration-v3 is approved and active; qrels/pages/phrases remain unchanged. Historical
+calibration v4 completed all 20 rows but failed release: deterministic fact accuracy was `8/12`,
+wrong-document citations were `2`, and item 010 direct evidence was excluded by the actual top-5
+generation cutoff. The new generic evaluator makes `block`/`blocked` and `contact`/`contacts` match,
+while identifier, numeric/unit, ordering, sign, and negation controls remain strict. The approved 005
+diagnostic completed three independent generations over one fixed evidence bundle; all three were
+positive deterministic matches using `S1`. The old v4 output remains unreconstructable, but the
+current evaluator/provider path is stable for this targeted replay.
+
+The historical 2026-08-11 snapshot-v2 replay showed why global `list_completeness_v1` failed: it
+counted unrelated labels across an entire chunk. Snapshot v3 adds only sanitized relation-scoped
+counts. The winning generic rule distinguishes a conditional two-menu sentence from the direct
+three-menu MODE-key sentence, moving 010 `6 → 5`; the real Qdrant/Jina closure confirms all 12 rows
+hit top 5. No query ID, qrel, expected page/document, or answer fact is available to runtime logic.
+
+Canonical ingestion-container Python 3.11.15 validation: Ruff PASS and pytest
+`286 passed, 1 warning`. The repository `.venv` is Python 3.13.5 and was used only for targeted fast
+checks; it is not the canonical interpreter and was not overwritten. The warning is the known
+third-party Starlette/TestClient deprecation.
+
+Run the provider-free Phase 7.4.1--7.5 diagnostics only after Qdrant and the shared FastEmbed cache are
+available. These commands never call Gemini/OpenAI and never execute held-out questions:
+
+```powershell
+python -m scripts.calibrate_phase7_weighted_fusion
+python -m scripts.evaluate_phase7_retrieval_closure `
+  --output artifacts/metrics/phase-7-contamination-closure-v5.json
+python -m scripts.create_phase7_reranker_snapshot
+python -m scripts.calibrate_phase7_role_prior
+python -m scripts.generate_phase7_calibration_closure_readiness
+```
+
+The separately approved `diagnose_phase7_calibration_005` run is complete; its sanitized artifact is
+`artifacts/metrics/phase-7-calibration-005-diagnostic-v1.json`, while raw debug data remains only in
+the ignored private-debug directory. The authorized V5 calibration ran three independent Gemini calls
+and passed worst-run aggregation: `12/12` deterministic answerable facts in every run, valid citation
+IDs `100%`, no unsupported/wrong-document citations, and abstention precision/recall `1.000`. The
+three sanitized run artifacts and stability artifact are ignored under `artifacts/metrics/`. See
+`docs/walkthrough-phase-7-calibration-closure.md` for the sealed data flow and remaining governance
+boundary.
 
 ## Quickstart: khởi động, test, chạy demo và dừng
 
@@ -65,6 +223,7 @@ GEMINI_API_KEY=YOUR_NEW_GEMINI_API_KEY
 GEMINI_MODEL=gemini-3.5-flash-lite
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 GEMINI_REASONING_EFFORT=minimal
+GEMINI_TEMPERATURE=0
 
 OPENAI_MAX_OUTPUT_TOKENS=800
 OPENAI_TIMEOUT_SECONDS=60
@@ -83,15 +242,19 @@ chat. Nếu key từng xuất hiện trong log, phải revoke và tạo key mớ
 Build riêng API sau lần checkout đầu tiên hoặc sau khi source/Dockerfile/dependencies thay đổi:
 
 ```powershell
-docker compose --progress plain build api
+docker compose --progress plain build api ui
 ```
 
-Không cần build ingestion để chạy query API. Khởi động Qdrant và API:
+Không cần build ingestion để chạy query API/UI. Khởi động Qdrant, API và Streamlit:
 
 ```powershell
-docker compose up -d qdrant api
+docker compose up -d qdrant api ui
 docker compose ps
 ```
+
+Mở `http://localhost:8501`. Compose cấu hình API bằng frozen `RETRIEVAL_PROFILE=phase7`; Python
+local vẫn mặc định `phase6` để giữ backward compatibility. `GET /api/v1/ready` xác nhận trực tiếp
+hai Phase 7 collections, 2.753 points và chunk hash trước khi demo được coi là ready.
 
 Kiểm tra health và UTF-8 response header:
 
@@ -179,7 +342,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d qdrant api
 Dừng hằng ngày nhưng giữ container, collection, Qdrant storage và model cache:
 
 ```powershell
-docker compose stop api qdrant
+docker compose stop ui api qdrant
 ```
 
 Khởi động lại các container đã dừng:
@@ -196,6 +359,26 @@ docker compose down
 
 Không dùng `docker compose down -v`, `docker system prune` hoặc `docker volume prune`; các lệnh đó có
 thể xóa Qdrant collection hoặc FastEmbed model cache cần giữ lại.
+
+### Rebuild the tools ingestion image when needed
+
+The `ingestion` Docker target now installs `.[retrieval,ingestion,llm]`. It can therefore run the
+on-demand Phase 7 E2E CLI, which imports `langchain-core` and `langchain-openai`, as well as Docling
+ingestion. This makes only the profile-gated tools image heavier; the API target remains Docling-free.
+
+Run this manually from the repository root after pulling this change. It does not download FastEmbed
+or Jina model weights during the Docker build:
+
+```powershell
+docker compose --progress plain --profile tools build ingestion
+```
+
+The 2026-08-11 rebuilt tools image passed Python 3.11.15 plus Docling/`langchain-core`/
+`langchain-openai` import checks. Docker reports `9.66 GB` total and `9.515 GB` unique disk usage via
+`docker system df -v`; image metadata reports `3,255,679,310` bytes via `docker image inspect`.
+These values use different Docker storage accounting, so both are retained rather than presenting a
+single misleading number. Size optimization is deferred; correctness came first, and no prune was
+run.
 
 ## Ingestion and dense indexing
 
@@ -386,6 +569,39 @@ selects union as its accuracy-first API path and keeps sparse as the low-latency
 See `docs/walkthrough-phase-5.md` for scenario metrics, critical ranks, failure classes, commands,
 and the full validation record.
 
+## Streamlit demo
+
+The demo is deliberately a thin HTTP client:
+
+```text
+Browser → Streamlit :8501 → FastAPI :8000 → Qdrant/Jina → Gemini
+```
+
+It never imports retrieval/model/provider code and never receives the Gemini key. The sidebar shows
+API and Phase 7 readiness, selects all manuals or one ATV320 document, controls `top_k`, and clears
+the display-only session history. Answers use safe Markdown; citation excerpts are rendered as text
+with filename, pages, headings, stable chunk ID, and document ID. Each question is independent and
+the UI never retries a query automatically.
+
+Local UI workflow with an already-running API:
+
+```powershell
+python -m pip install -e ".[ui]"
+$env:RAG_API_URL="http://localhost:8000/api/v1"
+python -m streamlit run ui/streamlit_app.py
+```
+
+The first query can be slow while the API initializes dense/reranker models. The UI is localhost-only
+demo software, not an authenticated production frontend. See
+[`docs/walkthrough-streamlit-demo.md`](docs/walkthrough-streamlit-demo.md) for setup, health checks,
+error mapping, citation interpretation, and safe shutdown.
+
+Latest measured validation (2026-08-19): Python 3.11 Ruff PASS, `308 passed, 1 warning`, Compose and
+diff checks PASS, API/UI builds and all three health/readiness endpoints PASS. Both Phase 7
+collections remain at 2.753 points with frozen hash `2a972d…f56d`. API/UI image sizes are
+150.553.757 and 190.268.831 bytes. Provider-free VI/Installation and EN/Programming filter smokes
+PASS; new Streamlit-to-Gemini demo requests remain `NOT RUN` pending separate data-egress approval.
+
 ## Grounded query API
 
 Phase 6 deliberately keeps retrieval, reranking, evidence gating, and citation validation in
@@ -430,6 +646,7 @@ GEMINI_API_KEY=<YOUR_GEMINI_API_KEY>
 GEMINI_MODEL=gemini-3.5-flash-lite
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 GEMINI_REASONING_EFFORT=minimal
+GEMINI_TEMPERATURE=0
 OPENAI_MAX_OUTPUT_TOKENS=800
 OPENAI_TIMEOUT_SECONDS=60
 OPENAI_MAX_RETRIES=1
@@ -491,13 +708,18 @@ the prompt-injection boundary, citation contract, retry behavior, smoke status, 
 ## Docker
 
 The default Compose file is production-like: source is not bind-mounted and API reload is off.
-It contains Qdrant, the API runtime, and an on-demand `ingestion` service in the `tools` profile.
+It contains Qdrant, the API runtime, a lightweight Streamlit UI, and an on-demand `ingestion`
+service in the `tools` profile.
 Qdrant is pinned to `qdrant/qdrant:v1.18.3` and its named volume is persistent.
 
 ```powershell
-docker compose --progress plain build api
-docker compose up -d qdrant api
+docker compose --progress plain build api ui
+docker compose up -d qdrant api ui
 ```
+
+The independent `ui` target installs base + `.[ui]` only. It does not contain FastEmbed, Jina,
+Docling, LangChain, model weights, raw manuals, or artifacts. The UI calls the API over the Compose
+network and is published only on `127.0.0.1:8501`.
 
 The API image installs base + `.[retrieval]` + `.[llm]`, but not Docling. Build and run ingestion
 only when needed:

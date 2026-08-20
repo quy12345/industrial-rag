@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     qdrant_url: str = "http://localhost"
     qdrant_port: int = 6333
+    qdrant_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     qdrant_collection: str = "industrial_manual_chunks"
     dense_vector_name: str = "dense"
     qdrant_hybrid_collection: str = "industrial_manual_chunks_v2"
@@ -38,9 +39,12 @@ class Settings(BaseSettings):
     rerank_model: str = "jinaai/jina-reranker-v2-base-multilingual"
     rerank_cache_dir: str | None = None
     rerank_batch_size: int = Field(default=16, gt=0)
+    rerank_threads: int | None = Field(default=None, ge=1, le=4)
+    rerank_deduplicate_content: bool = False
     rerank_candidate_strategy: Literal["sparse", "hybrid", "union"] | None = None
     rerank_final_limit: int = Field(default=5, gt=0)
     retrieval_strategy: Literal["union", "sparse"] = "union"
+    retrieval_profile: Literal["phase6", "phase7"] = "phase6"
     rerank_enabled: bool = True
     evidence_score_threshold: float | None = None
     generation_max_context_chars: int = Field(default=24_000, ge=4_000)
@@ -53,10 +57,13 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.5-flash-lite"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     gemini_reasoning_effort: Literal["minimal", "low", "medium", "high"] = "minimal"
+    gemini_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     openai_max_output_tokens: int = Field(default=800, gt=0, le=4_096)
     openai_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     openai_max_retries: int = Field(default=1, ge=0, le=2)
     openai_store: bool = False
+    api_auth_enabled: bool = False
+    api_auth_key: SecretStr | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

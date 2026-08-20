@@ -17,6 +17,11 @@ from app.hybrid_retrieval import (
     validate_hybrid_collection,
 )
 from app.models import RetrievalCandidate
+from app.phase7_optimization import PHASE7_CALIBRATION_FUSION_PROFILE, Phase7FusionProfile
+from app.query_expansion import (
+    QUERY_EXPANSION_PROFILE,
+    augment_vietnamese_technical_query,
+)
 from app.reranking import FastEmbedCrossEncoder, RerankingError, RerankPipeline
 from app.retrieval import (
     RetrievalError,
@@ -29,14 +34,21 @@ from app.retrieval import (
 
 
 @dataclass(frozen=True)
+class FrozenDocumentContext:
+    """Trusted package metadata included in reranker and generation evidence context."""
+
+    document_id: str
+    document_title: str
+    document_role: str
+
+
+@dataclass(frozen=True)
 class FrozenRetrievalContract:
     """Immutable index identity required by the Phase 6 runtime."""
 
     document_id: str = "manual-77d5dae4c2c5"
     chunk_count: int = 99
-    chunk_ids_sha256: str = (
-        "bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be"
-    )
+    chunk_ids_sha256: str = "bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be"
     dense_collection: str = "industrial_manual_chunks"
     hybrid_collection: str = "industrial_manual_chunks_v2"
     dense_vector_name: str = "dense"
@@ -52,9 +64,104 @@ class FrozenRetrievalContract:
     bm25_b: float = 0.75
     bm25_avg_len: float = 72.83838383838383
     bm25_disable_stemmer: bool = True
+    document_ids: tuple[str, ...] = ()
+    document_contexts: tuple[FrozenDocumentContext, ...] = ()
+    union_rrf_prune_limit: int | None = None
+    query_expansion_profile: str | None = None
+    phase7_fusion_profile: Phase7FusionProfile | None = None
+    frozen_rerank_batch_size: int | None = None
+    freeze_rerank_threads: bool = False
+    frozen_rerank_threads: int | None = None
+
+    @property
+    def indexed_document_ids(self) -> tuple[str, ...]:
+        """Return the documents whose stable IDs form this frozen corpus."""
+
+        return self.document_ids or (self.document_id,)
+
+    @property
+    def document_context_by_id(self) -> dict[str, dict[str, str]]:
+        """Return immutable trusted metadata in the shape consumed by reranking."""
+
+        return {
+            item.document_id: {
+                "document_title": item.document_title,
+                "document_role": item.document_role,
+            }
+            for item in self.document_contexts
+        }
 
 
 PHASE6_RETRIEVAL_CONTRACT = FrozenRetrievalContract()
+
+# Separate Phase 7 corpus.  These values intentionally live in package code rather
+# than in ``artifacts/`` so the runtime can verify Qdrant without a host checkout.
+PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
+    document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
+    document_ids=(
+        "atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
+        "atv320-programming-manual-en-nve41295-06-f5e9bb48167a",
+    ),
+    document_contexts=(
+        FrozenDocumentContext(
+            document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
+            document_title=("Altivar Machine ATV320 Variable Speed Drives Installation Manual"),
+            document_role="installation",
+        ),
+        FrozenDocumentContext(
+            document_id="atv320-programming-manual-en-nve41295-06-f5e9bb48167a",
+            document_title=("Altivar Machine ATV320 Variable Speed Drives Programming Manual"),
+            document_role="programming",
+        ),
+    ),
+    chunk_count=2753,
+    chunk_ids_sha256="2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d",
+    dense_collection="industrial_manual_phase7_dense_v1",
+    hybrid_collection="industrial_manual_phase7_hybrid_v1",
+    bm25_avg_len=81.33599709407919,
+    rrf_k=40,
+    dense_candidate_limit=60,
+    sparse_candidate_limit=40,
+    union_rrf_prune_limit=30,
+    query_expansion_profile=QUERY_EXPANSION_PROFILE,
+    phase7_fusion_profile=PHASE7_CALIBRATION_FUSION_PROFILE,
+    frozen_rerank_batch_size=8,
+    freeze_rerank_threads=True,
+    frozen_rerank_threads=None,
+)
+
+
+def resolve_retrieval_runtime(
+    settings: Settings,
+) -> tuple[Settings, FrozenRetrievalContract]:
+    """Resolve one frozen profile while ignoring conflicting mutable overrides."""
+
+    contract = (
+        PHASE7_RETRIEVAL_CONTRACT
+        if settings.retrieval_profile == "phase7"
+        else PHASE6_RETRIEVAL_CONTRACT
+    )
+    resolved = settings.model_copy(
+        update={
+            "qdrant_collection": contract.dense_collection,
+            "qdrant_hybrid_collection": contract.hybrid_collection,
+            "dense_vector_name": contract.dense_vector_name,
+            "sparse_vector_name": contract.sparse_vector_name,
+            "embedding_model": contract.dense_model,
+            "sparse_model": contract.sparse_model,
+            "rerank_model": contract.rerank_model,
+            "dense_candidate_limit": contract.dense_candidate_limit,
+            "sparse_candidate_limit": contract.sparse_candidate_limit,
+            "rrf_k": contract.rrf_k,
+            "bm25_k": contract.bm25_k,
+            "bm25_b": contract.bm25_b,
+            "bm25_avg_len": contract.bm25_avg_len,
+            "bm25_disable_stemmer": contract.bm25_disable_stemmer,
+            "rerank_deduplicate_content": contract is PHASE7_RETRIEVAL_CONTRACT,
+        }
+    )
+    _validate_settings(resolved, contract)
+    return resolved, contract
 
 
 @dataclass(frozen=True)
@@ -64,6 +171,7 @@ class QueryRetrievalResult:
     candidates: list[RetrievalCandidate]
     retrieval_ms: float
     rerank_ms: float
+    candidate_pool: list[RetrievalCandidate] | None = None
 
 
 class QueryRetriever(Protocol):
@@ -88,12 +196,26 @@ class UnionRerankRetriever:
         retrieval_ms = sum(
             value
             for name, value in execution.stage_latency_ms.items()
-            if name in {"dense_retrieval", "sparse_retrieval", "union_preparation"}
+            if name
+            in {
+                "dense_retrieval",
+                "sparse_retrieval",
+                "content_deduplication",
+                "union_preparation",
+                "query_expansion",
+                "rrf_pruning",
+                "query_role_inference",
+                "coverage_preserving_weighted_rrf",
+                "role_aware_rank_fusion",
+            }
         )
         return QueryRetrievalResult(
             candidates=execution.candidates_after_rerank,
             retrieval_ms=retrieval_ms,
             rerank_ms=execution.stage_latency_ms.get("rerank", 0.0),
+            candidate_pool=list(
+                getattr(execution, "candidates_before_rerank", execution.candidates_after_rerank)
+            ),
         )
 
 
@@ -123,6 +245,7 @@ class SparseRollbackRetriever:
             candidates=candidates,
             retrieval_ms=(perf_counter() - started) * 1000,
             rerank_ms=0.0,
+            candidate_pool=list(candidates),
         )
 
 
@@ -234,6 +357,11 @@ def build_union_rerank_runtime(
             cross_encoder=FastEmbedCrossEncoder(
                 settings.rerank_model,
                 cache_dir=settings.rerank_cache_dir or settings.embedding_cache_dir,
+                threads=(
+                    contract.frozen_rerank_threads
+                    if contract.freeze_rerank_threads
+                    else settings.rerank_threads
+                ),
             ),
             dense_collection=settings.qdrant_collection,
             hybrid_collection=settings.qdrant_hybrid_collection,
@@ -242,7 +370,16 @@ def build_union_rerank_runtime(
             dense_candidate_limit=settings.dense_candidate_limit,
             sparse_candidate_limit=settings.sparse_candidate_limit,
             rrf_k=settings.rrf_k,
-            rerank_batch_size=settings.rerank_batch_size,
+            rerank_batch_size=contract.frozen_rerank_batch_size or settings.rerank_batch_size,
+            deduplicate_content=settings.rerank_deduplicate_content,
+            document_contexts=contract.document_context_by_id,
+            sparse_query_transform=(
+                _expand_phase7_query
+                if contract.query_expansion_profile == QUERY_EXPANSION_PROFILE
+                else None
+            ),
+            union_rrf_prune_limit=contract.union_rrf_prune_limit,
+            phase7_fusion_profile=contract.phase7_fusion_profile,
         )
         return pipeline, {
             "collections": {
@@ -255,6 +392,47 @@ def build_union_rerank_runtime(
             "bm25_avg_len": contract.bm25_avg_len,
             "rrf_k": settings.rrf_k,
             "rerank_model": settings.rerank_model,
+            "rerank_batch_size": contract.frozen_rerank_batch_size or settings.rerank_batch_size,
+            "rerank_threads": (
+                contract.frozen_rerank_threads
+                if contract.freeze_rerank_threads
+                else settings.rerank_threads
+            ),
+            "deduplicate_content": settings.rerank_deduplicate_content,
+            "query_expansion_profile": contract.query_expansion_profile,
+            "union_rrf_prune_limit": contract.union_rrf_prune_limit,
+            "phase7_fusion_profile": (
+                None
+                if contract.phase7_fusion_profile is None
+                else {
+                    "name": contract.phase7_fusion_profile.name,
+                    "rrf_k": contract.phase7_fusion_profile.rrf_k,
+                    "dense_weight": contract.phase7_fusion_profile.dense_weight,
+                    "sparse_weight": contract.phase7_fusion_profile.sparse_weight,
+                    "fusion_role_multiplier": contract.phase7_fusion_profile.fusion_role_multiplier,
+                    "dense_reserve": contract.phase7_fusion_profile.dense_reserve,
+                    "sparse_reserve": contract.phase7_fusion_profile.sparse_reserve,
+                    "max_candidates": contract.phase7_fusion_profile.max_candidates,
+                    "post_rerank_role_multiplier": (
+                        contract.phase7_fusion_profile.post_rerank_role_multiplier
+                    ),
+                    "post_rerank_rrf_multiplier": (
+                        contract.phase7_fusion_profile.post_rerank_rrf_multiplier
+                    ),
+                    "post_rerank_rank_offset": (
+                        contract.phase7_fusion_profile.post_rerank_rank_offset
+                    ),
+                    "post_rerank_confidence_mode": (
+                        contract.phase7_fusion_profile.post_rerank_confidence_mode
+                    ),
+                    "list_completeness_enabled": (
+                        contract.phase7_fusion_profile.list_completeness_enabled
+                    ),
+                    "relation_list_completeness_enabled": (
+                        contract.phase7_fusion_profile.relation_list_completeness_enabled
+                    ),
+                }
+            ),
         }
     except RetrievalUnavailableError:
         raise
@@ -276,6 +454,13 @@ def validate_frozen_runtime(
         _validate_frozen_collection(client, collection_name, contract)
 
 
+def _expand_phase7_query(question: str) -> str:
+    """Apply the frozen lexical profile to sparse retrieval only."""
+
+    expanded, _ = augment_vietnamese_technical_query(question)
+    return expanded
+
+
 def _validate_frozen_collection(
     client: Any, collection_name: str, contract: FrozenRetrievalContract
 ) -> None:
@@ -289,19 +474,34 @@ def _validate_frozen_collection(
             f"Collection {collection_name} has {point_count} points; "
             f"expected {contract.chunk_count}."
         )
-    chunk_ids = get_indexed_chunk_ids(
-        client,
-        collection_name=collection_name,
-        document_id=contract.document_id,
-    )
+    chunk_ids: set[str] = set()
+    for document_id in contract.indexed_document_ids:
+        chunk_ids.update(
+            get_indexed_chunk_ids(
+                client,
+                collection_name=collection_name,
+                document_id=document_id,
+            )
+        )
     fingerprint = hashlib.sha256("\n".join(sorted(chunk_ids)).encode("utf-8")).hexdigest()
     if len(chunk_ids) != contract.chunk_count or fingerprint != contract.chunk_ids_sha256:
-        raise RetrievalError(
-            f"Collection {collection_name} does not match the frozen Phase 6 chunk set."
-        )
+        raise RetrievalError(f"Collection {collection_name} does not match the frozen chunk set.")
 
 
 def _validate_settings(settings: Settings, contract: FrozenRetrievalContract) -> None:
+    if contract.phase7_fusion_profile is not None:
+        profile = contract.phase7_fusion_profile
+        if profile.rrf_k != contract.rrf_k:
+            raise RetrievalUnavailableError(
+                "Frozen Phase 7 fusion profile RRF k differs from the retrieval contract."
+            )
+        if profile.max_candidates != contract.union_rrf_prune_limit:
+            raise RetrievalUnavailableError(
+                "Frozen Phase 7 fusion profile candidate budget differs from the "
+                "retrieval contract."
+            )
+    if contract.frozen_rerank_batch_size is not None and contract.frozen_rerank_batch_size <= 0:
+        raise RetrievalUnavailableError("Frozen rerank batch size must be greater than zero.")
     expected = {
         "qdrant_collection": contract.dense_collection,
         "qdrant_hybrid_collection": contract.hybrid_collection,

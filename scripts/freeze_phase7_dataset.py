@@ -1,0 +1,118 @@
+"""Freeze an approved Phase 7 dataset and write its immutable evaluation manifest."""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+
+from app.evaluation import chunk_set_metadata, load_frozen_chunks
+from app.phase7 import (
+    PHASE7_DENSE_COLLECTION,
+    PHASE7_HYBRID_COLLECTION,
+    Phase7Error,
+    dataset_sha256,
+    read_phase7_dataset,
+    validate_phase7_datasets,
+    write_json_atomic,
+    write_jsonl_atomic,
+)
+from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT
+
+APPROVAL_TOKEN = "APPROVE PHASE 7 DATASET V2"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--calibration", type=Path, default=Path("data/eval/phase7/calibration.jsonl")
+    )
+    parser.add_argument("--test", type=Path, default=Path("data/eval/phase7/test.jsonl"))
+    parser.add_argument("--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl"))
+    parser.add_argument(
+        "--output", type=Path, default=Path("artifacts/metrics/phase-7-evaluation-manifest.json")
+    )
+    parser.add_argument(
+        "--approval-token",
+        required=True,
+        help=f"Required exact human approval phrase: {APPROVAL_TOKEN}",
+    )
+    args = parser.parse_args()
+    if args.approval_token != APPROVAL_TOKEN:
+        parser.error(f"Approval token must exactly equal: {APPROVAL_TOKEN}")
+    try:
+        calibration = read_phase7_dataset(args.calibration)
+        test = read_phase7_dataset(args.test)
+        chunks = load_frozen_chunks(args.chunks)
+        validate_phase7_datasets(calibration, test, chunks)
+    except Phase7Error as exc:
+        parser.error(str(exc))
+    missing_facts = [
+        item.id
+        for item in [*calibration, *test]
+        if item.answerable and not item.expected_answer_facts
+    ]
+    if missing_facts:
+        parser.error(
+            "Cannot approve Phase 7 dataset v2: answer facts still require human review for "
+            + ", ".join(missing_facts)
+        )
+    approved_calibration = [
+        item.model_dump(exclude_unset=True) | {"review_status": "approved"}
+        for item in calibration
+    ]
+    approved_test = [
+        item.model_dump(exclude_unset=True) | {"review_status": "approved"} for item in test
+    ]
+    write_jsonl_atomic(args.calibration, approved_calibration)
+    write_jsonl_atomic(args.test, approved_test)
+    approved_calibration_models = read_phase7_dataset(args.calibration)
+    approved_test_models = read_phase7_dataset(args.test)
+    if any(
+        item.review_status != "approved"
+        for item in [*approved_calibration_models, *approved_test_models]
+    ):
+        parser.error("Dataset approval update did not persist.")
+    manifest = {
+        "schema_version": 3,
+        "created_at": datetime.now(UTC).isoformat(),
+        "git_commit": _git_commit(),
+        "corpus": chunk_set_metadata(chunks),
+        "calibration_dataset_sha256": dataset_sha256(approved_calibration_models),
+        "test_dataset_sha256": dataset_sha256(approved_test_models),
+        "collections": {"dense": PHASE7_DENSE_COLLECTION, "hybrid": PHASE7_HYBRID_COLLECTION},
+        "runtime_configuration": {
+            "strategy": "union",
+            "dense_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit,
+            "sparse_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit,
+            "query_expansion_profile": PHASE7_RETRIEVAL_CONTRACT.query_expansion_profile,
+            "rrf_k": PHASE7_RETRIEVAL_CONTRACT.rrf_k,
+            "rrf_prune_limit": PHASE7_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
+            "reranker": PHASE7_RETRIEVAL_CONTRACT.rerank_model,
+            "phase7_fusion_profile": PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile.name,
+            "deduplicate_exact_content": True,
+            "final_top_k": 5,
+        },
+        "answer_scoring": {
+            "headline": "phase7_deterministic_typed_facts_v1",
+            "strict_phrase": "diagnostic_only",
+            "token_coverage": "diagnostic_only",
+        },
+    }
+    write_json_atomic(args.output, manifest)
+    print(f"Phase 7 dataset frozen: {args.output}")
+    return 0
+
+
+def _git_commit() -> str | None:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

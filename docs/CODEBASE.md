@@ -7,20 +7,32 @@ PDF/DOCX -> Docling -> structure-aware DocumentChunk
         -> dense FastEmbed vector + BM25 sparse vector -> Qdrant collection v2
 Query -> dense top-20 + sparse top-20 -> client-side RRF -> RetrievalCandidate
       -> sparse | hybrid | dense/sparse union candidate pool
+      -> optional Phase 7 same-document exact-content deduplication
       -> lazy multilingual cross-encoder -> full reranked pool -> display cutoff
       -> evidence gate -> structured grounded generation
       -> source-ID validation -> trusted citation builder -> QueryResponse
+
+Browser -> Streamlit UI -> FastAPI health/ready/query HTTP endpoints
+        -> no direct Qdrant, embedding, reranker, ingestion, or provider import
+
+Phase 7.4.1--7.5 frozen calibration/runtime override:
+Query -> dense top-60 + expanded sparse top-40 after vi_technical_glossary_v1
+      -> query-only role inference -> weighted RRF k=40 + dense@5/sparse@24 reserves
+      -> exact-content deduplication -> maximum 30 candidates -> unchanged Jina reranker
+      -> rank-only `0.50` document-role prior with offset 20 for strong/weak cues
+      -> exact cross-document duplicate evidence selection -> actual top-k generation context
+      -> frozen batch size 8 and runtime-default ONNX threads; never an expected-document filter
 ```
 
-`app.main` exposes `/api/v1/health` and `/api/v1/query`. Retrieval, reranking, evidence gating, and
+`app.main` exposes `/api/v1/health`, `/api/v1/ready`, and `/api/v1/query`. Retrieval, reranking, evidence gating, and
 citations remain explicit Python; LangChain is limited to prompt orchestration, OpenAI Responses or
 Gemini OpenAI-compatible Chat Completions invocation, and provider-native structured output.
 
 ## Main modules
 
-- `app/config.py`: Pydantic settings for retrieval, reranking, evidence/generation limits, and the
-  selected OpenAI or Gemini provider. Union+rerank is the Phase 6 default; sparse/no-rerank is
-  rollback.
+- `app/config.py`: Pydantic settings for retrieval, reranking, evidence/generation limits, selected
+  OpenAI or Gemini provider, and `phase6|phase7` retrieval profile. Python defaults to Phase 6 for
+  compatibility; Docker Compose explicitly selects Phase 7.
 - `app/ingestion.py`: input validation, Docling conversion, batched PDF processing, stable
   content-based chunk IDs, and atomic JSONL output.
 - `app/models.py`: ingestion/retrieval models plus the public query request, response, and trusted
@@ -31,21 +43,54 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   schema/manifest validation, safe dual-vector indexing, sparse search, and deterministic RRF.
 - `app/evaluation.py`: dependency-free typed qrels, frozen-chunk validation, direct-evidence ranks,
   retrieval metrics, group metrics, and latency percentiles.
+- `app/content_identity.py`: dependency-free NFKC/case/whitespace identity for exact equivalence;
+  it is deliberately not semantic similarity.
+- `app/phase7.py`: offline schema, validation, hashing, exact-content qrel closure, and review state
+  for the separate two-manual corpus; it never calls Qdrant or a provider.
+- `app/evaluation_e2e.py`: offline scoring of a completed query execution: qrel-only ranks,
+  citation outcomes, abstention confusion matrix, typed deterministic answer facts, strict-phrase
+  and token-overlap diagnostics, bounded lexical inflection for text facts, span-aware negation,
+  document contamination, full-ranking versus actual-evidence qrel ranks, and latency summaries. It
+  stores no answer/evidence text.
+- `app/evidence_selection.py`: removes exact normalized content duplicated across source documents
+  before top-k. It chooses provenance from query-derived role plus existing rank, retains equivalent
+  source IDs in metadata, and does not import qrels/expected documents or collapse near-duplicates.
+- `app/query_expansion.py`: frozen, deterministic Vietnamese technical glossary used only to append
+  translated query terms before Phase 7 sparse retrieval; it contains no qrels, pages, document IDs,
+  expected answers, model call, or held-out-specific rule.
+- `app/phase7_optimization.py`: query-only bilingual document-role inference with Unicode-safe cue
+  boundaries and strong/weak confidence, bounded weighted RRF, coverage-preserving candidate
+  membership, post-rerank rank-only role prior, historical whole-chunk `list_completeness_v1`, and
+  active `relation_list_completeness_v1`. The active fallback requires query-derived list,
+  key/button, switch/change and technical-ID cues, then counts only targets after that relation in
+  one candidate clause. It moved calibration 010 from rank 6 to 5 without runtime qrel access. This
+  module has no Qdrant, provider, qrel, expected-page, expected-document, or answer-fact dependency.
+- `app/phase7_replay.py`: validates sanitized reranker snapshots and replays rank-only priors without
+  a model, Qdrant, provider, raw question, or chunk text.
 - `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
   diagnostics, and RRF-demotion aggregation for the Phase 5 handoff.
 - `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
   sparse/hybrid/union pool construction, strict output validation, deterministic reranking, stage
   latency, and direct-evidence failure classification.
-- `app/retrieval_runtime.py`: artifact-independent frozen contract, live Qdrant hash/schema checks,
-  lazy union runtime, and sparse rollback composition shared by API and Phase 5 scripts.
+- `app/retrieval_runtime.py`: artifact-independent Phase 6/Phase 7 frozen contracts, atomic profile
+  resolution, live Qdrant hash/schema checks, lazy union runtime, and sparse rollback composition
+  shared by API and integration scripts.
 - `app/generation.py`: deterministic bounded evidence blocks, strict `GeneratedAnswer`, prompt
   injection boundary, and a lazy LangChain adapter. OpenAI uses Responses with `store=false`;
   Gemini uses Google's OpenAI-compatible Chat Completions endpoint.
 - `app/citations.py`: referential source-ID validation and deterministic citation construction from
   retrieved metadata.
-- `app/query_service.py`: retrieve → gate → generate → validate/retry → respond orchestration,
-  abstention policy, and internal stage timings.
+- `app/query_service.py`: retrieve/rerank → select actual evidence → gate → generate →
+  validate/retry → respond orchestration, abstention policy, full-rank/evidence provenance, and
+  internal stage timings.
 - `app/api/query.py`: threadpool handoff and sanitized HTTP error mapping only.
+- `app/api/auth.py`: optional constant-time bearer-token guard, disabled unless configured.
+- `ui/config.py`: server-side API URL/timeout/token settings and stable ATV320 document labels.
+- `ui/api_client.py`: one-shot HTTPX health/readiness/query client with strict response parsing and
+  sanitized error mapping; it never logs request/response content.
+- `ui/state.py`: dependency-light bounded display-history and citation page helpers.
+- `ui/streamlit_app.py`: chat/session/sidebar rendering only; all retrieval and generation stays
+  behind the FastAPI boundary.
 - `scripts/index_document.py`, `scripts/search_dense.py`: v1 dense integration CLIs.
 - `scripts/index_hybrid.py`, `scripts/search_hybrid.py`, `scripts/evaluate.py`: v2 indexing/search
   and shared dense/sparse/hybrid evaluation CLIs.
@@ -60,6 +105,49 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   strategy/comparison JSON artifacts; `--comparison-only` never loads a model.
 - `scripts/validate_query_runtime.py`: read-only real union/sparse runtime smoke without OpenAI.
 - `scripts/query_smoke.py`: bounded real-provider smoke and sanitized Phase 6 artifact writer.
+- `scripts/audit_phase7_corpus.py`, `scripts/index_phase7_corpus.py`: source audit and guarded
+  indexing for the isolated ATV320 collections.
+- `scripts/freeze_phase7_calibration_v3.py`: copies the review-required typed calibration draft to an
+  approved v3 file and manifest only after an exact human token; it cannot modify held-out.
+- `scripts/evaluate_phase7_e2e.py`: resumable integration evaluator that validates the approved
+  manifest and live frozen hash before it sends anything to a provider. Calibration mode reads one
+  split only and records a full non-secret run identity. Held-out execution currently fails closed
+  with `BLOCKED_GOVERNANCE` because historical repository content exposed that split.
+- `scripts/calibrate_phase7_retrieval.py`: provider-free, calibration-only dense/sparse 20--60
+  union/RRF/expanded-RRF ablation, including the fixed top-30 reranker budget; it never loads the
+  cross-encoder or executes held-out queries.
+- `scripts/audit_phase7_retrieval_failures.py`: sanitized top-200 dense/sparse audit for calibration
+  004/005/010, including source/index integrity and query-variant ranks; no provider or reranker.
+- `scripts/calibrate_phase7_weighted_fusion.py`: retrieval-only 144-profile weighted-RRF/role/reserve
+  ablation and Pareto shortlist; no reranker, provider, or held-out query.
+- `scripts/evaluate_phase7_weighted_rerank.py`: local Jina evaluation of at most six shortlisted
+  calibration profiles, with deterministic profile selection and no generation provider.
+- `scripts/evaluate_phase7_retrieval_closure.py`: runs the frozen Phase 7.4.1 retrieval and local Jina
+  reranker on answerable calibration only; no provider and no held-out execution.
+- `scripts/create_phase7_reranker_snapshot.py`: makes a sanitized baseline Jina snapshot once; replay
+  artifacts include IDs/ranks/scores and roles but exclude questions and raw evidence.
+- `scripts/calibrate_phase7_role_prior.py`: runs six-fold, provider-free rank-prior selection from a
+  schema-v2 snapshot, then tries the single registered list-completeness fallback if the finite rank
+  grid fails. The fold mapping is evaluation-only and never imported by the runtime.
+- `scripts/diagnose_phase7_calibration_005.py`: separately approved three-attempt provider diagnostic
+  that reuses one retrieved/reranked evidence bundle. Raw answer debugging is restricted to ignored
+  `artifacts/private-debug/`; the metrics artifact is sanitized. The completed run produced three
+  positive deterministic matches with one retrieval and one reranker execution.
+- `scripts/aggregate_phase7_calibration_stability.py`: validates three independent schema-v5 runs,
+  rejects identity/duplicate mismatches, and gates on the worst run instead of selecting the best.
+- `scripts/generate_phase7_calibration_closure_readiness.py`: writes the fail-closed technical and
+  governance decision without opening held-out content or calling Qdrant/provider.
+- `scripts/benchmark_phase7_reranker_cpu.py`: runs the bounded CPU micro/full ablation without Docker
+  builds, re-indexing, provider calls, or held-out questions.
+- `scripts/generate_phase7_fact_evaluator_readiness.py` and
+  `scripts/generate_phase7_runtime_readiness.py`: fail-closed sanitized readiness artifacts for the
+  typed-fact review boundary and provider-approval boundary.
+- `scripts/rescore_phase7_calibration_facts.py`: derives deterministic text-fact decisions from the
+  prior sanitized v2 diagnostics when raw provider answers are unavailable.
+- `scripts/migrate_phase7_dataset_v2.py`: offline migration that revokes approval, adds answer facts,
+  and expands qrels only across same-document exact-content duplicates.
+- `scripts/apply_phase7_answer_facts.py`: explicit source-review mapping for 42 answerable rows plus
+  the documented calibration 011/012 qrel correction; it reads no retrieval/provider output.
 
 ## Dense-index contract
 
@@ -105,6 +193,13 @@ search begins.
 - `rerank_score` becomes the final ranking signal while dense, sparse, and RRF scores/ranks remain
   available. The full pool is returned; CLI `--limit` affects display only. No error fallback exists.
 
+The historical Phase 5 contract above remains unchanged. Phase 7.4 uses input format
+`document_context_heading_content_v2`, prepending trusted document title and role. Its frozen pool is
+dense@60 plus expanded sparse@40 after `vi_technical_glossary_v1`, weighted RRF `k=40`, sparse weight
+`1.25`, dense@5/sparse@24 coverage reserves, and a maximum 30-candidate Jina rerank. The final
+rank-only role prior preserves raw Jina scores and never filters by expected document, so it does not
+leak evaluation ground truth.
+
 ## Evaluation boundary
 
 `data/eval/dense_smoke.jsonl` is a retrieval-development set, not a Phase 7 held-out test set.
@@ -116,7 +211,8 @@ per-language, and per-retrieval-scenario (`vi -> vi` monolingual; `en -> vi` cro
 ## Dependencies and containers
 
 - Core package: FastAPI runtime/settings only.
-- `retrieval` extra: Qdrant/FastEmbed.
+- `retrieval` extra: Qdrant/FastEmbed, with FastEmbed directly pinned to `0.8.0` to preserve the
+  evaluated embedding behavior.
 - `ingestion` extra: Docling.
 - `llm` extra: `langchain-core` and `langchain-openai`.
 - `dev` extra: complete local test/lint, retrieval, ingestion, and LLM dependencies.
@@ -125,10 +221,13 @@ The canonical post-closure retrieval dependency is `qdrant-client >=1.19.0,<1.20
 client used by the successful Phase 4 Python 3.11 integration; Qdrant server remains pinned to
 `v1.18.3`. Historic metrics artifacts are immutable even where older runtime metadata says `1.18.0`.
 
-`Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. API adds only
-the LLM extra; ingestion does not receive LangChain/OpenAI. Compose starts API/Qdrant by default;
-ingestion is profile-gated. The shared `fastembed_cache` volume supplies models at runtime; weights
-are not baked into either image.
+`Dockerfile` supplies `api` and `ingestion` targets from a shared retrieval runtime. API adds the
+LLM extra without Docling. Ingestion now adds Docling and the LLM extra, because its on-demand Phase 7
+E2E CLI uses the same structured generator; this deliberately makes only the profile-gated tools image
+heavier. The independent `ui` target starts again from `python:3.11-slim` and installs only base plus
+`.[ui]`; it contains no retrieval, Docling or LangChain stack. Compose can start API/Qdrant/UI, and
+keeps ingestion profile-gated. The shared `fastembed_cache` volume supplies models to API/ingestion
+at runtime; weights are not baked into images.
 
 The ingestion target installs Debian runtime packages `libxcb1`, `libgl1`, and
 `libglib2.0-0t64`; Docling's PDF/image stack needs the shared libraries they provide when running
@@ -152,3 +251,14 @@ runtime, and security/logging tests. The original canonical Python 3.11 run pass
 known third-party Starlette/TestClient deprecation warning. The additive Gemini and UTF-8 response
 regressions bring the local suite to 162, and the real adapter constructs in the Python 3.11 API image; no default test
 calls Qdrant, FastEmbed, a reranker, or a generation provider.
+
+Phase 7.4.1--7.5 adds offline Unicode/boundary role-inference, confidence, rank-prior replay,
+malformed-snapshot, CPU-profile selection, fact-readiness, and runtime-readiness tests. Canonical
+Python 3.11.15 validation passes 239 tests with the same one third-party warning; default pytest
+still performs no network/model/Qdrant call.
+
+The Streamlit layer adds offline tests for frozen profile selection/readiness, HTTP payload/auth
+behavior, response schema validation, sanitized 401/422/503/504/network errors, bounded Unicode
+session history, and citation page ordering. Tests import only the client/pure state helpers; the
+actual Streamlit module is imported and health-checked in its dedicated image. The 2026-08-19
+canonical Python 3.11 run passes `308 tests` with the same one third-party warning.

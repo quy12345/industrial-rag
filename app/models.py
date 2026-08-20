@@ -13,6 +13,14 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class ReadinessResponse(BaseModel):
+    """Response from the Qdrant-backed readiness check."""
+
+    status: Literal["ok"]
+    service: str
+    version: str
+
+
 class DocumentChunk(BaseModel):
     """JSON-serializable representation of one structure-aware document chunk."""
 

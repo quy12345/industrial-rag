@@ -4,6 +4,7 @@ __pycache__/
 .pytest_tmp/
 .pytest-work/
 .pytest-phase*/
+.pytest-tmp*/
 .ruff_cache/
 .venv/
 venv/
@@ -21,9 +22,16 @@ data/raw/*
 data/eval/*
 !data/eval/.gitkeep
 !data/eval/dense_smoke.jsonl
+!data/eval/phase7/
+!data/eval/phase7/*.jsonl
+# Locally access-controlled Phase 7 replacement held-out set.  This prevents
+# accidental Git exposure; operating-system ACLs remain the workspace owner's
+# responsibility.
+data/eval/phase7/private-heldout-v2/
 artifacts/metrics/*
 !artifacts/metrics/.gitkeep
 artifacts/figures/*
 !artifacts/figures/.gitkeep
 artifacts/*.jsonl
 artifacts/*.log
+artifacts/private-debug/

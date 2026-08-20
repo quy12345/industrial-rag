@@ -1,0 +1,28 @@
+# Metadata only: the vendor PDFs stay local and are intentionally not tracked.
+sources:
+  - filename: ATV320_Installation_manual_EN_NVE41289_09.pdf
+    manufacturer: Schneider Electric
+    title: Altivar Machine ATV320 Variable Speed Drives for Asynchronous and Synchronous Motors Installation Manual
+    document_reference: NVE41289.09
+    version: 04/2025
+    language: en
+    document_role: installation
+    official_url: https://www.se.com/uk/en/download/document/NVE41289/
+    sha256: c181b4d7f11b1ebdc770c75e87e9431b78663b813836467e3503e50742eaebab
+    file_size_bytes: 10731478
+    page_count: 194
+    retrieved_at: unknown_local_preexisting_file; audited 2026-08-07
+    redistribution_note: Local vendor source; do not commit or redistribute without permission.
+  - filename: ATV320_Programming_Manual_EN_NVE41295_06.pdf
+    manufacturer: Schneider Electric
+    title: Altivar Machine ATV320 Variable Speed Drives for Asynchronous and Synchronous Motors Programming Manual
+    document_reference: NVE41295.06
+    version: 04/2025
+    language: en
+    document_role: programming
+    official_url: https://www.se.com/us/en/download/document/NVE41295/
+    sha256: f5e9bb48167a2787e3186b37a3878e57777debd814ff280b781ecc9271d6d7d5
+    file_size_bytes: 7165399
+    page_count: 460
+    retrieved_at: unknown_local_preexisting_file; audited 2026-08-07
+    redistribution_note: Local vendor source; do not commit or redistribute without permission.

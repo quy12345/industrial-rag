@@ -59,7 +59,8 @@ benchmark, debug và giải thích rõ từng bước.
 | Phase 5 | Implementation complete; quality PARTIAL | Ba multilingual reranking strategies đã benchmark; ranking gates và critical 3/3 PASS, CPU latency FAIL, không đặt runtime default |
 | Phase 5.1 | Deferred | Reranker optimization/quantization/license replacement không nằm trong Phase 6 |
 | Phase 6 | Implementation/offline/Docker correctness complete; real provider NOT RUN | Query API, evidence gate, Responses structured generation, citations, abstention, sparse rollback |
-| Phase 7 | Chưa bắt đầu | Held-out end-to-end evaluation, real industrial corpus và production hardening |
+| Phase 7 | Hoàn thành với measured limitations | Frozen 2.753-chunk ATV320 runtime, calibration closure và one-shot private held-out v2; Hit@5 0.800, fact accuracy 0.786, citation validity 1.000 |
+| Streamlit demo | Implementation/Docker/provider-free PASS; Gemini UI queries NOT RUN | HTTP-only chat UI, Phase 7 runtime profile, document filter, citations, abstention và localhost Compose service |
 
 Thứ tự triển khai đã chốt:
 
@@ -69,6 +70,9 @@ Phase 3A.2 → Phase 4 → Phase 4.1 closure → Phase 5 → Phase 6 → Phase 7
 
 Phase 6 trước đây được gọi là Phase 3B. Tên lịch sử chỉ được giữ tại đây; roadmap hiện hành dùng
 Phase 6 cho query/generation và Phase 7 cho final evaluation/hardening.
+
+Streamlit là lớp demo sau Phase 7, không phải một retrieval phase mới và không làm thay đổi held-out
+metrics, qrels, chunks, models hoặc Qdrant collections.
 
 ---
 
@@ -668,17 +672,142 @@ structured-output details, validation evidence, and rollback.
 
 ## Phase 7 — End-to-end evaluation, real industrial corpus and production hardening
 
+### Historical checkpoint (2026-08-09)
+
+- Separate ATV320 Installation/Programming corpus is frozen with 2,753 chunks and stable-ID hash
+  `2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
+- Protected Phase 3--6 v1/v2 collections remain 99/99 points. Phase 7 uses only
+  `industrial_manual_phase7_dense_v1` and `industrial_manual_phase7_hybrid_v1`.
+- Dataset v1 was approved and used only for calibration. Diagnosis found that generated-answer
+  scoring reused English evidence phrases and that qrels omitted some exact duplicate chunks.
+- Dataset v2 is source-reviewed and frozen: 65/65 rows are approved and all 42 answerable rows have
+  language-aware `expected_answer_facts`. Exact-content closure added 2 calibration and 14 held-out
+  qrels without broad phrase matching. Manual review also corrected calibration 011/012 from an
+  unrelated page-355 qrel to direct reference-mode evidence on page 45.
+- Implemented: multi-document frozen-runtime validation, sanitized resumable E2E scorer, Qdrant
+  readiness, request correlation IDs, bounded Qdrant timeout, optional bearer auth, and API Docker
+  liveness healthcheck.
+- Current Python 3.11.15 validation: Ruff `PASS`; pytest `239 passed, 1 warning`; Compose config and
+  `git diff --check` PASS. The warning is the known third-party Starlette/TestClient deprecation.
+- Historical Gemini dataset-v2 diagnostics calibration completed all 20 rows:
+  candidate recall/Hit@5 0.667, MRR@5 0.583, strict answer-fact accuracy 0.500,
+  direct-evidence citation rate 0.667, abstention precision/recall 1.000/1.000, total p95 10.043 s.
+  The old dataset-v1 phrase score 0.417 remains historical and is not comparable.
+- Sanitized diagnostics now report fact IDs, exact match, token-overlap ratios, missing fact IDs,
+  qrel dense/sparse/RRF/rerank ranks and unexpected citation document IDs without answer/evidence.
+- Phase 7.4 separates strict contiguous phrase accuracy (diagnostic) from deterministic typed fact
+  accuracy (headline). Rescoring the existing sanitized output changes 6/12 strict matches to 8/12
+  deterministic matches; it is derived evidence because raw answers are intentionally absent.
+- Phase 7.4.1 closes the cross-document contamination gate without changing chunks, qrels, models,
+  schemas, collections, or candidate budget. Fusion uses a weak role multiplier `0.10`; a separate
+  rank-only post-rerank role prior uses multiplier `0.50`, offset `40`, and strong-and-weak
+  confidence. A bounded relation-scoped list fallback uses only query key/button, switch/change,
+  list-intent and technical-identifier cues, then counts targets after that relation in one candidate
+  clause. The 2026-08-17 real closure is candidate recall `12/12`, Hit@5 `12/12`, MRR@5 `0.892`,
+  wrong-document top-1 `0/12`, wrong-document top-5 `4/60 = 0.067`, EN/VI Hit@5 `6/6` each, and
+  calibration 010 rank `5`; all retrieval and contamination gates pass.
+- Phase 7.5 freezes reranker budget `30`, batch size `8`, and runtime-default ONNX threads after a
+  microbenchmark and three full repetitions of every calibration question. Rerank p95 is `6.996 s`
+  and total p95 is `7.027 s`, a 47.8% improvement from the 13.399-second baseline with no quality
+  regression. FastEmbed remains direct-pinned at `0.8.0`; no re-index or model/pooling change occurs.
+- Before approval, typed calibration-v3 facts were an inactive human-review draft that preserved
+  qrels/pages/phrases. Held-out remains sealed until the fresh calibration fact/citation/abstention
+  gate passes.
+- Calibration-v3 was subsequently frozen after explicit approval and Gemini 3.5 Flash Lite evaluated
+  all 20 calibration rows. It failed the E2E release gate: deterministic fact accuracy `7/12 = 0.583`
+  and wrong-document citations `2`, despite valid citation IDs `100%`, direct-evidence citations
+  `0.917`, and abstention precision/recall `1.000`. Held-out was not executed. The evaluator now
+  requires a dataset-specific provider token; a calibration token cannot authorize held-out.
+- Phase 7 union runtime now supports same-document exact-normalized content deduplication before
+  reranking. The setting defaults off globally and is enabled explicitly only by the Phase 7 E2E CLI,
+  preserving legacy Phase 5/6 behavior.
+- FastEmbed is now a direct `0.8.0` retrieval/dev constraint, matching the tested Python 3.11 runtime;
+  Phase 7 does not switch to the warning-suggested 0.5.1 behavior or re-index the corpus.
+- Fresh provider E2E is pending explicit data-egress approval. Held-out remains unrun because
+  deterministic answer/citation/document gates have not all been demonstrated on the frozen
+  Phase 7.4 runtime.
+
+### Calibration-closure checkpoint (2026-08-11)
+
+Status: `TECHNICAL PASS`; held-out: `BLOCKED_GOVERNANCE`.
+
+Replacement held-out v2: a new Git-ignored private draft contains 30 answerable
+and 15 unanswerable rows and has been checked against the frozen 2,753-chunk
+corpus. It is `DRAFT / NEEDS_HUMAN_REVIEW`, not a metric source. The separate
+`freeze_phase7_heldout_v2` command requires an exact dataset approval token;
+provider egress remains a second, independent approval.
+
+Update 2026-08-17: v2 was frozen after explicit dataset approval and executed
+exactly once after separate Gemini-egress approval. Its sanitized result is
+candidate recall `0.900`, Hit@5 `0.800`, MRR@5 `0.725`, deterministic fact
+accuracy `0.786` (28 answered answerable rows), valid citation IDs `1.000`,
+wrong-document citations `2`, and abstention precision/recall `0.882`/`1.000`.
+This is below calibration release targets and must not be used to tune the
+frozen runtime; a future corrective iteration requires a new sealed benchmark.
+
+- Calibration mode is sealed to `calibration-v3.jsonl`. It validates one split and obtains only the
+  held-out SHA-256 from `phase-7-evaluation-manifest-v3.json`; it does not open `test.jsonl`.
+- The E2E run identity now includes prompt/evaluator/runtime hashes, provider/model/base-host,
+  reasoning effort, explicit Gemini temperature `0`, token/timeout/retry/store settings, Python and
+  library versions, top-k, and correction count. A changed field invalidates the checkpoint.
+- Typed fact evaluator v2 adds narrow, ASCII-only regular inflection for text facts and span-aware
+  negation. It fixes generic `block`/`blocked` and `contact`/`contacts` cases without applying
+  stemming/prefix rules to identifiers or numeric-unit facts. Strict phrase and token coverage remain
+  diagnostics only.
+- `QueryExecution` now distinguishes the full post-rerank ranking from actual generation evidence.
+  Exact normalized content duplicated across different documents is represented once before top-k;
+  the query-derived document role chooses provenance, and equivalent chunk/document IDs remain in
+  diagnostics. Same-document duplicates and near-duplicates are not collapsed.
+- Historical snapshot v2 was executed against real Qdrant/Jina with zero provider calls and zero
+  held-out reads.
+  The finite CE-rank/RRF-rank grid preserves candidate recall `12/12`, Hit@5 `11/12`, MRR@5 `0.875`,
+  EN `6/6`, VI `5/6`, and wrong-document top-1 `0`. That historical offset-20 profile has
+  wrong-document actual evidence `7/60 = 0.117` after cross-document dedup.
+- No grid profile moves calibration 010 from full rank 6 into actual evidence top 5. The single
+  pre-registered `list_completeness_v1` fallback also fails because rank 5 has the same query-derived
+  `MODE` identifier and a larger generic list-pair count. It is not activated; no query-specific or
+  qrel-aware rule is added.
+- The 2026-08-17 continuation replaces that whole-chunk diagnostic with
+  `phase7_relation_list_completeness_v1`. It activates only for generic query-derived key/list/switch
+  intent, scopes counting to targets after the relation in one clause, and never reads qrels or
+  expected facts at runtime. Snapshot-v3 replay and a fresh real Qdrant/Jina run both put 010 at
+  actual evidence rank 5. Final retrieval metrics are Hit@5 `12/12`, MRR@5 `0.892`, and
+  wrong-document top-5 `4/60`; all registered retrieval gates pass.
+- Historical calibration 005 still cannot be reconstructed from v4 because raw answers were
+  intentionally omitted. The separately approved `diagnose_phase7_calibration_005.py` run reused one
+  retrieved/reranked evidence bundle for three provider attempts. All three completed, cited `S1`,
+  and matched the expected fact with positive polarity. The current matcher/provider path therefore
+  closes 005 without selecting a best attempt; the private raw file remains ignored.
+- The authorized 2026-08-17 V5 calibration ran three independent Gemini calls against
+  `calibration-v3.jsonl` only. Worst-run aggregation passed: deterministic answerable facts
+  `12/12` in every run; valid citation IDs `100%`; unsupported and wrong-document citations `0`;
+  abstention precision/recall `1.000`; and retrieval ranks/evidence stable across all runs. The
+  per-run total p95 values were `8.358 s`, `11.052 s`, and `8.424 s`; CPU reranking remains a
+  production limitation, not a calibration correctness failure.
+- Historical tracked documentation exposed held-out row content and the old CLI parsed both splits.
+  Current documentation is metadata-only and the CLI refuses held-out execution, but history cannot
+  be made unseen. A new access-controlled final set or an explicit reporting downgrade is required.
+- No qrel, chunk, model, Qdrant collection, volume, public Query API, Docker image, or embedding
+  behavior was changed. Three approved provider generations were made for calibration 005, followed
+  by three independent approved 20-item calibration runs; no held-out run, re-index, build, or prune
+  occurred.
+- Final canonical ingestion-container Python 3.11.15 validation: Ruff PASS; pytest
+  `286 passed, 1 warning`; `git diff --check` and `docker compose config --quiet` PASS. The local
+  `.venv` is Python 3.13.5 and was used only for targeted checks, not as canonical or overwritten.
+  The warning is the known Starlette/TestClient deprecation.
+
 ### Evaluation dataset
 
 - Tối thiểu 20 answerable và 10 unanswerable questions.
 - Bao gồm tiếng Việt và tiếng Anh.
-- Answerable item có relevant chunk IDs, expected phrases và citation expectations.
+- Answerable item có relevant chunk IDs, evidence-validation phrases, reviewed answer facts theo
+  ngôn ngữ câu hỏi và citation expectations.
 - Unanswerable item phải thực sự không có evidence trong indexed manual.
 
 ### Metrics
 
 - Retrieval Hit@k, MRR và candidate recall.
-- Answer key-phrase accuracy.
+- Reviewed answer-fact accuracy; evidence phrases không dùng để chấm generated answer.
 - Citation validity và citation coverage.
 - Abstention precision và recall.
 - Dense, sparse, fusion, rerank, LLM và total latency.
@@ -688,7 +817,7 @@ structured-output details, validation evidence, and rollback.
 
 ```text
 Valid citation IDs: 100%
-Answer key-phrase accuracy: >= 0.85
+Reviewed answer-fact accuracy: >= 0.85
 Abstention precision: >= 0.90
 Abstention recall: >= 0.80
 Critical direct-evidence top-5: 3/3
@@ -708,6 +837,34 @@ Unsupported citation IDs: 0
 - Real Qdrant, FastEmbed và OpenAI tests dùng integration marker riêng.
 - Calibrate evidence/abstention policy from answerable and truly unanswerable held-out data.
 - Resolve reranker CPU latency and non-commercial license before commercial deployment.
+
+---
+
+## Streamlit demo layer
+
+The post-Phase-7 demo preserves `POST /api/v1/query` and adds no retrieval logic. A new
+`RETRIEVAL_PROFILE=phase6|phase7` resolver keeps Python backward-compatible at `phase6`, while
+Compose selects the complete frozen Phase 7 contract atomically. `/ready` and the lazy query service
+resolve the same contract and fail closed on Qdrant count/hash/schema drift.
+
+The `ui/` package contains a small HTTP client, environment/document configuration, pure session
+helpers, and a Streamlit chat view. It supports all/Installation/Programming filters, `top_k` 1–10,
+bounded display-only history, abstentions, and trusted citation metadata. It has no upload,
+ingestion, benchmark or raw JSON controls.
+
+Docker adds an independent Python 3.11 `ui` target and localhost-only Compose service. It installs
+only base + `.[ui]`; FastEmbed, Jina, Docling, LangChain, provider keys, model weights, raw manuals,
+and artifacts remain outside the image. Unit tests use HTTP fakes and pure helpers, with live Qdrant,
+models and Gemini restricted to explicit integration smoke.
+
+Acceptance record and commands are maintained in `docs/walkthrough-streamlit-demo.md`. The held-out
+v2 result remains immutable and UI work must not be used to tune it.
+
+Validation ngày 2026-08-19: Python 3.11 Ruff PASS; pytest `308 passed, 1 warning`; diff/Compose PASS;
+API/UI builds PASS; API/UI/Qdrant health PASS; both Phase 7 collections remain 2.753 points with hash
+`2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`. Provider-free VI
+Installation và EN Programming filters PASS. Four live Gemini UI queries were not run because demo
+egress for those questions/excerpts was not separately approved.
 
 ---
 
