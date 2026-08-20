@@ -8,6 +8,7 @@ __pycache__
 .pytest_tmp
 .pytest-work
 .pytest-phase3a2
+.pytest-phase*
 .ruff_cache
 .mypy_cache
 .env
