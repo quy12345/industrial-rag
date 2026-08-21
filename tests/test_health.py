@@ -28,7 +28,7 @@ def test_health_has_safe_request_correlation_id() -> None:
     assert generated.headers["x-request-id"] != "bad value"
 
 
-def test_readiness_checks_frozen_qdrant_contract_without_loading_models(monkeypatch) -> None:
+def test_readiness_defaults_to_phase7_contract_without_loading_models(monkeypatch) -> None:
     fake_client = object()
     calls = []
     monkeypatch.setattr(app_main, "create_qdrant_client", lambda settings: fake_client)
@@ -42,12 +42,17 @@ def test_readiness_checks_frozen_qdrant_contract_without_loading_models(monkeypa
     response = client.get("/api/v1/ready")
     assert response.status_code == 200
     assert calls[0][0] is fake_client
+    assert calls[0][1] == (
+        "industrial_manual_phase7_dense_v1",
+        "industrial_manual_phase7_hybrid_v1",
+    )
+    assert calls[0][2].chunk_count == 2753
 
 
-def test_readiness_uses_selected_phase7_contract(monkeypatch) -> None:
+def test_readiness_cannot_be_redirected_to_retired_phase6_profile(monkeypatch) -> None:
     fake_client = object()
     calls = []
-    monkeypatch.setattr(app_main.settings, "retrieval_profile", "phase7")
+    monkeypatch.setattr(app_main.settings, "retrieval_profile", "phase6")
     monkeypatch.setattr(app_main, "create_qdrant_client", lambda settings: fake_client)
     monkeypatch.setattr(
         app_main,

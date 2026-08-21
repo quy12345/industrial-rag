@@ -2,13 +2,16 @@
 
 ## Status
 
-**Phase 7 held-out v2 measured — Streamlit demo implemented**
+**Phase 7-only runtime — Streamlit demo implemented**
 
-Phase 6 implementation and offline/Docker correctness validation are complete. FastAPI exposes
-`GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses dense@20 ∪ sparse@20,
-multilingual cross-encoder reranking, an evidence gate, OpenAI/Gemini structured generation,
+The active product corpus is the two-manual ATV320 Phase 7 corpus. FastAPI exposes
+`GET /api/v1/health` and `POST /api/v1/query`. The accuracy-first runtime uses frozen dense@60 and
+expanded sparse@40 fusion capped at 30 candidates, multilingual cross-encoder reranking, an evidence gate, OpenAI/Gemini structured generation,
 referential citation validation, and deterministic citations built from Qdrant payloads. Sparse
 top-20 without reranking remains the explicit operational rollback.
+
+The former 99-chunk `manual.pdf` corpus is retired. Its collections are preserved, while unsupported
+Phase 3–6 tools are isolated under `scripts/archive/phase6/`; they are not active quickstart paths.
 
 An interactive Gemini request has returned an answer through the full API path. Phase 7 added a
 separate two-manual ATV320 corpus and multiple calibration-only diagnostics. The latest closure fixes
@@ -252,8 +255,8 @@ docker compose up -d qdrant api ui
 docker compose ps
 ```
 
-Mở `http://localhost:8501`. Compose cấu hình API bằng frozen `RETRIEVAL_PROFILE=phase7`; Python
-local vẫn mặc định `phase6` để giữ backward compatibility. `GET /api/v1/ready` xác nhận trực tiếp
+Mở `http://localhost:8501`. Compose và Python local đều dùng frozen `RETRIEVAL_PROFILE=phase7`;
+`phase6` không còn là giá trị cấu hình hợp lệ. `GET /api/v1/ready` xác nhận trực tiếp
 hai Phase 7 collections, 2.753 points và chunk hash trước khi demo được coi là ready.
 
 Kiểm tra health và UTF-8 response header:
@@ -298,8 +301,8 @@ formatter cắt ngắn answer:
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $body = @{
-    question = "Thuật toán nào được sử dụng để phát hiện dữ liệu cảm biến bất thường?"
-    document_id = "manual-77d5dae4c2c5"
+    question = "What tasks are covered by the ATV320 Installation Manual?"
+    document_id = "atv320-installation-manual-en-nve41289-09-c181b4d7f11b"
     top_k = 5
 } | ConvertTo-Json
 
@@ -380,14 +383,15 @@ These values use different Docker storage accounting, so both are retained rathe
 single misleading number. Size optimization is deferred; correctness came first, and no prune was
 run.
 
-## Ingestion and dense indexing
+## Archived Phase 3 ingestion and dense indexing
 
-Place the document under `data/raw/`. The checked retrieval-development baseline is frozen against
-`artifacts/manual-batched.jsonl`: the 21-page manual, batch size 4, document ID
-`manual-77d5dae4c2c5`, and 99 chunks.
+This retired workflow used the removed `manual.pdf` corpus. The checked retrieval-development
+baseline remains frozen against `artifacts/manual-batched.jsonl`: 21 pages, batch size 4, document
+ID `manual-77d5dae4c2c5`, and 99 chunks. The command is preserved for history only and must not be
+used to rebuild active collections.
 
 ```powershell
-python scripts/index_document.py data/raw/manual.pdf `
+python -m scripts.archive.phase6.index_document data/raw/manual.pdf `
   --page-start 1 `
   --page-end 21 `
   --page-batch-size 4
@@ -397,10 +401,10 @@ The index manifest records collection/model compatibility. Indexing parses and e
 updates Qdrant, upserts new points, then removes stale points for only the indexed document.
 Chunk and point IDs are deterministic. Re-indexing the same frozen input must leave 99 points.
 
-Search a specific indexed document:
+The historical Phase 6 dense-search adapter is archived and is not the Phase 7 query path:
 
 ```powershell
-python scripts/search_dense.py `
+python -m scripts.archive.phase6.search_dense `
   "What sensor attributes are used by the algorithm?" `
   --document-id manual-77d5dae4c2c5 `
   --limit 5
@@ -408,7 +412,10 @@ python scripts/search_dense.py `
 
 Dense cosine scores are ranking signals, not probabilities.
 
-## Retrieval development evaluation
+## Archived Phase 4 retrieval development evaluation
+
+This section documents the retired 99-chunk corpus. Its evaluation commands now live under
+`scripts/archive/phase6/` and are not part of the active Phase 7 product runtime.
 
 `data/eval/dense_smoke.jsonl` is a **30-query retrieval development set**, with 15 Vietnamese and
 15 English factual queries. It is not the held-out final evaluation set planned for Phase 7.
@@ -423,7 +430,7 @@ as **cross-lingual** (`en` query → `vi` evidence); Vietnamese queries are mono
 Run the immutable dense metric closure after Qdrant contains exactly the frozen chunk IDs:
 
 ```powershell
-python scripts/evaluate.py --strategy dense `
+python -m scripts.archive.phase6.evaluate --strategy dense `
   --chunks artifacts/manual-batched.jsonl `
   --limit 20 `
   --output artifacts/metrics/dense-baseline-closure.json
@@ -443,7 +450,7 @@ MRR@5 `0.269`, MRR@20 `0.298`, p50 latency `15.14 ms`, p95 latency `37.77 ms`, a
 cases. The immutable `dense-baseline.json` is not overwritten; this additive closure recorded
 Hit@20 `0.767`, p50 `25.69 ms`, and p95 `35.40 ms` on 2026-08-06.
 
-## Hybrid BM25 + RRF retrieval
+## Archived Phase 4 hybrid BM25 + RRF retrieval
 
 Dense collection v1, `industrial_manual_chunks`, remains intact for the dense baseline. Hybrid data
 uses the independent `industrial_manual_chunks_v2` collection: named `dense` (384-d cosine) and
@@ -459,22 +466,22 @@ to run if its schema, models, sparse IDF configuration, chunk hash, or RRF confi
 Index v2 only after ingestion reproduces the frozen set:
 
 ```powershell
-python -m scripts.index_hybrid data/raw/manual.pdf --page-batch-size 4
-python -m scripts.index_hybrid data/raw/manual.pdf --page-batch-size 4
+python -m scripts.archive.phase6.index_hybrid data/raw/manual.pdf --page-batch-size 4
+python -m scripts.archive.phase6.index_hybrid data/raw/manual.pdf --page-batch-size 4
 ```
 
-Search with 20 dense candidates, 20 sparse candidates, RRF `k=60`, and bounded output. Ranks are
-one-based. RRF is `sum(1 / (k + rank))`; raw cosine and BM25 scores are never added together and
-all scores are ranking signals, not probabilities.
+The following archived Phase 6 search uses 20 dense candidates, 20 sparse candidates, RRF `k=60`,
+and bounded output. Ranks are one-based. RRF is `sum(1 / (k + rank))`; raw cosine and BM25 scores
+are never added together and all scores are ranking signals, not probabilities.
 
 ```powershell
-python -m scripts.search_hybrid "Thuật toán ODA-MD có mục tiêu gì?" `
+python -m scripts.archive.phase6.search_hybrid "Thuật toán ODA-MD có mục tiêu gì?" `
   --document-id manual-77d5dae4c2c5 --limit 5
 ```
 
 ```powershell
-python -m scripts.evaluate --strategy sparse --limit 20
-python -m scripts.evaluate --strategy hybrid --limit 20
+python -m scripts.archive.phase6.evaluate --strategy sparse --limit 20
+python -m scripts.archive.phase6.evaluate --strategy hybrid --limit 20
 ```
 
 The 2026-08-06 Python 3.11 container run measured the following development-set results:
@@ -495,14 +502,14 @@ critical intents has direct evidence in top 5. See `docs/walkthrough-phase-4.md`
 scenario, critical, and failure diagnostics. This remains a retrieval-development set, not the
 held-out Phase 7 end-to-end evaluation.
 
-## Phase 5 candidate-pool handoff
+## Archived Phase 5 candidate-pool handoff
 
 Candidate recall answers a different question from Hit@k: whether a reranker could see direct
 evidence at all. It is measured before any reranking over the same 30 qrels and frozen 99 chunks.
 
 ```powershell
-python -m scripts.audit_candidate_pools --limit 20
-python -m scripts.generate_phase5_readiness
+python -m scripts.archive.phase6.audit_candidate_pools --limit 20
+python -m scripts.archive.phase6.generate_phase5_readiness
 ```
 
 The generated JSON artifacts are ignored runtime evidence: `artifacts/metrics/candidate-pool-audit.json`
@@ -518,7 +525,10 @@ development metrics than RRF hybrid. Four cases (`dense_005`, `dense_019`, `dens
 absent from sparse for `dense_008` and `dense_020`. See
 `docs/walkthrough-phase-4-closure.md` for the full diagnosis and reproducible checks.
 
-## Multilingual cross-encoder reranking
+## Archived Phase 5 multilingual cross-encoder reranking
+
+The following commands reproduce the historical Phase 5/6 experiment. They are archived under
+`scripts/archive/phase6/` and are not part of the active Phase 7 product runtime.
 
 Phase 5 uses FastEmbed 0.8.0 `TextCrossEncoder` with
 `jinaai/jina-reranker-v2-base-multilingual`. Candidate text is the heading breadcrumb, two newlines,
@@ -533,7 +543,7 @@ Use another licensed model or obtain appropriate rights before a commercial rele
 Run an interactive reranked search with an explicit strategy:
 
 ```powershell
-python -m scripts.search_reranked `
+python -m scripts.archive.phase6.search_reranked `
   "What sensor attributes are used by the algorithm?" `
   --strategy union --document-id manual-77d5dae4c2c5 --limit 5
 ```
@@ -545,13 +555,13 @@ model at runtime:
 ```powershell
 docker compose up -d qdrant
 docker compose --profile tools run --rm -v "${PWD}:/app" ingestion `
-  python -m scripts.evaluate_reranking --strategy all
+  python -m scripts.archive.phase6.evaluate_reranking --strategy all
 ```
 
 To regenerate only the comparison from existing strategy artifacts, with no model initialization:
 
 ```powershell
-python -m scripts.evaluate_reranking --comparison-only
+python -m scripts.archive.phase6.evaluate_reranking --comparison-only
 ```
 
 Measured on 2026-08-06, Python 3.11.15 CPU runtime, frozen 30 qrels and 99 chunks:
@@ -604,13 +614,14 @@ PASS; new Streamlit-to-Gemini demo requests remain `NOT RUN` pending separate da
 
 ## Grounded query API
 
-Phase 6 deliberately keeps retrieval, reranking, evidence gating, and citation validation in
+The Phase 7 runtime keeps retrieval, reranking, evidence gating, and citation validation in
 project code. LangChain is used only to orchestrate the prompt, invoke the selected generation
 provider, and parse the provider-native `GeneratedAnswer` schema:
 
 ```text
 question
-→ dense v1 top 20 ∪ sparse v2 top 20
+→ dense top 60 + expanded sparse top 40
+→ frozen weighted RRF/reserves, capped at 30 candidates
 → Jina multilingual rerank
 → final top_k evidence
 → evidence gate
@@ -623,6 +634,7 @@ Default configuration:
 
 ```text
 RETRIEVAL_STRATEGY=union
+RETRIEVAL_PROFILE=phase7
 RERANK_ENABLED=true
 GENERATION_PROVIDER=openai
 OPENAI_MODEL=gpt-5.6-terra
@@ -668,7 +680,7 @@ References: [Google OpenAI compatibility](https://ai.google.dev/gemini-api/docs/
 PowerShell request:
 
 ```powershell
-$body = @{ question = "Thuật toán nào phát hiện dữ liệu cảm biến bất thường?"; top_k = 5 } |
+$body = @{ question = "How do I navigate the ATV320 display menus?"; top_k = 5 } |
   ConvertTo-Json
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
 Invoke-RestMethod http://localhost:8000/api/v1/query `
@@ -721,13 +733,13 @@ The independent `ui` target installs base + `.[ui]` only. It does not contain Fa
 Docling, LangChain, model weights, raw manuals, or artifacts. The UI calls the API over the Compose
 network and is published only on `127.0.0.1:8501`.
 
-The API image installs base + `.[retrieval]` + `.[llm]`, but not Docling. Build and run ingestion
-only when needed:
+The API image installs base + `.[retrieval]` + `.[llm]`, but not Docling. The following command is
+the archived Phase 6 ingestion example, not the active Phase 7 indexing workflow:
 
 ```powershell
 docker compose --progress plain --profile tools build ingestion
 docker compose --profile tools run --rm ingestion `
-  python scripts/index_document.py /data/raw/manual.pdf `
+  python -m scripts.archive.phase6.index_document /data/raw/manual.pdf `
   --page-start 1 --page-end 21 --page-batch-size 4
 ```
 
@@ -762,11 +774,11 @@ preserved.
   a separate sparse/RRF collection rather than hidden changes to this development set.
 - Hybrid retrieval improves the development-set aggregate, but two critical bilingual intents still
   miss top 5 before reranking.
-- Accuracy-first union reranking is now the Phase 6 default, but it remains slow on CPU: the Phase 5
-  warm p95 was 11.89 seconds and the Phase 6 real smoke measured 13.90 seconds for one rerank. Sparse
-  rollback measured 5.63 ms retrieval with no reranker.
+- Accuracy-first Phase 7 union reranking remains slow on CPU: the repeated frozen-budget benchmark
+  measured rerank p95 `6.996 s` and total p95 `7.027 s`. Sparse rollback avoids the reranker.
 - The selected reranker is licensed CC-BY-NC-4.0 and is not approved here for commercial use.
 - Gemini has returned an answer in an interactive request, but the sanitized bounded provider smoke
   artifact is still pending; the OpenAI path remains untested. Offline structured-output, provider
   routing, and HTTP behavior are covered by fakes.
-- Referential citation IDs are validated in Phase 6, but semantic claim support is a Phase 7 metric.
+- Referential citation IDs are validated at runtime; semantic claim support remains an evaluation
+  metric rather than a production decision rule.

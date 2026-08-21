@@ -132,7 +132,7 @@ def candidate(
 def test_hybrid_settings_default_to_bm25_with_stemming_disabled() -> None:
     settings = Settings()
 
-    assert settings.qdrant_hybrid_collection == "industrial_manual_chunks_v2"
+    assert settings.qdrant_hybrid_collection == "industrial_manual_phase7_hybrid_v1"
     assert settings.sparse_model == "Qdrant/bm25"
     assert settings.bm25_disable_stemmer is True
     with pytest.raises(ValidationError):

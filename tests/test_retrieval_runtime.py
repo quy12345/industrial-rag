@@ -1,11 +1,13 @@
-"""Offline tests for lazy Phase 6 retrieval composition and frozen identity."""
+"""Offline tests for lazy Phase 7 retrieval composition and frozen identity."""
 
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import Settings
 from app.errors import RerankerUnavailableError, RetrievalUnavailableError
@@ -13,9 +15,7 @@ from app.models import RetrievalCandidate
 from app.reranking import RerankingError
 from app.retrieval import RetrievalError
 from app.retrieval_runtime import (
-    PHASE6_RETRIEVAL_CONTRACT,
     PHASE7_RETRIEVAL_CONTRACT,
-    FrozenRetrievalContract,
     LazyQueryRetriever,
     QueryRetrievalResult,
     UnionRerankRetriever,
@@ -94,24 +94,24 @@ def test_union_adapter_does_not_fallback_on_failures(error, expected) -> None:
 
 
 def test_runtime_settings_accept_only_default_and_explicit_rollback() -> None:
-    contract = PHASE6_RETRIEVAL_CONTRACT
-    _validate_settings(Settings(), contract)
-    _validate_settings(Settings(retrieval_strategy="sparse", rerank_enabled=False), contract)
+    settings, contract = resolve_retrieval_runtime(Settings())
+    _validate_settings(settings, contract)
+    _validate_settings(
+        settings.model_copy(update={"retrieval_strategy": "sparse", "rerank_enabled": False}),
+        contract,
+    )
     with pytest.raises(RetrievalUnavailableError, match="combinations"):
-        _validate_settings(Settings(retrieval_strategy="sparse", rerank_enabled=True), contract)
+        _validate_settings(
+            settings.model_copy(update={"retrieval_strategy": "sparse", "rerank_enabled": True}),
+            contract,
+        )
     with pytest.raises(RetrievalUnavailableError, match="frozen"):
-        _validate_settings(Settings(dense_candidate_limit=21), contract)
+        _validate_settings(settings.model_copy(update={"dense_candidate_limit": 61}), contract)
 
 
-def test_runtime_profile_defaults_to_phase6_and_resolves_phase7_atomically() -> None:
-    phase6_settings, phase6_contract = resolve_retrieval_runtime(Settings())
-    assert phase6_contract is PHASE6_RETRIEVAL_CONTRACT
-    assert phase6_settings.qdrant_collection == "industrial_manual_chunks"
-    assert phase6_settings.rerank_deduplicate_content is False
-
+def test_runtime_profile_is_phase7_only_and_overrides_mutable_values() -> None:
     phase7_settings, phase7_contract = resolve_retrieval_runtime(
         Settings(
-            retrieval_profile="phase7",
             qdrant_collection="ignored-dense",
             qdrant_hybrid_collection="ignored-hybrid",
             dense_candidate_limit=999,
@@ -128,9 +128,19 @@ def test_runtime_profile_defaults_to_phase6_and_resolves_phase7_atomically() -> 
     assert phase7_settings.bm25_avg_len == 81.33599709407919
     assert phase7_settings.rerank_deduplicate_content is True
 
+    with pytest.raises(ValidationError, match="retrieval_profile"):
+        Settings(retrieval_profile="phase6")
+
 
 def test_frozen_collection_rejects_count_and_hash_mismatch(monkeypatch) -> None:
-    contract = PHASE6_RETRIEVAL_CONTRACT
+    contract = replace(
+        PHASE7_RETRIEVAL_CONTRACT,
+        document_id="test-doc",
+        document_ids=(),
+        document_contexts=(),
+        chunk_count=2,
+        chunk_ids_sha256=hashlib.sha256(b"a\nb").hexdigest(),
+    )
 
     class Client:
         def __init__(self, count):
@@ -140,18 +150,20 @@ def test_frozen_collection_rejects_count_and_hash_mismatch(monkeypatch) -> None:
             return SimpleNamespace(points_count=self.count)
 
     with pytest.raises(RetrievalError, match="points"):
-        _validate_frozen_collection(Client(98), "v1", contract)
+        _validate_frozen_collection(Client(1), "v1", contract)
     monkeypatch.setattr(
         "app.retrieval_runtime.get_indexed_chunk_ids", lambda *args, **kwargs: {"wrong"}
     )
     with pytest.raises(RetrievalError, match="frozen"):
-        _validate_frozen_collection(Client(99), "v1", contract)
+        _validate_frozen_collection(Client(2), "v1", contract)
 
 
 def test_multi_document_frozen_contract_hashes_the_union_of_stable_ids(monkeypatch) -> None:
-    contract = FrozenRetrievalContract(
+    contract = replace(
+        PHASE7_RETRIEVAL_CONTRACT,
         document_id="a-doc",
         document_ids=("a-doc", "b-doc"),
+        document_contexts=(),
         chunk_count=2,
         chunk_ids_sha256=hashlib.sha256(b"a\nb").hexdigest(),
     )
@@ -193,4 +205,5 @@ def test_multi_document_frozen_contract_hashes_the_union_of_stable_ids(monkeypat
 def test_importing_runtime_does_not_construct_models() -> None:
     import app.retrieval_runtime as runtime
 
-    assert runtime.PHASE6_RETRIEVAL_CONTRACT.chunk_count == 99
+    assert runtime.PHASE7_RETRIEVAL_CONTRACT.chunk_count == 2753
+    assert not hasattr(runtime, "PHASE6_RETRIEVAL_CONTRACT")

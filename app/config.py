@@ -17,9 +17,9 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost"
     qdrant_port: int = 6333
     qdrant_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
-    qdrant_collection: str = "industrial_manual_chunks"
+    qdrant_collection: str = "industrial_manual_phase7_dense_v1"
     dense_vector_name: str = "dense"
-    qdrant_hybrid_collection: str = "industrial_manual_chunks_v2"
+    qdrant_hybrid_collection: str = "industrial_manual_phase7_hybrid_v1"
     sparse_vector_name: str = "sparse"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embedding_cache_dir: str | None = None
@@ -30,10 +30,10 @@ class Settings(BaseSettings):
     bm25_k: float = Field(default=1.2, gt=0)
     bm25_b: float = Field(default=0.75, ge=0, le=1)
     bm25_avg_len: float | None = Field(default=None, gt=0)
-    dense_candidate_limit: int = Field(default=20, ge=5)
-    sparse_candidate_limit: int = Field(default=20, ge=5)
+    dense_candidate_limit: int = Field(default=60, ge=5)
+    sparse_candidate_limit: int = Field(default=40, ge=5)
     hybrid_final_limit: int = Field(default=5, gt=0)
-    rrf_k: int = Field(default=60, gt=0)
+    rrf_k: int = Field(default=40, gt=0)
     retrieval_top_k: int = Field(default=5, gt=0)
     retrieval_score_threshold: float | None = None
     rerank_model: str = "jinaai/jina-reranker-v2-base-multilingual"
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     rerank_candidate_strategy: Literal["sparse", "hybrid", "union"] | None = None
     rerank_final_limit: int = Field(default=5, gt=0)
     retrieval_strategy: Literal["union", "sparse"] = "union"
-    retrieval_profile: Literal["phase6", "phase7"] = "phase6"
+    retrieval_profile: Literal["phase7"] = "phase7"
     rerank_enabled: bool = True
     evidence_score_threshold: float | None = None
     generation_max_context_chars: int = Field(default=24_000, ge=4_000)

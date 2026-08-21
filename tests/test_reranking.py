@@ -23,7 +23,7 @@ from app.reranking import (
     evaluate_reranked_cases,
     rerank_candidates,
 )
-from scripts import evaluate_reranking, search_reranked
+from scripts.archive.phase6 import evaluate_reranking, search_reranked
 
 
 class FakeCrossEncoder:

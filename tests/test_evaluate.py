@@ -19,7 +19,7 @@ from app.evaluation import (
     validate_cases_against_chunks,
 )
 from app.models import DocumentChunk
-from scripts import evaluate as evaluate_cli
+from scripts.archive.phase6 import evaluate as evaluate_cli
 
 
 def _case(**overrides: object) -> EvaluationCase:

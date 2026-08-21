@@ -1,4 +1,4 @@
-"""Run a bounded real Phase 6 query smoke and write only sanitized diagnostics."""
+"""Run a bounded real Phase 7 query smoke and write only sanitized diagnostics."""
 
 from __future__ import annotations
 
@@ -16,23 +16,29 @@ from typing import Any
 from app.config import get_settings
 from app.errors import QueryPipelineError
 from app.query_service import get_query_service
+from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT
 
-DEFAULT_OUTPUT = Path("artifacts/metrics/phase-6-query-smoke.json")
+DEFAULT_OUTPUT = Path("artifacts/metrics/phase-7-query-smoke.json")
+
+INSTALLATION_DOCUMENT_ID, PROGRAMMING_DOCUMENT_ID = PHASE7_RETRIEVAL_CONTRACT.document_ids
 
 SCENARIOS = (
     (
-        "vi_answerable",
-        "Thuật toán nào được trình bày để phát hiện dữ liệu cảm biến bất thường?",
+        "vi_installation_answerable",
+        "Tài liệu Installation Manual hỗ trợ những công việc nào?",
+        INSTALLATION_DOCUMENT_ID,
         False,
     ),
     (
-        "en_cross_lingual_answerable",
-        "Which algorithm is presented for detecting anomalous sensor data?",
+        "en_programming_answerable",
+        "How do I navigate and configure the ATV320 display menus?",
+        PROGRAMMING_DOCUMENT_ID,
         False,
     ),
     (
         "clearly_unanswerable",
         "What is the maximum hydraulic pressure of the excavator described in this document?",
+        INSTALLATION_DOCUMENT_ID,
         True,
     ),
 )
@@ -41,10 +47,19 @@ SCENARIOS = (
 def main() -> int:
     args = _build_parser().parse_args()
     settings = get_settings()
+    if settings.retrieval_profile != "phase7":
+        print("Phase 7 query smoke requires RETRIEVAL_PROFILE=phase7; no request was made.")
+        return 2
     artifact: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "timestamp": datetime.now(UTC).isoformat(),
-        "base_commit": os.getenv("PHASE6_BASE_COMMIT") or _git_commit(),
+        "base_commit": os.getenv("PHASE7_BASE_COMMIT") or _git_commit(),
+        "retrieval_profile": settings.retrieval_profile,
+        "corpus": {
+            "document_ids": list(PHASE7_RETRIEVAL_CONTRACT.document_ids),
+            "chunk_count": PHASE7_RETRIEVAL_CONTRACT.chunk_count,
+            "chunk_ids_sha256": PHASE7_RETRIEVAL_CONTRACT.chunk_ids_sha256,
+        },
         "runtime_versions": _runtime_versions(),
         "generation_provider": settings.generation_provider,
         "model": settings.generation_model,
@@ -61,12 +76,12 @@ def main() -> int:
             }
         )
         _atomic_write(args.output, artifact)
-        print(f"Phase 6 real smoke NOT RUN: API key unavailable. Artifact: {args.output}")
+        print(f"Phase 7 real smoke NOT RUN: API key unavailable. Artifact: {args.output}")
         return 0
 
     service = get_query_service()
     all_passed = True
-    for scenario_id, question, expected_abstained in SCENARIOS:
+    for scenario_id, question, document_id, expected_abstained in SCENARIOS:
         row: dict[str, Any] = {
             "scenario_id": scenario_id,
             "expected_abstained": expected_abstained,
@@ -74,7 +89,7 @@ def main() -> int:
         try:
             execution = service.execute(
                 question=question,
-                document_id="manual-77d5dae4c2c5",
+                document_id=document_id,
                 top_k=5,
             )
             response = execution.response
@@ -107,7 +122,7 @@ def main() -> int:
         artifact["test_scenarios"].append(row)
     artifact["integration_run_status"] = "pass" if all_passed else "fail"
     _atomic_write(args.output, artifact)
-    print(f"Phase 6 real smoke {artifact['integration_run_status'].upper()}: {args.output}")
+    print(f"Phase 7 real smoke {artifact['integration_run_status'].upper()}: {args.output}")
     return 0 if all_passed else 1
 
 

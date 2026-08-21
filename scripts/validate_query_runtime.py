@@ -1,4 +1,4 @@
-"""Read-only real-model smoke for the frozen Phase 6 retrieval runtime."""
+"""Read-only real-model smoke for the active frozen Phase 7 retrieval runtime."""
 
 from __future__ import annotations
 
@@ -6,16 +6,26 @@ import argparse
 import json
 
 from app.config import get_settings
-from app.retrieval_runtime import PHASE6_RETRIEVAL_CONTRACT, build_query_retriever
+from app.retrieval_runtime import (
+    PHASE7_RETRIEVAL_CONTRACT,
+    build_query_retriever,
+    resolve_retrieval_runtime,
+)
 
 
 def main() -> int:
     args = _build_parser().parse_args()
-    retriever = build_query_retriever(get_settings())
+    settings, contract = resolve_retrieval_runtime(get_settings())
+    if contract is not PHASE7_RETRIEVAL_CONTRACT:
+        print("Phase 7 retrieval smoke requires RETRIEVAL_PROFILE=phase7; no query was made.")
+        return 2
+    retriever = build_query_retriever(settings, contract=contract)
     result = retriever.retrieve(args.question, document_id=args.document_id)
     print(
         json.dumps(
             {
+                "retrieval_profile": "phase7",
+                "contract_chunk_count": contract.chunk_count,
                 "retriever": type(retriever).__name__,
                 "candidate_count": len(result.candidates),
                 "top_chunk_id": result.candidates[0].chunk_id if result.candidates else None,
@@ -33,11 +43,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "question",
         nargs="?",
-        default="Which algorithm detects anomalous sensor data?",
+        default="What tasks are covered by the ATV320 Installation Manual?",
     )
     parser.add_argument(
         "--document-id",
-        default=PHASE6_RETRIEVAL_CONTRACT.document_id,
+        default=PHASE7_RETRIEVAL_CONTRACT.document_ids[0],
     )
     return parser
 

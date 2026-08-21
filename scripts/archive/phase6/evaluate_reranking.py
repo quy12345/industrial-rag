@@ -29,7 +29,7 @@ from app.reranking import (
     rerank_candidates,
 )
 from app.retrieval import RetrievalError
-from scripts.rerank_runtime import build_rerank_runtime
+from scripts.archive.phase6.rerank_runtime import build_rerank_runtime
 
 METRICS_DIR = Path("artifacts/metrics")
 DEFAULT_DATASET = Path("data/eval/dense_smoke.jsonl")

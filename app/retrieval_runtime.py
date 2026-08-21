@@ -1,4 +1,4 @@
-"""Artifact-independent Phase 6 retrieval runtime construction."""
+"""Artifact-independent Phase 7 retrieval runtime construction."""
 
 from __future__ import annotations
 
@@ -44,25 +44,25 @@ class FrozenDocumentContext:
 
 @dataclass(frozen=True)
 class FrozenRetrievalContract:
-    """Immutable index identity required by the Phase 6 runtime."""
+    """Immutable index identity required by a frozen retrieval runtime."""
 
-    document_id: str = "manual-77d5dae4c2c5"
-    chunk_count: int = 99
-    chunk_ids_sha256: str = "bac72ba44aa76ee5ee0220ca62f84c81efef54b76f2c8b566f4c1f3cf293b2be"
-    dense_collection: str = "industrial_manual_chunks"
-    hybrid_collection: str = "industrial_manual_chunks_v2"
+    document_id: str
+    chunk_count: int
+    chunk_ids_sha256: str
+    dense_collection: str
+    hybrid_collection: str
+    bm25_avg_len: float
+    dense_candidate_limit: int
+    sparse_candidate_limit: int
+    rrf_k: int
     dense_vector_name: str = "dense"
     sparse_vector_name: str = "sparse"
     dense_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     sparse_model: str = "Qdrant/bm25"
     rerank_model: str = "jinaai/jina-reranker-v2-base-multilingual"
     dense_dimension: int = 384
-    dense_candidate_limit: int = 20
-    sparse_candidate_limit: int = 20
-    rrf_k: int = 60
     bm25_k: float = 1.2
     bm25_b: float = 0.75
-    bm25_avg_len: float = 72.83838383838383
     bm25_disable_stemmer: bool = True
     document_ids: tuple[str, ...] = ()
     document_contexts: tuple[FrozenDocumentContext, ...] = ()
@@ -92,10 +92,8 @@ class FrozenRetrievalContract:
         }
 
 
-PHASE6_RETRIEVAL_CONTRACT = FrozenRetrievalContract()
-
-# Separate Phase 7 corpus.  These values intentionally live in package code rather
-# than in ``artifacts/`` so the runtime can verify Qdrant without a host checkout.
+# These values intentionally live in package code rather than in ``artifacts/`` so
+# the runtime can verify Qdrant without a host checkout.
 PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
     document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
     document_ids=(
@@ -134,13 +132,9 @@ PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
 def resolve_retrieval_runtime(
     settings: Settings,
 ) -> tuple[Settings, FrozenRetrievalContract]:
-    """Resolve one frozen profile while ignoring conflicting mutable overrides."""
+    """Resolve the Phase 7 contract while ignoring conflicting mutable overrides."""
 
-    contract = (
-        PHASE7_RETRIEVAL_CONTRACT
-        if settings.retrieval_profile == "phase7"
-        else PHASE6_RETRIEVAL_CONTRACT
-    )
+    contract = PHASE7_RETRIEVAL_CONTRACT
     resolved = settings.model_copy(
         update={
             "qdrant_collection": contract.dense_collection,
@@ -157,7 +151,7 @@ def resolve_retrieval_runtime(
             "bm25_b": contract.bm25_b,
             "bm25_avg_len": contract.bm25_avg_len,
             "bm25_disable_stemmer": contract.bm25_disable_stemmer,
-            "rerank_deduplicate_content": contract is PHASE7_RETRIEVAL_CONTRACT,
+            "rerank_deduplicate_content": True,
         }
     )
     _validate_settings(resolved, contract)
@@ -271,7 +265,7 @@ class LazyQueryRetriever:
 def build_query_retriever(
     settings: Settings,
     *,
-    contract: FrozenRetrievalContract = PHASE6_RETRIEVAL_CONTRACT,
+    contract: FrozenRetrievalContract,
 ) -> QueryRetriever:
     """Validate the selected runtime and build only dependencies that strategy needs."""
 
@@ -309,9 +303,9 @@ def build_query_retriever(
 def build_union_rerank_runtime(
     settings: Settings,
     *,
-    contract: FrozenRetrievalContract = PHASE6_RETRIEVAL_CONTRACT,
+    contract: FrozenRetrievalContract,
 ) -> tuple[RerankPipeline, dict[str, Any]]:
-    """Build the shared Phase 5/6 union pipeline without host artifact dependencies."""
+    """Build one explicit frozen union pipeline without host artifact dependencies."""
 
     _validate_settings(settings, contract)
     if settings.retrieval_strategy != "union" or not settings.rerank_enabled:
@@ -446,7 +440,7 @@ def validate_frozen_runtime(
     client: Any,
     *,
     collection_names: tuple[str, ...],
-    contract: FrozenRetrievalContract = PHASE6_RETRIEVAL_CONTRACT,
+    contract: FrozenRetrievalContract,
 ) -> None:
     """Public read-only validation helper used by scripts and integration checks."""
 

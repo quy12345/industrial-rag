@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.evaluation import chunk_set_metadata, load_frozen_chunks
 from app.reranking import RerankingError
 from app.retrieval import RetrievalError
-from scripts.rerank_runtime import build_rerank_runtime
+from scripts.archive.phase6.rerank_runtime import build_rerank_runtime
 
 
 def main(argv: Sequence[str] | None = None) -> int:

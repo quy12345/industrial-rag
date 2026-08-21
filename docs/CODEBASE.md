@@ -5,9 +5,9 @@
 ```text
 PDF/DOCX -> Docling -> structure-aware DocumentChunk
         -> dense FastEmbed vector + BM25 sparse vector -> Qdrant collection v2
-Query -> dense top-20 + sparse top-20 -> client-side RRF -> RetrievalCandidate
-      -> sparse | hybrid | dense/sparse union candidate pool
-      -> optional Phase 7 same-document exact-content deduplication
+Query -> dense top-60 + expanded sparse top-40 -> frozen weighted RRF/reserves
+      -> maximum 30 RetrievalCandidate records
+      -> same-document exact-content deduplication
       -> lazy multilingual cross-encoder -> full reranked pool -> display cutoff
       -> evidence gate -> structured grounded generation
       -> source-ID validation -> trusted citation builder -> QueryResponse
@@ -31,8 +31,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 ## Main modules
 
 - `app/config.py`: Pydantic settings for retrieval, reranking, evidence/generation limits, selected
-  OpenAI or Gemini provider, and `phase6|phase7` retrieval profile. Python defaults to Phase 6 for
-  compatibility; Docker Compose explicitly selects Phase 7.
+  OpenAI or Gemini provider, and the only supported `phase7` retrieval profile. Python and Compose
+  use the same active collections; `phase6` is rejected.
 - `app/ingestion.py`: input validation, Docling conversion, batched PDF processing, stable
   content-based chunk IDs, and atomic JSONL output.
 - `app/models.py`: ingestion/retrieval models plus the public query request, response, and trusted
@@ -72,9 +72,9 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
   sparse/hybrid/union pool construction, strict output validation, deterministic reranking, stage
   latency, and direct-evidence failure classification.
-- `app/retrieval_runtime.py`: artifact-independent Phase 6/Phase 7 frozen contracts, atomic profile
-  resolution, live Qdrant hash/schema checks, lazy union runtime, and sparse rollback composition
-  shared by API and integration scripts.
+- `app/retrieval_runtime.py`: the artifact-independent Phase 7 frozen contract, atomic resolution,
+  live Qdrant hash/schema checks, lazy union runtime, and sparse rollback composition shared by API
+  and integration scripts. Builders require an explicit contract.
 - `app/generation.py`: deterministic bounded evidence blocks, strict `GeneratedAnswer`, prompt
   injection boundary, and a lazy LangChain adapter. OpenAI uses Responses with `store=false`;
   Gemini uses Google's OpenAI-compatible Chat Completions endpoint.
@@ -91,20 +91,11 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `ui/state.py`: dependency-light bounded display-history and citation page helpers.
 - `ui/streamlit_app.py`: chat/session/sidebar rendering only; all retrieval and generation stays
   behind the FastAPI boundary.
-- `scripts/index_document.py`, `scripts/search_dense.py`: v1 dense integration CLIs.
-- `scripts/index_hybrid.py`, `scripts/search_hybrid.py`, `scripts/evaluate.py`: v2 indexing/search
-  and shared dense/sparse/hybrid evaluation CLIs.
-- `scripts/audit_candidate_pools.py`: explicit real-model/Qdrant audit for dense@20, sparse@20,
-  hybrid@20, and dense@20 ∪ sparse@20; not part of default pytest.
-- `scripts/generate_phase5_readiness.py`: validates the frozen contract and writes the Phase 5 JSON
-  handoff from measured artifacts and live collection metadata.
-- `scripts/rerank_runtime.py`: validates both frozen collection manifests and constructs the real
-  retrieval/reranking runtime without changing either collection.
-- `scripts/search_reranked.py`: explicit-strategy search CLI with component and rerank diagnostics.
-- `scripts/evaluate_reranking.py`: evaluates one or all three Phase 5 pools and writes additive
-  strategy/comparison JSON artifacts; `--comparison-only` never loads a model.
+- `scripts/archive/phase6/`: unsupported Phase 3–6 indexing, search, evaluation, reranking, readiness,
+  and validation tools. Their historical contract is local to the archive; mutating commands require
+  separate explicit approval and are never active Phase 7 entrypoints.
 - `scripts/validate_query_runtime.py`: read-only real union/sparse runtime smoke without OpenAI.
-- `scripts/query_smoke.py`: bounded real-provider smoke and sanitized Phase 6 artifact writer.
+- `scripts/query_smoke.py`: bounded real-provider smoke and sanitized Phase 7 artifact writer.
 - `scripts/audit_phase7_corpus.py`, `scripts/index_phase7_corpus.py`: source audit and guarded
   indexing for the isolated ATV320 collections.
 - `scripts/freeze_phase7_calibration_v3.py`: copies the review-required typed calibration draft to an
@@ -236,8 +227,8 @@ on `python:3.11-slim`.
 ## Testing
 
 Default pytest uses fake embeddings and in-memory Qdrant. It must not download models, call Docker,
-connect to a real Qdrant server, or require an API key. The real manual/index/evaluator flow is an
-explicit integration smoke command documented in the README. Phase 4 adds offline tests for sparse
+connect to a real Qdrant server, or require an API key. Real model/index/evaluator flows are explicit
+integration commands documented in the README. Historical Phase 4 added offline tests for sparse
 schema/IDF, safe re-indexing, document filters, metadata preservation, manifest mismatches, and RRF
 duplicate/tie/empty-list behavior. Phase 4.1 adds offline candidate-pool tests for deterministic
 rank/score preservation, union de-duplication, qrel-only candidate recall, scenario aggregation,
@@ -246,7 +237,7 @@ Phase 5 adds fake indexed cross-encoder tests for malformed outputs, finite scor
 ties, metadata preservation, no fallback, all candidate pools, document filtering, failure classes,
 latency aggregation, CLI contracts, and no eager model initialization. Real model/Qdrant evaluation
 remains separate from default pytest.
-Phase 6 adds fake generation, evidence, citation, correction-retry, query-service, HTTP mapping, lazy
+Historical Phase 6 added fake generation, evidence, citation, correction-retry, query-service, HTTP mapping, lazy
 runtime, and security/logging tests. The original canonical Python 3.11 run passes 160 tests with one
 known third-party Starlette/TestClient deprecation warning. The additive Gemini and UTF-8 response
 regressions bring the local suite to 162, and the real adapter constructs in the Python 3.11 API image; no default test
@@ -262,3 +253,7 @@ behavior, response schema validation, sanitized 401/422/503/504/network errors, 
 session history, and citation page ordering. Tests import only the client/pure state helpers; the
 actual Streamlit module is imported and health-checked in its dedicated image. The 2026-08-19
 canonical Python 3.11 run passes `308 tests` with the same one third-party warning.
+
+R00 validation passes `323 tests` with the same warning on both the host Python 3.13.5 environment
+and the existing ingestion image's target Python 3.11.15. The Python 3.11 run is offline: source and
+pytest packages are mounted read-only, with network and plugin autoload disabled.
