@@ -9,7 +9,8 @@ from threading import Lock
 from time import perf_counter
 from typing import Any, Protocol
 
-from app.config import Settings
+from app import config as runtime_config
+from app.domain import retrieval_contracts
 from app.errors import RerankerUnavailableError, RetrievalUnavailableError
 from app.hybrid_retrieval import (
     create_sparse_embedding_model,
@@ -17,7 +18,6 @@ from app.hybrid_retrieval import (
     validate_hybrid_collection,
 )
 from app.models import RetrievalCandidate
-from app.phase7_optimization import PHASE7_CALIBRATION_FUSION_PROFILE, Phase7FusionProfile
 from app.query_expansion import (
     QUERY_EXPANSION_PROFILE,
     augment_vietnamese_technical_query,
@@ -32,130 +32,13 @@ from app.retrieval import (
     validate_dense_collection,
 )
 
-
-@dataclass(frozen=True)
-class FrozenDocumentContext:
-    """Trusted package metadata included in reranker and generation evidence context."""
-
-    document_id: str
-    document_title: str
-    document_role: str
-
-
-@dataclass(frozen=True)
-class FrozenRetrievalContract:
-    """Immutable index identity required by a frozen retrieval runtime."""
-
-    document_id: str
-    chunk_count: int
-    chunk_ids_sha256: str
-    dense_collection: str
-    hybrid_collection: str
-    bm25_avg_len: float
-    dense_candidate_limit: int
-    sparse_candidate_limit: int
-    rrf_k: int
-    dense_vector_name: str = "dense"
-    sparse_vector_name: str = "sparse"
-    dense_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    sparse_model: str = "Qdrant/bm25"
-    rerank_model: str = "jinaai/jina-reranker-v2-base-multilingual"
-    dense_dimension: int = 384
-    bm25_k: float = 1.2
-    bm25_b: float = 0.75
-    bm25_disable_stemmer: bool = True
-    document_ids: tuple[str, ...] = ()
-    document_contexts: tuple[FrozenDocumentContext, ...] = ()
-    union_rrf_prune_limit: int | None = None
-    query_expansion_profile: str | None = None
-    phase7_fusion_profile: Phase7FusionProfile | None = None
-    frozen_rerank_batch_size: int | None = None
-    freeze_rerank_threads: bool = False
-    frozen_rerank_threads: int | None = None
-
-    @property
-    def indexed_document_ids(self) -> tuple[str, ...]:
-        """Return the documents whose stable IDs form this frozen corpus."""
-
-        return self.document_ids or (self.document_id,)
-
-    @property
-    def document_context_by_id(self) -> dict[str, dict[str, str]]:
-        """Return immutable trusted metadata in the shape consumed by reranking."""
-
-        return {
-            item.document_id: {
-                "document_title": item.document_title,
-                "document_role": item.document_role,
-            }
-            for item in self.document_contexts
-        }
-
-
-# These values intentionally live in package code rather than in ``artifacts/`` so
-# the runtime can verify Qdrant without a host checkout.
-PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
-    document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
-    document_ids=(
-        "atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
-        "atv320-programming-manual-en-nve41295-06-f5e9bb48167a",
-    ),
-    document_contexts=(
-        FrozenDocumentContext(
-            document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
-            document_title=("Altivar Machine ATV320 Variable Speed Drives Installation Manual"),
-            document_role="installation",
-        ),
-        FrozenDocumentContext(
-            document_id="atv320-programming-manual-en-nve41295-06-f5e9bb48167a",
-            document_title=("Altivar Machine ATV320 Variable Speed Drives Programming Manual"),
-            document_role="programming",
-        ),
-    ),
-    chunk_count=2753,
-    chunk_ids_sha256="2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d",
-    dense_collection="industrial_manual_phase7_dense_v1",
-    hybrid_collection="industrial_manual_phase7_hybrid_v1",
-    bm25_avg_len=81.33599709407919,
-    rrf_k=40,
-    dense_candidate_limit=60,
-    sparse_candidate_limit=40,
-    union_rrf_prune_limit=30,
-    query_expansion_profile=QUERY_EXPANSION_PROFILE,
-    phase7_fusion_profile=PHASE7_CALIBRATION_FUSION_PROFILE,
-    frozen_rerank_batch_size=8,
-    freeze_rerank_threads=True,
-    frozen_rerank_threads=None,
-)
-
-
-def resolve_retrieval_runtime(
-    settings: Settings,
-) -> tuple[Settings, FrozenRetrievalContract]:
-    """Resolve the Phase 7 contract while ignoring conflicting mutable overrides."""
-
-    contract = PHASE7_RETRIEVAL_CONTRACT
-    resolved = settings.model_copy(
-        update={
-            "qdrant_collection": contract.dense_collection,
-            "qdrant_hybrid_collection": contract.hybrid_collection,
-            "dense_vector_name": contract.dense_vector_name,
-            "sparse_vector_name": contract.sparse_vector_name,
-            "embedding_model": contract.dense_model,
-            "sparse_model": contract.sparse_model,
-            "rerank_model": contract.rerank_model,
-            "dense_candidate_limit": contract.dense_candidate_limit,
-            "sparse_candidate_limit": contract.sparse_candidate_limit,
-            "rrf_k": contract.rrf_k,
-            "bm25_k": contract.bm25_k,
-            "bm25_b": contract.bm25_b,
-            "bm25_avg_len": contract.bm25_avg_len,
-            "bm25_disable_stemmer": contract.bm25_disable_stemmer,
-            "rerank_deduplicate_content": True,
-        }
-    )
-    _validate_settings(resolved, contract)
-    return resolved, contract
+# Compatibility exports keep existing runtime and script imports stable until R07.
+Settings = runtime_config.Settings
+FrozenDocumentContext = retrieval_contracts.FrozenDocumentContext
+FrozenRetrievalContract = retrieval_contracts.FrozenRetrievalContract
+PHASE7_RETRIEVAL_CONTRACT = retrieval_contracts.PHASE7_RETRIEVAL_CONTRACT
+resolve_retrieval_runtime = runtime_config.resolve_retrieval_runtime
+_validate_settings = runtime_config.validate_retrieval_settings
 
 
 @dataclass(frozen=True)
@@ -480,49 +363,3 @@ def _validate_frozen_collection(
     fingerprint = hashlib.sha256("\n".join(sorted(chunk_ids)).encode("utf-8")).hexdigest()
     if len(chunk_ids) != contract.chunk_count or fingerprint != contract.chunk_ids_sha256:
         raise RetrievalError(f"Collection {collection_name} does not match the frozen chunk set.")
-
-
-def _validate_settings(settings: Settings, contract: FrozenRetrievalContract) -> None:
-    if contract.phase7_fusion_profile is not None:
-        profile = contract.phase7_fusion_profile
-        if profile.rrf_k != contract.rrf_k:
-            raise RetrievalUnavailableError(
-                "Frozen Phase 7 fusion profile RRF k differs from the retrieval contract."
-            )
-        if profile.max_candidates != contract.union_rrf_prune_limit:
-            raise RetrievalUnavailableError(
-                "Frozen Phase 7 fusion profile candidate budget differs from the "
-                "retrieval contract."
-            )
-    if contract.frozen_rerank_batch_size is not None and contract.frozen_rerank_batch_size <= 0:
-        raise RetrievalUnavailableError("Frozen rerank batch size must be greater than zero.")
-    expected = {
-        "qdrant_collection": contract.dense_collection,
-        "qdrant_hybrid_collection": contract.hybrid_collection,
-        "dense_vector_name": contract.dense_vector_name,
-        "sparse_vector_name": contract.sparse_vector_name,
-        "embedding_model": contract.dense_model,
-        "sparse_model": contract.sparse_model,
-        "rerank_model": contract.rerank_model,
-        "dense_candidate_limit": contract.dense_candidate_limit,
-        "sparse_candidate_limit": contract.sparse_candidate_limit,
-        "rrf_k": contract.rrf_k,
-        "bm25_k": contract.bm25_k,
-        "bm25_b": contract.bm25_b,
-        "bm25_disable_stemmer": contract.bm25_disable_stemmer,
-    }
-    mismatches = [
-        name
-        for name, expected_value in expected.items()
-        if getattr(settings, name) != expected_value
-    ]
-    if mismatches:
-        raise RetrievalUnavailableError(
-            "Runtime settings differ from the frozen retrieval contract: "
-            + ", ".join(sorted(mismatches))
-        )
-    combination = (settings.retrieval_strategy, settings.rerank_enabled)
-    if combination not in {("union", True), ("sparse", False)}:
-        raise RetrievalUnavailableError(
-            "Supported runtime combinations are union+rerank or sparse without reranking."
-        )

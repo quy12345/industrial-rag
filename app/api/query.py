@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from app.api.auth import require_query_auth
+from app.bootstrap import get_query_service
 from app.errors import (
     LLMNotConfiguredError,
     LLMTimeoutError,
@@ -17,7 +18,7 @@ from app.errors import (
     RetrievalUnavailableError,
 )
 from app.models import QueryRequest, QueryResponse
-from app.query_service import QueryService, get_query_service
+from app.query_service import QueryService
 
 logger = logging.getLogger(__name__)
 

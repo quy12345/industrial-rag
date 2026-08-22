@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from app.bootstrap import get_query_service
 from app.config import get_settings
 from app.errors import (
     LLMNotConfiguredError,
@@ -16,7 +17,7 @@ from app.errors import (
 )
 from app.main import app
 from app.models import Citation, QueryResponse
-from app.query_service import QueryExecution, QueryTimings, get_query_service
+from app.query_service import QueryExecution, QueryTimings
 
 
 class FakeService:

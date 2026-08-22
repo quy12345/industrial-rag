@@ -6,12 +6,11 @@ import logging
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import lru_cache
 from time import perf_counter
 from typing import Literal
 
 from app.citations import build_citations, validate_generated_answer
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
 from app.evidence_selection import (
     EvidenceDuplicateGroup,
@@ -20,18 +19,12 @@ from app.evidence_selection import (
 )
 from app.generation import (
     AnswerGenerator,
-    LangChainOpenAIGenerator,
     TokenUsage,
     format_evidence,
 )
 from app.models import QueryResponse, RetrievalCandidate
 from app.request_context import request_id
-from app.retrieval_runtime import (
-    LazyQueryRetriever,
-    QueryRetriever,
-    build_query_retriever,
-    resolve_retrieval_runtime,
-)
+from app.retrieval_runtime import QueryRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -350,21 +343,6 @@ class QueryService:
             evidence_duplicate_groups=evidence_duplicate_groups,
             generation_attempts=generation_attempts,
         )
-
-
-@lru_cache
-def get_query_service() -> QueryService:
-    """Return a lightweight cached service whose heavy retrieval dependencies remain lazy."""
-
-    settings, contract = resolve_retrieval_runtime(get_settings())
-    return QueryService(
-        retriever=LazyQueryRetriever(
-            lambda: build_query_retriever(settings, contract=contract)
-        ),
-        evidence_gate=EvidenceGate(score_threshold=settings.evidence_score_threshold),
-        generator=LangChainOpenAIGenerator(settings),
-        settings=settings,
-    )
 
 
 def _valid_candidate_metadata(
