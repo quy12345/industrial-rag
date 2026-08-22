@@ -1,0 +1,362 @@
+"""Dense embedding and Qdrant indexing infrastructure."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Sequence
+from pathlib import Path, PureWindowsPath
+from typing import Any
+from uuid import UUID, uuid5
+
+from qdrant_client import QdrantClient, models
+
+from app.domain.documents import DocumentChunk
+from app.errors import RetrievalError
+
+POINT_NAMESPACE = UUID("91bf9b94-7641-5d4f-9e2a-d76c9d358c7d")
+
+
+def build_embedding_text(chunk: DocumentChunk) -> str:
+    """Build deterministic passage text with optional heading context."""
+
+    parts: list[str] = []
+    if chunk.headings:
+        parts.append(f"Section: {' > '.join(chunk.headings)}")
+    parts.append(f"Content:\n{chunk.text}")
+    return "\n".join(parts)
+
+
+def build_point_id(chunk_id: str) -> str:
+    """Build a deterministic Qdrant-compatible UUID from a chunk ID."""
+
+    return str(uuid5(POINT_NAMESPACE, chunk_id))
+
+
+def create_embedding_model(model_name: str, cache_dir: str | None = None) -> Any:
+    """Validate and initialize a supported FastEmbed text model."""
+
+    from fastembed import TextEmbedding
+
+    supported_names = {
+        model["model"]
+        for model in TextEmbedding.list_supported_models()
+        if isinstance(model.get("model"), str)
+    }
+    if model_name not in supported_names:
+        raise RetrievalError(
+            f"Embedding model is not supported by the installed FastEmbed version: {model_name}"
+        )
+
+    try:
+        return TextEmbedding(model_name=model_name, cache_dir=cache_dir)
+    except Exception as exc:
+        raise RetrievalError(f"Failed to initialize embedding model {model_name}: {exc}") from exc
+
+
+def get_embedding_dimension(embedding_model: Any) -> int:
+    """Determine vector dimension from one non-persisted probe embedding."""
+
+    try:
+        vector = next(iter(embedding_model.passage_embed(["dimension probe"])))
+        dimension = len(vector)
+    except (StopIteration, TypeError, ValueError) as exc:
+        raise RetrievalError("Embedding model did not produce a valid dimension probe.") from exc
+    except Exception as exc:
+        raise RetrievalError(f"Failed to determine embedding dimension: {exc}") from exc
+
+    if dimension <= 0:
+        raise RetrievalError("Embedding model produced an empty dimension probe.")
+    return dimension
+
+
+def ensure_dense_collection(
+    client: QdrantClient,
+    *,
+    collection_name: str,
+    vector_name: str,
+    vector_size: int,
+) -> None:
+    """Create or validate a named cosine-vector collection."""
+
+    if vector_size <= 0:
+        raise RetrievalError("Vector size must be greater than 0.")
+
+    try:
+        if not client.collection_exists(collection_name):
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config={
+                    vector_name: models.VectorParams(
+                        size=vector_size,
+                        distance=models.Distance.COSINE,
+                    )
+                },
+            )
+            return
+
+        collection = client.get_collection(collection_name)
+    except Exception as exc:
+        raise RetrievalError(
+            f"Failed to create or inspect Qdrant collection {collection_name}: {exc}"
+        ) from exc
+
+    vectors = collection.config.params.vectors
+    if not isinstance(vectors, dict) or vector_name not in vectors:
+        raise RetrievalError(
+            f"Collection {collection_name} does not define named vector {vector_name}."
+        )
+
+    vector_config = vectors[vector_name]
+    if vector_config.size != vector_size:
+        raise RetrievalError(
+            f"Collection {collection_name} uses vector size {vector_config.size}, "
+            f"but model produces {vector_size}."
+        )
+    if vector_config.distance != models.Distance.COSINE:
+        raise RetrievalError(
+            f"Collection {collection_name} vector {vector_name} must use cosine distance."
+        )
+
+
+def validate_dense_collection(
+    client: QdrantClient,
+    *,
+    collection_name: str,
+    vector_name: str,
+    vector_size: int,
+) -> None:
+    """Validate an existing collection without creating or changing it."""
+
+    try:
+        if not client.collection_exists(collection_name):
+            raise RetrievalError(f"Qdrant collection {collection_name} does not exist.")
+        collection = client.get_collection(collection_name)
+    except RetrievalError:
+        raise
+    except Exception as exc:
+        raise RetrievalError(
+            f"Failed to inspect Qdrant collection {collection_name}: {exc}"
+        ) from exc
+
+    vectors = collection.config.params.vectors
+    if not isinstance(vectors, dict) or vector_name not in vectors:
+        raise RetrievalError(
+            f"Collection {collection_name} does not define named vector {vector_name}."
+        )
+    vector_config = vectors[vector_name]
+    if vector_config.size != vector_size:
+        raise RetrievalError(
+            f"Collection {collection_name} uses vector size {vector_config.size}, "
+            f"but model produces {vector_size}."
+        )
+    if vector_config.distance != models.Distance.COSINE:
+        raise RetrievalError(
+            f"Collection {collection_name} vector {vector_name} must use cosine distance."
+        )
+
+
+def get_indexed_chunk_ids(
+    client: QdrantClient,
+    *,
+    collection_name: str,
+    document_id: str,
+) -> set[str]:
+    """Return payload chunk IDs for one indexed document without reading vectors."""
+
+    chunk_ids: set[str] = set()
+    offset: Any = None
+    try:
+        while True:
+            points, offset = client.scroll(
+                collection_name=collection_name,
+                scroll_filter=document_filter(document_id),
+                limit=256,
+                offset=offset,
+                with_payload=["chunk_id"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                chunk_id = payload.get("chunk_id")
+                if not isinstance(chunk_id, str) or not chunk_id:
+                    raise RetrievalError(
+                        f"Indexed point {point.id} for {document_id} has no valid chunk_id payload."
+                    )
+                chunk_ids.add(chunk_id)
+            if offset is None:
+                return chunk_ids
+    except RetrievalError:
+        raise
+    except Exception as exc:
+        raise RetrievalError(
+            f"Failed to read indexed chunk IDs for document {document_id}."
+        ) from exc
+
+
+def index_chunks(
+    client: QdrantClient,
+    chunks: Sequence[DocumentChunk],
+    *,
+    collection_name: str,
+    vector_name: str,
+    embedding_model: Any,
+    embedding_batch_size: int,
+    vector_size: int | None = None,
+) -> int:
+    """Embed and replace document chunks in a shared dense collection."""
+
+    if not chunks:
+        raise RetrievalError("Cannot index an empty chunk list.")
+    if embedding_batch_size <= 0:
+        raise RetrievalError("Embedding batch size must be greater than 0.")
+
+    expected_size = vector_size or get_embedding_dimension(embedding_model)
+    point_batches: list[list[models.PointStruct]] = []
+
+    try:
+        for chunk_batch in batched(chunks, embedding_batch_size):
+            embedding_texts = [build_embedding_text(chunk) for chunk in chunk_batch]
+            vectors = list(embedding_model.passage_embed(embedding_texts))
+            if len(vectors) != len(chunk_batch):
+                raise RetrievalError(
+                    "Embedding model returned a different number of vectors than input chunks."
+                )
+
+            points: list[models.PointStruct] = []
+            for chunk, raw_vector in zip(chunk_batch, vectors, strict=True):
+                vector = to_float_vector(raw_vector)
+                if len(vector) != expected_size:
+                    raise RetrievalError(
+                        f"Chunk {chunk.chunk_id} produced vector size {len(vector)}, "
+                        f"expected {expected_size}."
+                    )
+                points.append(
+                    models.PointStruct(
+                        id=build_point_id(chunk.chunk_id),
+                        vector={vector_name: vector},
+                        payload=build_payload(chunk),
+                    )
+                )
+            point_batches.append(points)
+    except RetrievalError:
+        raise
+    except Exception as exc:
+        raise RetrievalError(f"Failed to embed document chunks: {exc}") from exc
+
+    ensure_dense_collection(
+        client,
+        collection_name=collection_name,
+        vector_name=vector_name,
+        vector_size=expected_size,
+    )
+
+    document_ids = {chunk.document_id for chunk in chunks}
+    new_point_ids_by_document: dict[str, set[str]] = {
+        document_id: set() for document_id in document_ids
+    }
+    for points in point_batches:
+        for point in points:
+            payload = point.payload or {}
+            document_id = payload.get("document_id")
+            if isinstance(document_id, str):
+                new_point_ids_by_document[document_id].add(str(point.id))
+
+    existing_point_ids_by_document = {
+        document_id: scroll_document_point_ids(client, collection_name, document_id)
+        for document_id in document_ids
+    }
+    try:
+        for points in point_batches:
+            client.upsert(
+                collection_name=collection_name,
+                points=points,
+                wait=True,
+            )
+        for document_id in document_ids:
+            stale_point_ids = existing_point_ids_by_document[document_id] - (
+                new_point_ids_by_document[document_id]
+            )
+            if stale_point_ids:
+                client.delete(
+                    collection_name=collection_name,
+                    points_selector=models.PointIdsList(points=list(stale_point_ids)),
+                    wait=True,
+                )
+    except Exception as exc:
+        raise RetrievalError(
+            f"Failed to update Qdrant collection {collection_name}: {exc}"
+        ) from exc
+
+    return sum(len(points) for points in point_batches)
+
+
+def scroll_document_point_ids(
+    client: QdrantClient,
+    collection_name: str,
+    document_id: str,
+) -> set[str]:
+    """Collect existing point IDs for one document before replacement."""
+
+    point_ids: set[str] = set()
+    offset: Any = None
+    while True:
+        points, offset = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=document_filter(document_id),
+            limit=256,
+            offset=offset,
+            with_payload=False,
+            with_vectors=False,
+        )
+        point_ids.update(str(point.id) for point in points)
+        if offset is None:
+            return point_ids
+
+
+def batched(
+    values: Sequence[DocumentChunk],
+    batch_size: int,
+) -> Iterable[Sequence[DocumentChunk]]:
+    """Yield deterministic slices without copying the full sequence."""
+
+    for start in range(0, len(values), batch_size):
+        yield values[start : start + batch_size]
+
+
+def to_float_vector(raw_vector: Any) -> list[float]:
+    """Convert NumPy or list-like vectors to Qdrant-compatible floats."""
+
+    return [float(value) for value in raw_vector]
+
+
+def build_payload(chunk: DocumentChunk) -> dict[str, Any]:
+    """Build a flat, JSON-serializable citation-ready payload."""
+
+    source_path = str(chunk.metadata.get("source_path", chunk.filename))
+    if Path(source_path).is_absolute() or PureWindowsPath(source_path).is_absolute():
+        source_path = PureWindowsPath(source_path).name
+
+    character_count = chunk.metadata.get("character_count", len(chunk.text))
+    return {
+        "chunk_id": chunk.chunk_id,
+        "document_id": chunk.document_id,
+        "filename": chunk.filename,
+        "text": chunk.text,
+        "page_numbers": list(chunk.page_numbers),
+        "headings": list(chunk.headings),
+        "content_type": chunk.content_type,
+        "source_path": source_path,
+        "character_count": int(character_count),
+    }
+
+
+def document_filter(document_id: str) -> models.Filter:
+    """Build a server-side Qdrant document payload filter."""
+
+    return models.Filter(
+        must=[
+            models.FieldCondition(
+                key="document_id",
+                match=models.MatchValue(value=document_id),
+            )
+        ]
+    )

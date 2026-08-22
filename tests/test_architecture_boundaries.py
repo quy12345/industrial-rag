@@ -14,6 +14,16 @@ KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS = {
     ("app.reranking", "app.evaluation"): "R04",
 }
 
+DOMAIN_FORBIDDEN_IMPORT_ROOTS = {
+    "docling",
+    "fastapi",
+    "fastembed",
+    "langchain",
+    "openai",
+    "qdrant_client",
+    "streamlit",
+}
+
 
 def _module_name(path: Path) -> str:
     relative = path.relative_to(APP_ROOT.parent).with_suffix("")
@@ -89,6 +99,47 @@ def test_inbound_adapters_are_not_imported_by_other_application_modules() -> Non
         if source not in inbound_modules
         for dependency in dependencies
         if dependency in inbound_modules
+    }
+
+    assert unexpected == set()
+
+
+def test_domain_does_not_depend_on_infrastructure_or_external_sdks() -> None:
+    graph = _import_graph()
+    infrastructure_dependencies = {
+        (source, dependency)
+        for source, dependencies in graph.items()
+        if source == "app.domain" or source.startswith("app.domain.")
+        for dependency in dependencies
+        if dependency == "app.infrastructure" or dependency.startswith("app.infrastructure.")
+    }
+    external_sdk_imports: set[tuple[str, str]] = set()
+    for path in sorted((APP_ROOT / "domain").rglob("*.py")):
+        source = _module_name(path)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module is not None:
+                names.append(node.module)
+            elif isinstance(node, ast.Import):
+                names.extend(alias.name for alias in node.names)
+            for name in names:
+                if name.split(".", maxsplit=1)[0] in DOMAIN_FORBIDDEN_IMPORT_ROOTS:
+                    external_sdk_imports.add((source, name))
+
+    assert infrastructure_dependencies == set()
+    assert external_sdk_imports == set()
+
+
+def test_qdrant_infrastructure_does_not_import_compatibility_facades() -> None:
+    graph = _import_graph()
+    unexpected = {
+        (source, dependency)
+        for source, dependencies in graph.items()
+        if source == "app.infrastructure.qdrant"
+        or source.startswith("app.infrastructure.qdrant.")
+        for dependency in dependencies
+        if dependency in {"app.retrieval", "app.hybrid_retrieval"}
     }
 
     assert unexpected == set()
