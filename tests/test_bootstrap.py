@@ -76,3 +76,40 @@ def test_get_query_service_caches_one_service_for_cached_settings(monkeypatch) -
         assert calls == [settings]
     finally:
         bootstrap.get_query_service.cache_clear()
+
+
+def test_readiness_checker_is_lazy_and_uses_the_frozen_phase7_contract(monkeypatch) -> None:
+    settings = Settings()
+    monkeypatch.setattr(settings, "retrieval_profile", "phase6")
+    fake_client = object()
+    calls: list[object] = []
+    monkeypatch.setattr(
+        bootstrap,
+        "create_qdrant_client",
+        lambda resolved: calls.append(("client", resolved)) or fake_client,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "validate_frozen_runtime",
+        lambda client, *, collection_names, contract: calls.append(
+            ("validate", client, collection_names, contract)
+        ),
+    )
+
+    checker = bootstrap.build_readiness_checker(settings)
+    assert calls == []
+
+    checker()
+
+    resolved = calls[0][1]
+    assert resolved.qdrant_collection == "industrial_manual_phase7_dense_v1"
+    assert resolved.qdrant_hybrid_collection == "industrial_manual_phase7_hybrid_v1"
+    assert calls[1] == (
+        "validate",
+        fake_client,
+        (
+            "industrial_manual_phase7_dense_v1",
+            "industrial_manual_phase7_hybrid_v1",
+        ),
+        PHASE7_RETRIEVAL_CONTRACT,
+    )

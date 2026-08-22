@@ -8,17 +8,19 @@ slices:
 
 - **R02A — configuration and frozen contracts:** implemented in the current worktree;
 - **R02B — query-service bootstrap:** implemented in the current worktree;
-- **R02C — FastAPI app factory and readiness seam:** not implemented yet.
+- **R02C — FastAPI app factory and readiness seam:** implemented in the current worktree.
 
 R02A moves immutable Phase 7 corpus identity out of concrete retrieval construction, makes
 `app.config` the canonical profile-resolution facade, adds an exact configuration matrix, and keeps
 existing runtime/script imports working through explicit compatibility exports.
 R02B moves query-service construction and caching from the application module to `app.bootstrap`.
 FastAPI and the active query smoke CLI now consume that composition edge.
+R02C adds `create_app`, injects query/readiness dependencies, and reduces `app.main` to the stable
+ASGI export required by Uvicorn.
 
 ## 2. Position in the system
 
-After R02B, runtime composition flows in this direction:
+After R02, runtime composition flows in this direction:
 
 ```text
 environment / .env
@@ -32,13 +34,16 @@ app.domain.retrieval_contracts
 app.bootstrap
    ├── lazy app.retrieval_runtime builder
    ├── LangChainOpenAIGenerator adapter
-   └── EvidenceGate + QueryService
+   ├── EvidenceGate + QueryService
+   └── lazy readiness checker
         ↓
-FastAPI / query smoke CLI
+app.api.app.create_app / query smoke CLI
+        ↓
+app.main:app
 ```
 
-R02C will create the FastAPI app factory and readiness dependency seam. That final slice does not
-exist yet.
+FastAPI owns only HTTP concerns. Qdrant client construction and frozen-collection validation remain
+behind the readiness callable composed by `app.bootstrap`.
 
 ## 3. Relevant background concepts
 
@@ -91,6 +96,17 @@ pair. It constructs the lightweight generator adapter and evidence gate immediat
 the heavy retrieval builder in `LazyQueryRetriever`. `get_query_service()` preserves the previous
 zero-argument `lru_cache` singleton behavior over canonical `get_settings()`.
 
+### `build_readiness_checker` and `create_app`
+
+`build_readiness_checker(settings)` returns a zero-argument callable. Building the callable performs
+no resolution, client construction, model loading, or network I/O; those operations begin only when
+the readiness endpoint invokes it.
+
+`create_app(settings=None, query_service_provider=None, readiness_checker=None)` builds the FastAPI
+adapter. Optional providers allow deterministic tests without monkeypatching Qdrant internals. With
+no arguments it uses the same canonical settings and query-service cache as before. `app.main:app`
+remains the supported ASGI entry point.
+
 ## 5. Step-by-step data flow
 
 1. Pydantic constructs `Settings` from explicit inputs, process environment, and the existing `.env`
@@ -105,10 +121,17 @@ zero-argument `lru_cache` singleton behavior over canonical `get_settings()`.
    and lazy retrieval closure.
 7. The retriever closure keeps Qdrant/model/reranker construction deferred until the first retrieval.
 8. `get_query_service` caches the lightweight composed service.
-9. FastAPI dependency injection and `scripts/query_smoke.py` obtain the service from `app.bootstrap`.
-10. Old contract imports from `app.retrieval_runtime` resolve to canonical objects by identity.
+9. `build_readiness_checker` captures settings but defers resolution and Qdrant construction until
+   `/ready` invokes the checker.
+10. `create_app` configures UTF-8 responses, request-ID middleware, routes, auth settings, and optional
+    test providers.
+11. FastAPI dependency injection and `scripts/query_smoke.py` obtain services from `app.bootstrap`.
+12. `app.main` exports `app = create_app()` without owning routes or infrastructure.
+13. Old contract imports from `app.retrieval_runtime` resolve to canonical objects by identity.
 
-No step creates a Qdrant client, model, reranker, or provider.
+Application construction and query-service composition do not create a Qdrant client, model,
+reranker, or provider. The readiness checker creates only a Qdrant client when `/ready` invokes
+it; model and provider construction remain absent from that path.
 
 ## 6. Responsibilities of changed files
 
@@ -120,16 +143,23 @@ No step creates a Qdrant client, model, reranker, or provider.
   profile application plus settings-to-contract validation.
 - [`app/retrieval_runtime.py`](../../app/retrieval_runtime.py) owns concrete retrieval construction and
   explicitly re-exports moved symbols for compatibility until R07.
-- [`app/bootstrap.py`](../../app/bootstrap.py) owns query-service construction and the cached service
-  accessor.
+- [`app/bootstrap.py`](../../app/bootstrap.py) owns query-service construction, the cached service
+  accessor, and lazy read-only readiness composition.
 - [`app/query_service.py`](../../app/query_service.py) now owns orchestration only and depends on
   injected retrieval/generation contracts.
 - [`app/api/query.py`](../../app/api/query.py) obtains its service dependency from the composition root.
+- [`app/api/app.py`](../../app/api/app.py) owns FastAPI construction, middleware, health/readiness
+  routes, and dependency overrides.
+- [`app/main.py`](../../app/main.py) is the compatibility ASGI export only.
 - [`scripts/query_smoke.py`](../../scripts/query_smoke.py) uses the same composition root as FastAPI.
 - [`tests/test_config_contracts.py`](../../tests/test_config_contracts.py) owns configuration
   precedence, cache, exact contract, profile matrix, and compatibility characterization.
-- [`tests/test_bootstrap.py`](../../tests/test_bootstrap.py) owns resolved-graph, lazy-construction, and
-  cache characterization.
+- [`tests/test_bootstrap.py`](../../tests/test_bootstrap.py) owns resolved-graph, lazy-construction,
+  cache, and readiness characterization.
+- [`tests/test_health.py`](../../tests/test_health.py) owns app-factory metadata, routes, request ID,
+  readiness success, and sanitized readiness failure.
+- [`tests/test_query_api.py`](../../tests/test_query_api.py) creates isolated apps through injected
+  service providers instead of mutating global dependency overrides.
 - [`docs/modules/R02-configuration-composition.md`](R02-configuration-composition.md) is the single
   learning document updated by all R02 slices.
 
@@ -144,6 +174,9 @@ No step creates a Qdrant client, model, reranker, or provider.
 - `validate_retrieval_settings` rejects partial profile mismatch and invalid execution combinations.
 - `build_query_service` is the non-cached factory used to compose one explicit graph.
 - `get_query_service` is the cached adapter-facing accessor.
+- `ReadinessChecker` is the minimal callable boundary required by the HTTP adapter.
+- `build_readiness_checker` composes read-only Qdrant identity validation lazily.
+- `create_app` constructs an independently testable FastAPI adapter.
 - Compatibility assignments in `app.retrieval_runtime` preserve existing import identity; R07 owns
   their removal after scripts and docs use canonical imports.
 
@@ -157,17 +190,17 @@ app/retrieval_runtime.py  frozen contract + resolver + validation + builders
 app/query_service.py      orchestration + concrete service factory + cache
 ```
 
-After R02B:
+After R02:
 
 ```text
 app/config.py                       Settings + resolver + validation + cache
 app/domain/retrieval_contracts.py   immutable Phase 7 identity
 app/retrieval_runtime.py            builders + explicit compatibility exports
-app/bootstrap.py                    concrete query-service composition + cache
+app/bootstrap.py                    query + readiness composition
 app/query_service.py                injected application orchestration
+app/api/app.py                      FastAPI factory + HTTP-only behavior
+app/main.py                         compatibility ASGI export
 ```
-
-The target `app.api.app` module is not present yet.
 
 ## 9. Design decisions and trade-offs
 
@@ -182,6 +215,11 @@ The target `app.api.app` module is not present yet.
   from `app.query_service` back to bootstrap would create the wrong dependency direction or a cycle.
 - The heavy retriever remains lazy exactly as before. Service caching and retrieval dependency
   caching remain separate responsibilities.
+- Readiness uses a callable rather than a broad manager abstraction. Resolution and Qdrant access
+  remain deferred until `/ready` is called, matching startup laziness.
+- `create_app` overrides settings only when explicit settings are provided. The default production
+  app keeps the cached `get_settings` dependency behavior used by auth.
+- `app.main` intentionally exports only `app`; route functions are adapter internals, not public API.
 - The exact contract snapshot is intentionally strict because these values identify a frozen corpus,
   not tuneable defaults.
 - ADR-002 content is captured here for now. A separate `docs/adr/` record should be created only after
@@ -201,6 +239,10 @@ The target `app.api.app` module is not present yet.
 | `test_retrieval_runtime_compatibility_exports_are_identity_preserving` | old imports point to canonical symbols, not copies |
 | `test_build_query_service_uses_one_resolved_graph_and_keeps_retrieval_lazy` | one resolved graph feeds all components; heavy retriever stays deferred |
 | `test_get_query_service_caches_one_service_for_cached_settings` | zero-argument singleton cache behavior |
+| `test_readiness_checker_is_lazy_and_uses_the_frozen_phase7_contract` | no eager client, canonical collections/contract, malformed-state defense |
+| `test_create_app_preserves_custom_metadata_routes_and_request_id` | factory metadata, route prefix, query route, middleware |
+| `test_readiness_calls_the_injected_checker` | readiness adapter invokes its injected port |
+| `test_readiness_returns_sanitized_503_when_qdrant_is_unavailable` | unchanged safe 503 mapping |
 | existing runtime/health/smoke tests | frozen identity, malformed-state defense, laziness, no provider/model construction |
 
 The focused suite caught and prevented an initial behavior drift where a post-validation monkeypatch
@@ -209,16 +251,17 @@ production behavior was not changed to make the test pass.
 
 ## 11. Commands and expected results
 
-R02A/R02B focused validation:
+R02 focused validation:
 
 ```text
 python -m ruff check app/config.py app/domain app/retrieval_runtime.py tests/test_config_contracts.py
 python -m pytest -q tests/test_config_contracts.py tests/test_retrieval_runtime.py
 python -m pytest -q tests/test_config_contracts.py tests/test_retrieval_runtime.py tests/test_health.py tests/test_query_service.py tests/test_query_api.py tests/test_architecture_boundaries.py tests/test_runtime_characterization.py tests/test_phase7_operational_smoke.py
 python -m pytest -q tests/test_bootstrap.py tests/test_query_service.py tests/test_query_api.py tests/test_phase7_operational_smoke.py tests/test_runtime_characterization.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_bootstrap.py tests/test_health.py tests/test_query_api.py tests/test_runtime_characterization.py tests/test_architecture_boundaries.py
 ```
 
-Module-completion validation after R02C:
+Module-completion validation:
 
 ```text
 python -m ruff check .
@@ -232,7 +275,7 @@ evaluation belongs in these checks.
 
 ## 12. Small usage example
 
-Canonical imports after R02A:
+Canonical configuration imports:
 
 ```python
 from app.config import Settings, resolve_retrieval_runtime
@@ -257,6 +300,17 @@ service = get_query_service()
 assert service is get_query_service()
 ```
 
+An isolated HTTP adapter can inject fakes without touching global state:
+
+```python
+from app.api.app import create_app
+
+test_app = create_app(
+    query_service_provider=lambda: fake_service,
+    readiness_checker=lambda: None,
+)
+```
+
 ## 13. Common failures and debugging
 
 - A contract snapshot failure means a frozen value changed. Do not update the snapshot unless a
@@ -271,13 +325,15 @@ assert service is get_query_service()
   has been bypassed.
 - If FastAPI dependency overrides stop working, confirm the route and tests use the exact
   `app.bootstrap.get_query_service` function object.
+- If app import starts contacting Qdrant, confirm `build_readiness_checker` returns a closure and does
+  not resolve or create its client until invocation.
+- If a custom app loses `/query`, inspect `test_app.openapi()["paths"]`; current FastAPI represents an
+  included router with an internal route object that does not expose `.path` directly.
 - A local `.env` affecting tests means `tests/conftest.py` no longer disabled env-file loading or
   cleared matching environment variables.
 
 ## 14. Current limitations
 
-- R02C has not created `app.api.app.create_app` or a readiness dependency seam.
-- `app.main` still owns global app construction and directly composes readiness dependencies.
 - Frozen contract types temporarily reference pure policies in `app.phase7_optimization` and
   `app.query_expansion`; R04 will move those policy responsibilities.
 - Compatibility exports remain in `app.retrieval_runtime` until R07 verifies all consumers.
@@ -289,44 +345,44 @@ assert service is get_query_service()
 2. Which settings may remain environment-controlled after frozen profile resolution?
 3. Why does the resolver copy `Settings` instead of mutating the cached object?
 4. Why is a compatibility export preferable to duplicating a contract constant?
-5. Which remaining responsibilities belong only to R02C?
+5. Why does readiness resolution occur when the checker is called rather than when the app is built?
 
 ## 16. Interview summary
 
 R02A separated mutable process configuration from immutable verified-corpus identity. R02B then
 moved concrete query-service wiring into a composition root, leaving `QueryService` focused on its
-use case. Exact offline tests prove precedence, cache, profile matrix, immutability, one resolved
-object graph, and lazy retrieval without touching Qdrant or models.
+use case. R02C made FastAPI independently constructible and moved readiness infrastructure behind a
+lazy callable, while preserving `app.main:app`. Exact offline tests prove precedence, cache, profile
+matrix, one resolved object graph, routes, middleware, and lazy external construction.
 
 ## 17. Validation results and proposed commit
 
-Current R02A/R02B results:
+Final R02 validation results:
 
 ```text
 Pre-change query/runtime/health/R01 baseline       PASS — 53 tests, 1 warning
 Config + retrieval runtime                         PASS — 19 tests
 R02A focused contract suite                        PASS — 68 tests, 1 warning
 R02B focused bootstrap/query/API/smoke suite       PASS — 46 tests, 1 warning
+R02C focused app/bootstrap/HTTP suite              PASS — 28 tests, 1 warning
 Focused Ruff                                       PASS
 Full Ruff                                          PASS
-Full pytest Python 3.11.15                         PASS — 339 tests, 1 warning
+Full pytest Python 3.11.15                         PASS — 340 tests, 1 warning
 docker compose config --quiet                      PASS
-Markdown links / git diff --check                  PASS
+Markdown links (15 local targets) / git diff check PASS
 ```
-
-The full checks above cover the R02A/R02B worktree. They must be rerun after R02C before the module
-can be marked complete.
 
 Proposed commits for the eventual reviewed module history:
 
 ```text
 test: characterize runtime configuration selection
 refactor: establish canonical runtime composition
+refactor: introduce the FastAPI application factory
 ```
 
 No commit is created without a separate explicit user request.
 
 ## 18. Status
 
-`IN_PROGRESS` — R02A configuration/contracts and R02B query-service bootstrap are implemented with
-focused coverage. R02C FastAPI app/readiness composition remains.
+`COMPLETE` — R02A–R02C are implemented. Focused checks, full Ruff, the full offline Python 3.11
+suite, Compose validation, local Markdown links, and diff checks pass.

@@ -76,7 +76,13 @@ def test_active_runtime_evaluation_imports_match_owned_baseline_debt() -> None:
 
 def test_inbound_adapters_are_not_imported_by_other_application_modules() -> None:
     graph = _import_graph()
-    inbound_modules = {"app.main", "app.api", "app.api.auth", "app.api.query"}
+    inbound_modules = {
+        "app.main",
+        "app.api",
+        "app.api.app",
+        "app.api.auth",
+        "app.api.query",
+    }
     unexpected = {
         (source, dependency)
         for source, dependencies in graph.items()
