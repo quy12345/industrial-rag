@@ -3,22 +3,26 @@
 from __future__ import annotations
 
 import gc
-import hashlib
-import json
-import re
 import tempfile
-import unicodedata
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from app.models import DocumentChunk
+from app.domain.documents import (
+    SUPPORTED_EXTENSIONS,
+    DocumentChunk,
+    IngestionError,
+    build_chunk_id,
+    build_document_id,
+    build_page_batches,
+    canonical_chunk_key,
+)
+from app.infrastructure.ingestion import docling as docling_adapter
 
-SUPPORTED_EXTENSIONS = (".pdf", ".docx")
-
-
-class IngestionError(Exception):
-    """Raised when document ingestion fails."""
+get_pdf_page_count = docling_adapter.get_pdf_page_count
+_convert_document = docling_adapter.convert_document
+_validate_conversion_result = docling_adapter.validate_conversion_result
+_canonical_chunk_key = canonical_chunk_key
 
 
 def validate_input_path(file_path: Path) -> Path:
@@ -37,82 +41,6 @@ def validate_input_path(file_path: Path) -> Path:
             f"Unsupported document type: {extension or '<none>'}. Supported types: {supported}"
         )
     return path
-
-
-def build_document_id(file_path: Path) -> str:
-    """Build a stable ID from the normalized filename stem and file content."""
-
-    path = Path(file_path)
-    stem = unicodedata.normalize("NFKD", path.stem).encode("ascii", "ignore").decode("ascii")
-    slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "document"
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
-    return f"{slug}-{digest}"
-
-
-def build_chunk_id(
-    document_id: str,
-    page_numbers: Sequence[int],
-    headings: Sequence[str],
-    text: str,
-    occurrence_index: int = 0,
-) -> str:
-    """Build a stable ID from chunk content and its duplicate occurrence."""
-
-    first_page = str(min(page_numbers)) if page_numbers else "unknown"
-    if occurrence_index < 0:
-        raise IngestionError("Chunk occurrence index must not be negative.")
-    canonical = _canonical_chunk_key(document_id, page_numbers, headings, text)
-    digest = hashlib.sha256(
-        json.dumps(
-            [canonical, occurrence_index],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()[:16]
-    return f"{document_id}_p{first_page}_h{digest}"
-
-
-def build_page_batches(
-    start_page: int,
-    end_page: int,
-    batch_size: int,
-) -> list[tuple[int, int]]:
-    """Split an inclusive page range into validated, page-aligned batches."""
-
-    if start_page < 1:
-        raise IngestionError("Page start must be greater than or equal to 1.")
-    if end_page < start_page:
-        raise IngestionError("Page end must be greater than or equal to page start.")
-    if batch_size <= 0:
-        raise IngestionError("Batch size must be greater than 0.")
-
-    return [
-        (batch_start, min(batch_start + batch_size - 1, end_page))
-        for batch_start in range(start_page, end_page + 1, batch_size)
-    ]
-
-
-def get_pdf_page_count(file_path: Path) -> int:
-    """Return a PDF page count using Docling's lightweight PDFium dependency."""
-
-    try:
-        import pypdfium2
-    except ImportError as exc:
-        raise IngestionError("Docling's PDFium backend is required to count PDF pages.") from exc
-
-    document = None
-    try:
-        document = pypdfium2.PdfDocument(file_path)
-        page_count = len(document)
-    except Exception as exc:
-        raise IngestionError(f"Failed to count pages in {file_path.name}: {exc}") from exc
-    finally:
-        if document is not None:
-            document.close()
-
-    if page_count < 1:
-        raise IngestionError(f"PDF contains no pages: {file_path.name}")
-    return page_count
 
 
 def ingest_document(
@@ -265,164 +193,6 @@ def _append_normalized_chunks(
                 metadata=metadata,
             )
         )
-
-
-def _canonical_chunk_key(
-    document_id: str,
-    page_numbers: Sequence[int],
-    headings: Sequence[str],
-    text: str,
-) -> str:
-    """Return the canonical identity fields used for stable chunk IDs."""
-
-    normalized_text = (
-        unicodedata.normalize("NFKC", text)
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-        .strip()
-    )
-    normalized_headings = [
-        unicodedata.normalize("NFKC", heading).strip() for heading in headings
-    ]
-    return json.dumps(
-        [document_id, sorted(set(page_numbers)), normalized_headings, normalized_text],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def _convert_document(
-    file_path: Path,
-    *,
-    page_range: tuple[int, int] | None = None,
-    chunker: str = "hierarchical",
-) -> list[Any]:
-    """Convert and chunk a document using Docling's native HierarchicalChunker."""
-
-    try:
-        from docling.chunking import HierarchicalChunker, HybridChunker
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-    except ImportError as exc:
-        raise IngestionError(
-            "Docling is required for ingestion. Install the project dependencies first."
-        ) from exc
-
-    converter = None
-    try:
-        if file_path.suffix.lower() == ".pdf":
-            pipeline_options = PdfPipelineOptions(
-                do_ocr=False,
-                ocr_batch_size=1,
-                layout_batch_size=1,
-                table_batch_size=1,
-            )
-            converter = DocumentConverter(
-                format_options={
-                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-                }
-            )
-        else:
-            converter = DocumentConverter()
-
-        convert_kwargs: dict[str, Any] = {"source": file_path}
-        if page_range is not None:
-            convert_kwargs["page_range"] = page_range
-        result = converter.convert(**convert_kwargs)
-        _validate_conversion_result(result, page_range)
-        selected_chunker = HierarchicalChunker() if chunker == "hierarchical" else HybridChunker()
-        return list(selected_chunker.chunk(dl_doc=result.document))
-    except IngestionError:
-        raise
-    except Exception as exc:
-        range_context = _page_range_context(page_range)
-        raise IngestionError(
-            f"Failed to convert {range_context} from {file_path.name}: {exc}"
-        ) from exc
-    finally:
-        del converter
-        gc.collect()
-
-
-def _validate_conversion_result(result: Any, page_range: tuple[int, int] | None) -> None:
-    """Accept only a complete Docling conversion result."""
-
-    from docling.datamodel.base_models import ConversionStatus
-
-    if result.status == ConversionStatus.SUCCESS:
-        return
-
-    range_context = _page_range_context(page_range)
-    details = _conversion_error_details(getattr(result, "errors", []))
-    if result.status == ConversionStatus.PARTIAL_SUCCESS:
-        message = (
-            f"Docling returned PARTIAL_SUCCESS for {range_context}; "
-            "refusing to create incomplete output."
-        )
-    elif result.status == ConversionStatus.FAILURE:
-        message = f"Docling returned FAILURE for {range_context}."
-    else:
-        message = f"Docling returned unexpected status {result.status!s} for {range_context}."
-
-    if details:
-        message = f"{message} {details}"
-    raise IngestionError(message)
-
-
-def _conversion_error_details(errors: Iterable[Any]) -> str:
-    """Summarize failed pages and unique Docling error messages."""
-
-    error_items = list(errors)
-    failed_pages = sorted(
-        {
-            page_number
-            for error in error_items
-            if isinstance((page_number := getattr(error, "page_no", None)), int)
-        }
-    )
-    messages = list(
-        dict.fromkeys(
-            message
-            for error in error_items
-            if (message := str(getattr(error, "error_message", "")).strip())
-        )
-    )
-    parts: list[str] = []
-    if failed_pages:
-        parts.append(f"Failed pages: {_compact_page_numbers(failed_pages)}.")
-    if messages:
-        parts.append(f"Details: {'; '.join(messages[:3])}")
-    return " ".join(parts)
-
-
-def _compact_page_numbers(page_numbers: Sequence[int]) -> str:
-    """Format sorted page numbers as compact inclusive ranges."""
-
-    ranges: list[str] = []
-    range_start = range_end = page_numbers[0]
-    for page_number in page_numbers[1:]:
-        if page_number == range_end + 1:
-            range_end = page_number
-            continue
-        ranges.append(_format_page_span(range_start, range_end))
-        range_start = range_end = page_number
-    ranges.append(_format_page_span(range_start, range_end))
-    return ", ".join(ranges)
-
-
-def _format_page_span(start_page: int, end_page: int) -> str:
-    """Format one page or an inclusive page span."""
-
-    return str(start_page) if start_page == end_page else f"{start_page}-{end_page}"
-
-
-def _page_range_context(page_range: tuple[int, int] | None) -> str:
-    """Return readable context for a Docling conversion run."""
-
-    if page_range is None:
-        return "the full document"
-    return f"pages {page_range[0]}-{page_range[1]}"
 
 
 def _extract_text(raw_chunk: Any) -> str:

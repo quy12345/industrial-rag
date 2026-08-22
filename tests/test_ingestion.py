@@ -1,6 +1,8 @@
 """Unit tests for document ingestion normalization and CLI-independent helpers."""
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +11,34 @@ from docling.datamodel.base_models import ConversionStatus
 
 import app.ingestion as ingestion
 import scripts.ingest_preview as ingest_preview
+from app.domain import documents
 from app.models import DocumentChunk
+
+
+def test_legacy_ingestion_exports_are_canonical_domain_objects() -> None:
+    assert DocumentChunk is documents.DocumentChunk
+    assert ingestion.DocumentChunk is documents.DocumentChunk
+    assert ingestion.IngestionError is documents.IngestionError
+    assert ingestion.build_document_id is documents.build_document_id
+    assert ingestion.build_chunk_id is documents.build_chunk_id
+    assert ingestion.build_page_batches is documents.build_page_batches
+
+
+def test_importing_ingestion_does_not_load_docling_or_pdfium() -> None:
+    source = (
+        "import sys; import app.ingestion; "
+        "assert not any(name == 'docling' or name.startswith('docling.') "
+        "for name in sys.modules); "
+        "assert 'pypdfium2' not in sys.modules"
+    )
+
+    subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=Path(__file__).parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_document_id_is_deterministic_and_content_based(tmp_path: Path) -> None:
@@ -26,7 +55,7 @@ def test_document_id_is_deterministic_and_content_based(tmp_path: Path) -> None:
     assert ingestion.build_document_id(first) != ingestion.build_document_id(same_name)
     assert ingestion.build_document_id(first) == ingestion.build_document_id(same_content)
     assert " " not in ingestion.build_document_id(first)
-    assert ingestion.build_document_id(first).startswith("motor-drive-manual-")
+    assert ingestion.build_document_id(first) == "motor-drive-manual-be8f1049a8bd"
 
 
 @pytest.mark.parametrize("filename", ["manual.PDF", "manual.DOCX"])
@@ -67,6 +96,26 @@ def test_chunk_id_is_content_stable_and_duplicate_safe() -> None:
     assert ingestion.build_chunk_id("manual-id", [], [], "Unknown page", 0).startswith(
         "manual-id_punknown_h"
     )
+
+
+def test_chunk_id_unicode_normalization_and_occurrence_are_exact() -> None:
+    first = ingestion.build_chunk_id(
+        "tài-liệu",
+        [2, 1, 2],
+        [" An toàn ", "Điện áp"],
+        "  Kiểm tra\r\nđiện áp.  ",
+        0,
+    )
+    duplicate = ingestion.build_chunk_id(
+        "tài-liệu",
+        [1, 2],
+        ["An toàn", "Điện áp"],
+        "Kiểm tra\nđiện áp.",
+        1,
+    )
+
+    assert first == "tài-liệu_p1_ha35389a0de74e7a7"
+    assert duplicate == "tài-liệu_p1_he02317fa21914856"
 
 
 @pytest.mark.parametrize(
