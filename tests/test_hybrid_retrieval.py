@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
+import app.hybrid_retrieval as hybrid_facade
 from app.config import Settings
 from app.hybrid_retrieval import (
     HYBRID_SCHEMA_VERSION,
@@ -21,6 +23,8 @@ from app.hybrid_retrieval import (
     validate_hybrid_index_manifest,
     write_hybrid_index_manifest,
 )
+from app.infrastructure.qdrant import hybrid as hybrid_infrastructure
+from app.infrastructure.qdrant import manifests as index_manifests
 from app.models import DocumentChunk, RetrievalCandidate
 from app.retrieval import RetrievalError, build_point_id, ensure_dense_collection
 
@@ -28,6 +32,23 @@ V1 = "dense-v1"
 V2 = "hybrid-v2"
 DENSE = "dense"
 SPARSE = "sparse"
+
+
+def test_hybrid_facade_exports_canonical_infrastructure_symbols() -> None:
+    assert hybrid_facade.create_sparse_embedding_model is (
+        hybrid_infrastructure.create_sparse_embedding_model
+    )
+    assert hybrid_facade.compute_bm25_average_length is (
+        hybrid_infrastructure.compute_bm25_average_length
+    )
+    assert hybrid_facade.ensure_hybrid_collection is hybrid_infrastructure.ensure_hybrid_collection
+    assert hybrid_facade.index_hybrid_chunks is hybrid_infrastructure.index_hybrid_chunks
+    assert hybrid_facade.write_hybrid_index_manifest is (
+        index_manifests.write_hybrid_index_manifest
+    )
+    assert hybrid_facade.validate_hybrid_index_manifest is (
+        index_manifests.validate_hybrid_index_manifest
+    )
 
 
 class FakeDenseModel:
@@ -233,9 +254,53 @@ def test_hybrid_index_reindex_and_sparse_failure_safety() -> None:
     points, _ = client.scroll(V2, limit=10, with_payload=True, with_vectors=False)
     payloads = {point.payload["chunk_id"]: point.payload for point in points}
     assert set(payloads) == {"a-1", "b-1"}
-    assert "embedding_text" not in payloads["a-1"]
+    assert payloads["a-1"] == {
+        "chunk_id": "a-1",
+        "document_id": "manual-a",
+        "filename": "manual-a.pdf",
+        "text": "Sensor 24 VDC",
+        "page_numbers": [1],
+        "headings": ["Safety"],
+        "content_type": "text",
+        "source_path": "manual-a.pdf",
+        "character_count": len("Sensor 24 VDC"),
+    }
     assert build_point_id("a-1") in {str(point.id) for point in points}
     assert sparse_model.passage_calls
+
+
+def test_hybrid_upsert_failure_does_not_delete_existing_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = QdrantClient(":memory:")
+    original = [make_chunk("a-1", "Sensor 24 VDC"), make_chunk("a-2", "PLC IP65")]
+    _index(client, FakeDenseModel(), FakeSparseModel(), original)
+    original_upsert = client.upsert
+    calls = 0
+
+    def fail_on_second_upsert(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("upsert failed")
+        return original_upsert(*args, **kwargs)
+
+    monkeypatch.setattr(client, "upsert", fail_on_second_upsert)
+    with pytest.raises(RetrievalError, match="Failed to update hybrid Qdrant collection"):
+        _index(
+            client,
+            FakeDenseModel(),
+            FakeSparseModel(),
+            [
+                make_chunk("new-1", "Sensor one"),
+                make_chunk("new-2", "Sensor two"),
+                make_chunk("new-3", "PLC three"),
+            ],
+        )
+
+    points, _ = client.scroll(V2, limit=10, with_payload=True, with_vectors=False)
+    chunk_ids = {point.payload["chunk_id"] for point in points}
+    assert {"a-1", "a-2"}.issubset(chunk_ids)
 
 
 def test_sparse_search_filters_documents_and_preserves_metadata() -> None:
@@ -355,8 +420,31 @@ def test_hybrid_manifest_round_trip_and_mismatch(tmp_path: Path) -> None:
     payload = validate_hybrid_index_manifest(
         manifest, settings=settings, dense_dimension=3, frozen_chunk_set=frozen
     )
-    assert payload["schema_version"] == HYBRID_SCHEMA_VERSION
-    assert payload["bm25_avg_len"] == 12.5
+    assert payload == {
+        "schema_version": HYBRID_SCHEMA_VERSION,
+        "collection": V2,
+        "dense_vector_name": "dense",
+        "dense_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "dense_dimension": 3,
+        "dense_distance": "cosine",
+        "sparse_vector_name": "sparse",
+        "sparse_model": "Qdrant/bm25",
+        "sparse_modifier": "idf",
+        "bm25_k": 1.2,
+        "bm25_b": 0.75,
+        "bm25_avg_len": 12.5,
+        "disable_stemmer": True,
+        "normalization_profile": (
+            "FastEmbed 0.8.0 Bm25: remove_non_alphanumeric + SimpleTokenizer + disabled stemmer"
+        ),
+        "frozen_chunk_set": frozen,
+        "ingestion_profile": {"page_batch_size": 4},
+        "dense_candidate_limit": 60,
+        "sparse_candidate_limit": 40,
+        "rrf_k": 40,
+        "hybrid_final_limit": 5,
+        "runtime_versions": json.loads(manifest.read_text(encoding="utf-8"))["runtime_versions"],
+    }
     with pytest.raises(RetrievalError, match="does not match"):
         validate_hybrid_index_manifest(
             manifest,

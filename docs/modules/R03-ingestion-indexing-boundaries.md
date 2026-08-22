@@ -5,11 +5,12 @@
 R03 separates stable document identity, document parsing, and Qdrant indexing infrastructure while
 preserving the frozen Phase 7 corpus and index semantics. This document is shared by all R03 slices.
 
-R03A and R03B are implemented. R03A moves `DocumentChunk` and stable identity policies into the
+R03A, R03B, and R03C are implemented. R03A moves `DocumentChunk` and stable identity policies into the
 domain, moves Docling/PDFium access behind an infrastructure adapter, and retains `app.ingestion` as
 a compatibility facade and ingestion coordinator. R03B separates Qdrant client construction, dense
 embedding/indexing, and dense manifest I/O while retaining `app.retrieval` as a compatibility facade.
-Hybrid and CLI restructuring remain future R03 slices.
+R03C separates sparse/BM25 construction, hybrid indexing/schema, and hybrid manifests while leaving
+sparse search and RRF unchanged. CLI restructuring remains the final R03 slice.
 
 ## 2. Position in the system
 
@@ -25,12 +26,13 @@ list[DocumentChunk]
 app.retrieval compatibility facade
       ├── app.infrastructure.qdrant.client
       ├── app.infrastructure.qdrant.dense
+      ├── app.infrastructure.qdrant.hybrid
       └── app.infrastructure.qdrant.manifests
       ↓
 Qdrant points / dense manifest
 ```
 
-R03A and R03B change dependency ownership only. Validation uses in-memory Qdrant; no production
+R03A–R03C change dependency ownership only. Validation uses in-memory Qdrant; no production
 collection operation or corpus indexing is executed.
 
 ## 3. Relevant background concepts
@@ -74,6 +76,11 @@ document points, and preserves exact UUID5, named-vector, and payload schemas.
 fail-closed mismatch messages. `create_qdrant_client(Settings)` preserves its reachability check and
 sanitized `RetrievalError`.
 
+`index_hybrid_chunks(...)` preserves the dense+sparse IDF schema, BM25 preprocessing, exact point
+identity/payload, and two-stage embedding-before-mutation rule. Hybrid manifest fields and validation
+remain byte-for-byte compatible at the JSON contract level. Sparse search ranks and RRF stay in
+`app.hybrid_retrieval` for R04.
+
 ## 5. Step-by-step data flow
 
 1. `app.ingestion.validate_input_path` validates existence, file type, and extension.
@@ -94,6 +101,10 @@ sanitized `RetrievalError`.
 16. Stale points are deleted only after all upserts succeed.
 17. Dense manifest writes use a same-directory temporary file followed by atomic replacement.
 18. `app.retrieval` exposes the canonical adapter symbols while retaining dense search for R04.
+19. Hybrid indexing completes both dense and sparse embedding passes before collection mutation.
+20. Hybrid points use the same canonical UUID/payload helpers as dense indexing.
+21. Hybrid manifest I/O shares the manifest infrastructure owner without merging dense/hybrid schema.
+22. `app.hybrid_retrieval` consumes public infrastructure functions and retains only query/RRF logic.
 
 ## 6. Responsibilities of changed files
 
@@ -117,11 +128,17 @@ sanitized `RetrievalError`.
 - [`app/infrastructure/qdrant/dense.py`](../../app/infrastructure/qdrant/dense.py) owns dense model
   construction, embedding text, UUID5/payload mapping, collection validation, and safe indexing.
 - [`app/infrastructure/qdrant/manifests.py`](../../app/infrastructure/qdrant/manifests.py) owns the
-  atomic dense-index manifest contract.
+  independent atomic dense and hybrid manifest contracts.
+- [`app/infrastructure/qdrant/hybrid.py`](../../app/infrastructure/qdrant/hybrid.py) owns sparse model
+  construction, BM25 average-length preprocessing, hybrid schema validation, and safe hybrid indexing.
 - [`app/retrieval.py`](../../app/retrieval.py) remains a compatibility facade and retains dense search
   until the R04 retrieval boundary is implemented.
+- [`app/hybrid_retrieval.py`](../../app/hybrid_retrieval.py) remains a compatibility facade and owns
+  sparse query mapping, component ranking, hybrid query coordination, and RRF until R04.
 - [`tests/test_retrieval.py`](../../tests/test_retrieval.py) additionally protects exact dense UUID,
   payload/filter/manifest snapshots, mutation ordering, and facade identity.
+- [`tests/test_hybrid_retrieval.py`](../../tests/test_hybrid_retrieval.py) protects exact hybrid
+  schema/payload/manifest, both embedding failure paths, mutation ordering, sparse search, and RRF.
 
 Package `__init__.py` files mark the new infrastructure boundary without eager imports.
 
@@ -143,6 +160,10 @@ Package `__init__.py` files mark the new infrastructure boundary without eager i
 - `build_point_id`: persisted namespace UUID5 mapping from chunk IDs to Qdrant point IDs.
 - `index_chunks`: dense indexing transaction ordering without rollback claims.
 - `write_index_manifest` / `validate_index_manifest`: atomic persistence and fail-closed validation.
+- `create_sparse_embedding_model`: explicit lazy FastEmbed BM25 construction.
+- `compute_bm25_average_length`: installed-tokenizer preprocessing required by the frozen contract.
+- `index_hybrid_chunks`: dense+sparse embedding and safe hybrid point replacement.
+- `write_hybrid_index_manifest` / `validate_hybrid_index_manifest`: independent hybrid contract I/O.
 
 ## 8. Before-and-after structure
 
@@ -153,7 +174,7 @@ app/models.py       HTTP/retrieval models + DocumentChunk
 app/ingestion.py    identity + batching + Docling/PDFium + normalization + JSONL
 ```
 
-After R03A and R03B:
+After R03A–R03C:
 
 ```text
 app/domain/documents.py                  chunk record + stable identity policies
@@ -162,8 +183,10 @@ app/ingestion.py                         compatible coordinator/facade + JSONL
 app/models.py                            explicit compatibility export + remaining models
 app/infrastructure/qdrant/client.py      Qdrant client construction
 app/infrastructure/qdrant/dense.py       dense embedding/indexing infrastructure
-app/infrastructure/qdrant/manifests.py   dense manifest persistence/validation
+app/infrastructure/qdrant/hybrid.py      sparse embedding/hybrid indexing infrastructure
+app/infrastructure/qdrant/manifests.py   dense + hybrid manifest persistence/validation
 app/retrieval.py                         compatibility exports + dense search pending R04
+app/hybrid_retrieval.py                  compatibility exports + sparse search/RRF pending R04
 ```
 
 ## 9. Design decisions and trade-offs
@@ -179,8 +202,9 @@ app/retrieval.py                         compatibility exports + dense search pe
   domain records. Introducing a larger parser abstraction is deferred until there is a concrete
   second adapter.
 - Atomic JSONL remains in the facade until manifest/file infrastructure is addressed with indexing.
-- Dense indexing helpers use public names inside infrastructure; old private names remain aliases in
-  `app.retrieval` only because `app.hybrid_retrieval` still consumes them. R03C owns that cleanup.
+- Dense and hybrid indexing share public infrastructure helpers. The hybrid facade no longer imports
+  private helpers from `app.retrieval`; obsolete `_batched`, `_build_payload`, and
+  `_scroll_document_point_ids` facade aliases are removed.
 - `RetrievalError` moves to `app.errors` so adapters do not import the compatibility facade or create
   a circular dependency. `app.retrieval.RetrievalError` is the same class object.
 - Dense search deliberately stays in `app.retrieval`; moving its ranking path belongs to R04.
@@ -205,6 +229,10 @@ app/retrieval.py                         compatibility exports + dense search pe
 | collection tests | named cosine vector creation and strict compatibility validation |
 | facade identity | old dense imports point to canonical client/index/manifest adapters |
 | Qdrant boundary | extracted adapters do not import retrieval compatibility modules |
+| exact hybrid snapshots | dense+sparse schema, point payload, UUID, and full manifest mapping |
+| hybrid safety tests | both embeddings finish before mutation; failed upsert cannot start deletion |
+| hybrid facade identity | old indexing/manifest imports point to canonical adapters |
+| private-import guard | hybrid facade cannot consume private dense-facade helpers |
 
 The pre-refactor characterization suite passed before production files moved.
 
@@ -245,6 +273,13 @@ Focused R03B checks:
 ```text
 python -m ruff check app/errors.py app/retrieval.py app/infrastructure/qdrant tests/test_retrieval.py tests/test_architecture_boundaries.py
 python -m pytest -q tests/test_retrieval.py tests/test_hybrid_retrieval.py tests/test_retrieval_runtime.py tests/test_bootstrap.py tests/test_health.py tests/test_architecture_boundaries.py
+```
+
+Focused R03C checks:
+
+```text
+python -m ruff check app/hybrid_retrieval.py app/retrieval.py app/infrastructure/qdrant tests/test_hybrid_retrieval.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_hybrid_retrieval.py tests/test_retrieval.py tests/test_retrieval_runtime.py tests/test_bootstrap.py tests/test_architecture_boundaries.py
 ```
 
 Slice-completion checks:
@@ -292,7 +327,6 @@ Existing `from app.ingestion import build_chunk_id` and
 
 ## 14. Current limitations
 
-- R03C has not isolated hybrid/sparse indexing or removed private dense-helper imports.
 - R03D has not thinned supported ingestion/index CLI composition.
 - `app.ingestion` still coordinates normalization and atomic JSONL for compatibility.
 - Dense search remains in `app.retrieval` for R04; the module is therefore still a transitional
@@ -308,30 +342,33 @@ Existing `from app.ingestion import build_chunk_id` and
 3. Why does `app.models.DocumentChunk` remain available?
 4. What guarantees that importing ingestion does not initialize Docling?
 5. Why must stale deletion happen only after every dense upsert succeeds?
-6. Which responsibilities remain for R03C and R03D?
+6. Which CLI composition responsibilities remain for R03D?
 
 ## 16. Interview summary
 
 R03A extracted persisted document identity and the chunk record into a framework-neutral domain
 module, then placed Docling/PDFium behind a lazy infrastructure adapter. R03B separated dense
-embedding, Qdrant indexing, client creation, and manifest I/O. Compatibility facades keep current
-callers stable. Exact golden identities and payloads, failure-ordering tests, object-identity checks,
-and offline in-memory Qdrant tests demonstrate that the moves change dependency direction rather
-than persisted behavior.
+embedding, Qdrant indexing, client creation, and manifest I/O. R03C completed the indexing boundary
+with sparse/BM25 and hybrid infrastructure, removing private cross-facade imports. Compatibility
+facades keep current callers stable. Exact golden identities, payloads, manifests, failure-ordering
+tests, object-identity checks, and offline in-memory Qdrant tests demonstrate dependency cleanup
+without persisted or ranking behavior changes.
 
 ## 17. Validation results and proposed commit
 
-Current R03A/R03B validation results:
+Current R03A–R03C validation results:
 
 ```text
 Pre-refactor ingestion characterization             PASS — 25 tests
 R03A focused ingestion/architecture suite           PASS — 30 tests
 R03B pre-refactor dense characterization            PASS — 25 tests
 R03B focused dense/hybrid/runtime suite              PASS — 56 tests, 1 warning
+R03C pre-refactor hybrid characterization            PASS — 10 tests
+R03C focused hybrid/dense/runtime suite               PASS — 54 tests
 Focused Ruff                                        PASS
 Full Ruff                                           PASS
-Full pytest Python 3.11.15                          PASS — 347 tests, 1 warning
-Markdown links (12 local targets) / git diff check  PASS
+Full pytest Python 3.11.15                          PASS — 350 tests, 1 warning
+Markdown links (15 local targets) / git diff check  PASS
 ```
 
 Proposed commit after user review:
@@ -342,5 +379,5 @@ refactor: separate document ingestion from Docling
 
 ## 18. Status
 
-`IN_PROGRESS` — R03A and R03B are implemented and their focused/full validation passes. R03C–R03D
-are intentionally not implemented in this slice.
+`IN_PROGRESS` — R03A–R03C are implemented and their focused/full validation passes. R03D is
+intentionally not implemented in this slice.

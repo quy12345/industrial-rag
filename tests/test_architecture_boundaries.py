@@ -143,3 +143,17 @@ def test_qdrant_infrastructure_does_not_import_compatibility_facades() -> None:
     }
 
     assert unexpected == set()
+
+
+def test_hybrid_facade_does_not_import_private_dense_facade_helpers() -> None:
+    path = APP_ROOT / "hybrid_retrieval.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    private_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "app.retrieval"
+        for alias in node.names
+        if alias.name.startswith("_")
+    }
+
+    assert private_imports == set()
