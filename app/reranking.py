@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Literal, Protocol
 
-from app.candidate_audit import dense_results_to_candidates, union_dense_sparse_candidates
 from app.content_identity import evidence_content_fingerprint
+from app.domain.retrieval import dense_results_to_candidates, union_dense_sparse_candidates
 from app.evaluation import (
     EvaluationCase,
     EvaluationError,

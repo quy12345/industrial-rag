@@ -8,8 +8,14 @@ from app.candidate_audit import (
     dense_results_to_candidates,
     union_dense_sparse_candidates,
 )
+from app.domain import retrieval as candidate_assembly
 from app.evaluation import EvaluationCase
 from app.models import RetrievalCandidate, RetrievedChunk
+
+
+def test_audit_facade_exports_canonical_candidate_assembly() -> None:
+    assert dense_results_to_candidates is candidate_assembly.dense_results_to_candidates
+    assert union_dense_sparse_candidates is candidate_assembly.union_dense_sparse_candidates
 
 
 def _case(**overrides: object) -> EvaluationCase:
@@ -82,6 +88,25 @@ def test_dense_results_receive_deterministic_ranks_and_metadata() -> None:
     assert [candidate.dense_rank for candidate in candidates] == [1, 2]
     assert candidates[0].page_numbers == [1]
     assert candidates[0].headings == ["A"]
+    assert candidates[0].model_dump() == {
+        "chunk_id": "a",
+        "document_id": "manual-1",
+        "filename": "manual.pdf",
+        "text": "a",
+        "page_numbers": [1],
+        "headings": ["A"],
+        "content_type": "text",
+        "metadata": {},
+        "score": 0.5,
+        "dense_score": 0.5,
+        "dense_rank": 1,
+        "sparse_score": None,
+        "sparse_rank": None,
+        "rrf_score": None,
+        "rrf_rank": None,
+        "rerank_score": None,
+        "rerank_rank": None,
+    }
 
 
 def test_union_deduplicates_preserves_component_ranks_and_is_deterministic() -> None:

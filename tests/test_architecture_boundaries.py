@@ -10,7 +10,6 @@ APP_ROOT = Path(__file__).parents[1] / "app"
 # These are baseline debt, not approved dependencies. R04 owns their removal when
 # retrieval and reranking responsibilities are separated from evaluation helpers.
 KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS = {
-    ("app.candidate_audit", "app.evaluation"): "R04",
     ("app.reranking", "app.evaluation"): "R04",
 }
 
@@ -171,3 +170,10 @@ def test_indexing_application_service_has_no_adapter_or_evaluation_dependency() 
         or dependency == "app.infrastructure"
         or dependency.startswith("app.infrastructure.")
     }
+
+
+def test_reranking_uses_domain_candidate_assembly_not_evaluation_audit() -> None:
+    graph = _import_graph()
+
+    assert "app.domain.retrieval" in graph["app.reranking"]
+    assert "app.candidate_audit" not in graph["app.reranking"]
