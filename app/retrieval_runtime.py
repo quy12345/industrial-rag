@@ -11,6 +11,10 @@ from typing import Any, Protocol
 
 from app import config as runtime_config
 from app.domain import retrieval_contracts
+from app.domain.policies.query_analysis import (
+    QUERY_EXPANSION_PROFILE,
+    augment_vietnamese_technical_query,
+)
 from app.errors import RerankerUnavailableError, RetrievalUnavailableError
 from app.hybrid_retrieval import (
     create_sparse_embedding_model,
@@ -18,10 +22,6 @@ from app.hybrid_retrieval import (
     validate_hybrid_collection,
 )
 from app.models import RetrievalCandidate
-from app.query_expansion import (
-    QUERY_EXPANSION_PROFILE,
-    augment_vietnamese_technical_query,
-)
 from app.reranking import FastEmbedCrossEncoder, RerankingError, RerankPipeline
 from app.retrieval import (
     RetrievalError,

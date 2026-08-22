@@ -4,7 +4,24 @@ from __future__ import annotations
 
 import pytest
 
+import app.query_expansion as query_expansion_facade
+from app.domain.policies import query_analysis
 from app.query_expansion import augment_vietnamese_technical_query
+
+
+def test_query_expansion_facade_exports_canonical_policy() -> None:
+    assert (
+        query_expansion_facade.augment_vietnamese_technical_query
+        is query_analysis.augment_vietnamese_technical_query
+    )
+    assert (
+        query_expansion_facade.TECHNICAL_QUERY_GLOSSARY
+        is query_analysis.TECHNICAL_QUERY_GLOSSARY
+    )
+    assert (
+        query_expansion_facade.QUERY_EXPANSION_PROFILE
+        == query_analysis.QUERY_EXPANSION_PROFILE
+    )
 
 
 def test_query_expansion_adds_only_matching_technical_terms_deterministically() -> None:

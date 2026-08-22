@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from app.domain.policies.query_analysis import QUERY_EXPANSION_PROFILE
 from app.phase7_optimization import PHASE7_CALIBRATION_FUSION_PROFILE, Phase7FusionProfile
-from app.query_expansion import QUERY_EXPANSION_PROFILE
 
 RetrievalProfile = Literal["phase7"]
 

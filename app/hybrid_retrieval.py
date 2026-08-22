@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import ValidationError
 from qdrant_client import QdrantClient
 
+import app.domain.policies.fusion as fusion_policy
 from app.errors import RetrievalError
 from app.infrastructure.qdrant import dense as dense_infrastructure
 from app.infrastructure.qdrant import hybrid as hybrid_infrastructure
@@ -28,6 +29,7 @@ validate_hybrid_index_manifest = index_manifests.validate_hybrid_index_manifest
 _document_filter = dense_infrastructure.document_filter
 _to_sparse_vector = hybrid_infrastructure.to_sparse_vector
 _runtime_versions = index_manifests.runtime_versions
+fuse_rrf = fusion_policy.fuse_rrf
 
 
 def sparse_search(
@@ -124,57 +126,6 @@ def hybrid_search(
         document_id=document_id,
     )
     return fuse_rrf(dense_candidates, sparse_candidates, rrf_k=rrf_k, final_limit=final_limit)
-
-
-def fuse_rrf(
-    dense_candidates: Sequence[RetrievalCandidate],
-    sparse_candidates: Sequence[RetrievalCandidate],
-    *,
-    rrf_k: int,
-    final_limit: int,
-) -> list[RetrievalCandidate]:
-    """Fuse component lists by one-based reciprocal rank without combining raw scores."""
-
-    if rrf_k <= 0:
-        raise RetrievalError("RRF k must be greater than 0.")
-    if final_limit <= 0:
-        raise RetrievalError("Hybrid final limit must be greater than 0.")
-
-    merged: dict[str, RetrievalCandidate] = {}
-    for candidate in dense_candidates:
-        if candidate.dense_rank is None:
-            raise RetrievalError("Dense RRF candidate has no one-based dense rank.")
-        merged[candidate.chunk_id] = candidate.model_copy(
-            update={"rrf_score": 1 / (rrf_k + candidate.dense_rank)}
-        )
-    for candidate in sparse_candidates:
-        if candidate.sparse_rank is None:
-            raise RetrievalError("Sparse RRF candidate has no one-based sparse rank.")
-        contribution = 1 / (rrf_k + candidate.sparse_rank)
-        existing = merged.get(candidate.chunk_id)
-        if existing is None:
-            merged[candidate.chunk_id] = candidate.model_copy(update={"rrf_score": contribution})
-        else:
-            merged[candidate.chunk_id] = existing.model_copy(
-                update={
-                    "sparse_score": candidate.sparse_score,
-                    "sparse_rank": candidate.sparse_rank,
-                    "rrf_score": (existing.rrf_score or 0.0) + contribution,
-                }
-            )
-
-    ordered = sorted(
-        merged.values(),
-        key=lambda candidate: (
-            -(candidate.rrf_score or 0.0),
-            min(rank for rank in (candidate.dense_rank, candidate.sparse_rank) if rank is not None),
-            candidate.chunk_id,
-        ),
-    )
-    return [
-        candidate.model_copy(update={"score": candidate.rrf_score, "rrf_rank": rank})
-        for rank, candidate in enumerate(ordered[:final_limit], start=1)
-    ]
 
 
 def _candidate_from_dense(result: RetrievedChunk) -> RetrievalCandidate:

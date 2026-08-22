@@ -177,3 +177,18 @@ def test_reranking_uses_domain_candidate_assembly_not_evaluation_audit() -> None
 
     assert "app.domain.retrieval" in graph["app.reranking"]
     assert "app.candidate_audit" not in graph["app.reranking"]
+
+
+def test_runtime_uses_canonical_domain_rrf_policy() -> None:
+    graph = _import_graph()
+
+    assert "app.domain.policies.fusion" in graph["app.reranking"]
+    assert "app.domain.policies.fusion" in graph["app.hybrid_retrieval"]
+
+
+def test_runtime_uses_canonical_domain_query_analysis_policy() -> None:
+    graph = _import_graph()
+
+    assert "app.domain.policies.query_analysis" in graph["app.retrieval_runtime"]
+    assert "app.query_expansion" not in graph["app.retrieval_runtime"]
+    assert "app.domain.policies.query_analysis" in graph["app.domain.retrieval_contracts"]

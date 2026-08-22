@@ -12,6 +12,7 @@ from qdrant_client import QdrantClient, models
 
 import app.hybrid_retrieval as hybrid_facade
 from app.config import Settings
+from app.domain.policies import fusion as fusion_policy
 from app.hybrid_retrieval import (
     HYBRID_SCHEMA_VERSION,
     compute_bm25_average_length,
@@ -49,6 +50,10 @@ def test_hybrid_facade_exports_canonical_infrastructure_symbols() -> None:
     assert hybrid_facade.validate_hybrid_index_manifest is (
         index_manifests.validate_hybrid_index_manifest
     )
+
+
+def test_hybrid_facade_exports_canonical_rrf_policy() -> None:
+    assert fuse_rrf is fusion_policy.fuse_rrf
 
 
 class FakeDenseModel:
@@ -354,6 +359,25 @@ def test_rrf_formula_duplicate_collapse_ties_and_empty_components() -> None:
     assert fused[0].rrf_score == pytest.approx(1 / 62 + 1 / 61)
     assert fused[0].dense_score == 0.8
     assert fused[0].sparse_score == 20.0
+    assert fused[0].model_dump() == {
+        "chunk_id": "b",
+        "document_id": "manual-a",
+        "filename": "manual-a.pdf",
+        "text": "b",
+        "page_numbers": [1],
+        "headings": [],
+        "content_type": "text",
+        "metadata": {},
+        "score": 1 / 62 + 1 / 61,
+        "dense_score": 0.8,
+        "dense_rank": 2,
+        "sparse_score": 20.0,
+        "sparse_rank": 1,
+        "rrf_score": 1 / 62 + 1 / 61,
+        "rrf_rank": 1,
+        "rerank_score": None,
+        "rerank_rank": None,
+    }
     assert fuse_rrf([], [], rrf_k=60, final_limit=5) == []
     with pytest.raises(RetrievalError, match="RRF k"):
         fuse_rrf(dense, sparse, rrf_k=0, final_limit=5)

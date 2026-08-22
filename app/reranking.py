@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Any, Literal, Protocol
 
 from app.content_identity import evidence_content_fingerprint
+from app.domain.policies.fusion import fuse_rrf
 from app.domain.retrieval import dense_results_to_candidates, union_dense_sparse_candidates
 from app.evaluation import (
     EvaluationCase,
@@ -19,7 +20,7 @@ from app.evaluation import (
     direct_evidence_rank,
     percentile_nearest_rank,
 )
-from app.hybrid_retrieval import fuse_rrf, sparse_search
+from app.hybrid_retrieval import sparse_search
 from app.models import RetrievalCandidate, RetrievedChunk
 from app.phase7_optimization import (
     Phase7FusionProfile,
