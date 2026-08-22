@@ -192,3 +192,11 @@ def test_runtime_uses_canonical_domain_query_analysis_policy() -> None:
     assert "app.domain.policies.query_analysis" in graph["app.retrieval_runtime"]
     assert "app.query_expansion" not in graph["app.retrieval_runtime"]
     assert "app.domain.policies.query_analysis" in graph["app.domain.retrieval_contracts"]
+
+
+def test_runtime_uses_canonical_domain_ranking_policy() -> None:
+    graph = _import_graph()
+
+    for module in ("app.reranking", "app.evidence_selection", "app.domain.retrieval_contracts"):
+        assert "app.domain.policies.ranking" in graph[module]
+        assert "app.phase7_optimization" not in graph[module]

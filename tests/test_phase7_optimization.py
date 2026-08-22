@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+import app.phase7_optimization as ranking_facade
+from app.domain.policies import ranking as ranking_policy
 from app.models import RetrievalCandidate
 from app.phase7_optimization import (
     Phase7FusionProfile,
@@ -20,6 +22,16 @@ from app.phase7_optimization import (
     select_coverage_preserving_candidates,
 )
 from scripts.calibrate_phase7_weighted_fusion import _select_pareto_profiles
+
+
+def test_phase7_facade_exports_canonical_ranking_policy() -> None:
+    assert ranking_facade.Phase7FusionProfile is ranking_policy.Phase7FusionProfile
+    assert ranking_facade.Phase7OptimizationError is ranking_policy.Phase7OptimizationError
+    assert ranking_facade.infer_query_role is ranking_policy.infer_query_role
+    assert (
+        ranking_facade.PHASE7_CALIBRATION_FUSION_PROFILE
+        is ranking_policy.PHASE7_CALIBRATION_FUSION_PROFILE
+    )
 
 
 def _candidate(

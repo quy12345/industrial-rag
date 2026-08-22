@@ -6,8 +6,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from app.content_identity import evidence_content_fingerprint
+from app.domain.policies.ranking import QueryRole, QueryRoleInference, infer_query_role
 from app.models import RetrievalCandidate
-from app.phase7_optimization import QueryRole, QueryRoleInference, infer_query_role
 
 
 class EvidenceSelectionError(ValueError):

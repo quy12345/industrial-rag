@@ -11,6 +11,16 @@ from typing import Any, Literal, Protocol
 
 from app.content_identity import evidence_content_fingerprint
 from app.domain.policies.fusion import fuse_rrf
+from app.domain.policies.ranking import (
+    Phase7FusionProfile,
+    Phase7OptimizationError,
+    QueryRoleInference,
+    apply_list_completeness_fallback,
+    apply_relation_list_completeness_fallback,
+    apply_role_aware_rank_fusion,
+    infer_query_role,
+    select_coverage_preserving_candidates,
+)
 from app.domain.retrieval import dense_results_to_candidates, union_dense_sparse_candidates
 from app.evaluation import (
     EvaluationCase,
@@ -22,16 +32,6 @@ from app.evaluation import (
 )
 from app.hybrid_retrieval import sparse_search
 from app.models import RetrievalCandidate, RetrievedChunk
-from app.phase7_optimization import (
-    Phase7FusionProfile,
-    Phase7OptimizationError,
-    QueryRoleInference,
-    apply_list_completeness_fallback,
-    apply_relation_list_completeness_fallback,
-    apply_role_aware_rank_fusion,
-    infer_query_role,
-    select_coverage_preserving_candidates,
-)
 from app.retrieval import dense_search
 
 RerankStrategy = Literal["sparse", "hybrid", "union"]

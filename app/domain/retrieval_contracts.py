@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.domain.policies.query_analysis import QUERY_EXPANSION_PROFILE
-from app.phase7_optimization import PHASE7_CALIBRATION_FUSION_PROFILE, Phase7FusionProfile
+from app.domain.policies.ranking import PHASE7_CALIBRATION_FUSION_PROFILE, Phase7FusionProfile
 
 RetrievalProfile = Literal["phase7"]
 
