@@ -5,12 +5,13 @@
 R03 separates stable document identity, document parsing, and Qdrant indexing infrastructure while
 preserving the frozen Phase 7 corpus and index semantics. This document is shared by all R03 slices.
 
-R03A, R03B, and R03C are implemented. R03A moves `DocumentChunk` and stable identity policies into the
+R03A–R03D are implemented. R03A moves `DocumentChunk` and stable identity policies into the
 domain, moves Docling/PDFium access behind an infrastructure adapter, and retains `app.ingestion` as
 a compatibility facade and ingestion coordinator. R03B separates Qdrant client construction, dense
 embedding/indexing, and dense manifest I/O while retaining `app.retrieval` as a compatibility facade.
 R03C separates sparse/BM25 construction, hybrid indexing/schema, and hybrid manifests while leaving
-sparse search and RRF unchanged. CLI restructuring remains the final R03 slice.
+sparse search and RRF unchanged. R03D moves mutation safety and verification from the supported Phase
+7 indexing CLI into an injected application service.
 
 ## 2. Position in the system
 
@@ -23,6 +24,8 @@ app.ingestion compatibility facade and coordinator
       ↓
 list[DocumentChunk]
       ↓
+app.application.indexing_service
+      ↓ injected operations
 app.retrieval compatibility facade
       ├── app.infrastructure.qdrant.client
       ├── app.infrastructure.qdrant.dense
@@ -32,7 +35,7 @@ app.retrieval compatibility facade
 Qdrant points / dense manifest
 ```
 
-R03A–R03C change dependency ownership only. Validation uses in-memory Qdrant; no production
+R03A–R03D change dependency ownership only. Validation uses in-memory Qdrant and fakes; no production
 collection operation or corpus indexing is executed.
 
 ## 3. Relevant background concepts
@@ -81,6 +84,11 @@ identity/payload, and two-stage embedding-before-mutation rule. Hybrid manifest 
 remain byte-for-byte compatible at the JSON contract level. Sparse search ranks and RRF stay in
 `app.hybrid_retrieval` for R04.
 
+`Phase7IndexingService` accepts client/model objects and three callable ports. It preserves
+dense-before-hybrid ordering for each document, exact verification, and archive collection guards.
+`validate_collection_targets` remains the first CLI operation, before ingestion, model construction,
+or Qdrant access. Application failures map back to the same CLI messages and exit behavior.
+
 ## 5. Step-by-step data flow
 
 1. `app.ingestion.validate_input_path` validates existence, file type, and extension.
@@ -105,6 +113,11 @@ remain byte-for-byte compatible at the JSON contract level. Sparse search ranks 
 20. Hybrid points use the same canonical UUID/payload helpers as dense indexing.
 21. Hybrid manifest I/O shares the manifest infrastructure owner without merging dense/hybrid schema.
 22. `app.hybrid_retrieval` consumes public infrastructure functions and retains only query/RRF logic.
+23. The supported indexing CLI validates target names before any external operation.
+24. The CLI composes `Phase7IndexingService` from canonical dense/hybrid/read ports.
+25. The service checks frozen 99/99 archive counts, indexes each document dense then hybrid, and
+    verifies total counts plus exact per-document chunk IDs.
+26. Optional re-index verification repeats the same service operations without a second code path.
 
 ## 6. Responsibilities of changed files
 
@@ -139,6 +152,12 @@ remain byte-for-byte compatible at the JSON contract level. Sparse search ranks 
   payload/filter/manifest snapshots, mutation ordering, and facade identity.
 - [`tests/test_hybrid_retrieval.py`](../../tests/test_hybrid_retrieval.py) protects exact hybrid
   schema/payload/manifest, both embedding failure paths, mutation ordering, sparse search, and RRF.
+- [`app/application/indexing_service.py`](../../app/application/indexing_service.py) owns target and
+  chunk safety validation plus injected indexing/archive/verification orchestration.
+- [`scripts/index_phase7_corpus.py`](../../scripts/index_phase7_corpus.py) remains the explicit
+  integration composition root: arguments, concrete adapter wiring, manifest metadata, and output.
+- [`tests/test_phase7_index_cli.py`](../../tests/test_phase7_index_cli.py) protects validation timing,
+  call order, archive guards, chunk contracts, and exact post-index verification without Qdrant.
 
 Package `__init__.py` files mark the new infrastructure boundary without eager imports.
 
@@ -164,6 +183,10 @@ Package `__init__.py` files mark the new infrastructure boundary without eager i
 - `compute_bm25_average_length`: installed-tokenizer preprocessing required by the frozen contract.
 - `index_hybrid_chunks`: dense+sparse embedding and safe hybrid point replacement.
 - `write_hybrid_index_manifest` / `validate_hybrid_index_manifest`: independent hybrid contract I/O.
+- `IndexingSafetyError`: application failure mapped by the CLI without SDK exceptions leaking.
+- `validate_collection_targets`: pre-external-access destructive-write guard.
+- `validate_chunk_preview`: normalized two-manual corpus guard.
+- `Phase7IndexingService`: use-case coordinator over injected index/read ports.
 
 ## 8. Before-and-after structure
 
@@ -174,7 +197,7 @@ app/models.py       HTTP/retrieval models + DocumentChunk
 app/ingestion.py    identity + batching + Docling/PDFium + normalization + JSONL
 ```
 
-After R03A–R03C:
+After R03A–R03D:
 
 ```text
 app/domain/documents.py                  chunk record + stable identity policies
@@ -187,6 +210,8 @@ app/infrastructure/qdrant/hybrid.py      sparse embedding/hybrid indexing infras
 app/infrastructure/qdrant/manifests.py   dense + hybrid manifest persistence/validation
 app/retrieval.py                         compatibility exports + dense search pending R04
 app/hybrid_retrieval.py                  compatibility exports + sparse search/RRF pending R04
+app/application/indexing_service.py      safe indexing use-case orchestration
+scripts/index_phase7_corpus.py           thin operational composition/output adapter
 ```
 
 ## 9. Design decisions and trade-offs
@@ -210,6 +235,12 @@ app/hybrid_retrieval.py                  compatibility exports + sparse search/R
 - Dense search deliberately stays in `app.retrieval`; moving its ranking path belongs to R04.
 - The existing operation ordering is preserved, including its limitation: a partial multi-batch
   upsert can leave new points, but stale deletion never begins after an upsert failure.
+- The application service receives concrete operations through typed callable ports. This avoids a
+  dependency-injection framework while keeping Qdrant/FastEmbed imports out of application code.
+- `scripts/ingest_preview.py` is intentionally unchanged: it already limits itself to parsing,
+  invoking one ingestion use case, rendering a preview, and optional output.
+- Corpus manifest timestamp, package versions, and Git revision remain in the operational CLI because
+  they describe command execution rather than indexing policy.
 
 ## 10. Tests and protected behavior
 
@@ -233,6 +264,10 @@ app/hybrid_retrieval.py                  compatibility exports + sparse search/R
 | hybrid safety tests | both embeddings finish before mutation; failed upsert cannot start deletion |
 | hybrid facade identity | old indexing/manifest imports point to canonical adapters |
 | private-import guard | hybrid facade cannot consume private dense-facade helpers |
+| CLI target guard | protected/equal collection names fail before external access |
+| application call-order test | dense then hybrid per document, stable mapping order |
+| archive/verification tests | 99/99 preservation and exact totals/chunk-ID sets |
+| application boundary | service imports neither infrastructure nor evaluation |
 
 The pre-refactor characterization suite passed before production files moved.
 
@@ -282,6 +317,13 @@ python -m ruff check app/hybrid_retrieval.py app/retrieval.py app/infrastructure
 python -m pytest -q tests/test_hybrid_retrieval.py tests/test_retrieval.py tests/test_retrieval_runtime.py tests/test_bootstrap.py tests/test_architecture_boundaries.py
 ```
 
+Focused R03D checks:
+
+```text
+python -m ruff check app/application scripts/index_phase7_corpus.py tests/test_phase7_index_cli.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_phase7_index_cli.py tests/test_ingestion.py tests/test_retrieval.py tests/test_hybrid_retrieval.py tests/test_architecture_boundaries.py
+```
+
 Slice-completion checks:
 
 ```text
@@ -327,12 +369,13 @@ Existing `from app.ingestion import build_chunk_id` and
 
 ## 14. Current limitations
 
-- R03D has not thinned supported ingestion/index CLI composition.
 - `app.ingestion` still coordinates normalization and atomic JSONL for compatibility.
 - Dense search remains in `app.retrieval` for R04; the module is therefore still a transitional
   facade rather than a finished adapter boundary.
 - Dense multi-batch upsert has no rollback for already successful new batches; this existing behavior
   is documented, not changed during structural refactoring.
+- The supported Phase 7 indexing command remains an explicit integration operation; executing it
+  still requires user intent, local models, source/frozen artifacts, and live Qdrant.
 - Long-chunk/table behavior is intentionally unchanged and belongs outside Round 1.
 
 ## 15. Self-check questions
@@ -342,21 +385,23 @@ Existing `from app.ingestion import build_chunk_id` and
 3. Why does `app.models.DocumentChunk` remain available?
 4. What guarantees that importing ingestion does not initialize Docling?
 5. Why must stale deletion happen only after every dense upsert succeeds?
-6. Which CLI composition responsibilities remain for R03D?
+6. Why does target validation run before even preview ingestion?
+7. Which concerns remain in the CLI rather than the application service, and why?
 
 ## 16. Interview summary
 
 R03A extracted persisted document identity and the chunk record into a framework-neutral domain
 module, then placed Docling/PDFium behind a lazy infrastructure adapter. R03B separated dense
 embedding, Qdrant indexing, client creation, and manifest I/O. R03C completed the indexing boundary
-with sparse/BM25 and hybrid infrastructure, removing private cross-facade imports. Compatibility
-facades keep current callers stable. Exact golden identities, payloads, manifests, failure-ordering
-tests, object-identity checks, and offline in-memory Qdrant tests demonstrate dependency cleanup
-without persisted or ranking behavior changes.
+with sparse/BM25 and hybrid infrastructure, removing private cross-facade imports. R03D moved
+collection/corpus guards, indexing order, and verification into an application service with injected
+ports. Compatibility facades keep current callers stable. Exact golden identities, payloads,
+manifests, failure-ordering tests, object-identity checks, and offline fakes/in-memory Qdrant tests
+demonstrate dependency cleanup without persisted, CLI, or ranking behavior changes.
 
 ## 17. Validation results and proposed commit
 
-Current R03A–R03C validation results:
+Final R03A–R03D validation results:
 
 ```text
 Pre-refactor ingestion characterization             PASS — 25 tests
@@ -365,19 +410,21 @@ R03B pre-refactor dense characterization            PASS — 25 tests
 R03B focused dense/hybrid/runtime suite              PASS — 56 tests, 1 warning
 R03C pre-refactor hybrid characterization            PASS — 10 tests
 R03C focused hybrid/dense/runtime suite               PASS — 54 tests
+R03D pre-refactor CLI safety characterization         PASS — 6 tests
+R03D focused service/CLI/indexing suite                PASS — 76 tests
 Focused Ruff                                        PASS
 Full Ruff                                           PASS
-Full pytest Python 3.11.15                          PASS — 350 tests, 1 warning
-Markdown links (15 local targets) / git diff check  PASS
+Full pytest Python 3.11.15                          PASS — 357 tests, 1 warning
+Markdown links (18 local targets) / git diff check  PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: separate document ingestion from Docling
+refactor: thin the Phase 7 indexing command
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R03A–R03C are implemented and their focused/full validation passes. R03D is
-intentionally not implemented in this slice.
+`COMPLETE` — R03A–R03D are implemented. Focused checks, full Ruff, the full offline Python 3.11
+suite, local Markdown links, and diff checks pass without executing a production indexing operation.

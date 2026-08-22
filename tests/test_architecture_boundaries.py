@@ -157,3 +157,17 @@ def test_hybrid_facade_does_not_import_private_dense_facade_helpers() -> None:
     }
 
     assert private_imports == set()
+
+
+def test_indexing_application_service_has_no_adapter_or_evaluation_dependency() -> None:
+    graph = _import_graph()
+    dependencies = graph["app.application.indexing_service"]
+
+    assert not {
+        dependency
+        for dependency in dependencies
+        if dependency == "app.evaluation"
+        or dependency.startswith("app.evaluation.")
+        or dependency == "app.infrastructure"
+        or dependency.startswith("app.infrastructure.")
+    }

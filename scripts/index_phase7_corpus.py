@@ -11,6 +11,12 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from app.application.indexing_service import (
+    IndexingSafetyError,
+    Phase7IndexingService,
+    validate_chunk_preview,
+    validate_collection_targets,
+)
 from app.config import get_settings
 from app.evaluation import chunk_set_metadata, load_frozen_chunks
 from app.hybrid_retrieval import (
@@ -45,13 +51,14 @@ DEFAULT_INPUTS = (
 
 def main() -> int:
     args = _parser().parse_args()
-    if (
-        args.dense_collection in PROTECTED_COLLECTIONS
-        or args.hybrid_collection in PROTECTED_COLLECTIONS
-    ):
-        raise SystemExit("Phase 7 refuses protected Phase 3--6 collection names.")
-    if args.dense_collection == args.hybrid_collection:
-        raise SystemExit("Phase 7 dense and hybrid collection names must differ.")
+    try:
+        validate_collection_targets(
+            args.dense_collection,
+            args.hybrid_collection,
+            protected_collections=PROTECTED_COLLECTIONS,
+        )
+    except IndexingSafetyError as exc:
+        raise SystemExit(str(exc)) from exc
     try:
         if args.preview_only:
             chunks_by_document = {
@@ -69,7 +76,7 @@ def main() -> int:
             for chunk in frozen_chunks:
                 chunks_by_document.setdefault(chunk.document_id, []).append(chunk)
         all_chunks = [chunk for chunks in chunks_by_document.values() for chunk in chunks]
-        _validate_preview(chunks_by_document, args.page_batch_size)
+        validate_chunk_preview(chunks_by_document)
         if args.preview_only:
             write_chunks_jsonl(args.chunks_output, all_chunks)
             _write_manifest(
@@ -104,16 +111,26 @@ def main() -> int:
             avg_len=bm25_avg_len,
         )
         client = create_qdrant_client(settings)
-        _old_collection_guard(client)
-        _index_once(
-            client, settings, chunks_by_document, dense_model, sparse_model, dense_dimension
+        indexing_service = Phase7IndexingService(
+            client=client,
+            settings=settings,
+            dense_model=dense_model,
+            sparse_model=sparse_model,
+            dense_dimension=dense_dimension,
+            dense_indexer=index_chunks,
+            hybrid_indexer=index_hybrid_chunks,
+            indexed_chunk_reader=get_indexed_chunk_ids,
         )
-        _verify_index(client, settings, chunks_by_document)
+        indexing_service.verify_protected_collections(
+            dense_collection="industrial_manual_chunks",
+            hybrid_collection="industrial_manual_chunks_v2",
+            expected_count=99,
+        )
+        indexing_service.index_once(chunks_by_document)
+        indexing_service.verify_index(chunks_by_document)
         if args.verify_reindex:
-            _index_once(
-                client, settings, chunks_by_document, dense_model, sparse_model, dense_dimension
-            )
-            _verify_index(client, settings, chunks_by_document)
+            indexing_service.index_once(chunks_by_document)
+            indexing_service.verify_index(chunks_by_document)
         _write_manifest(
             args,
             chunks_by_document,
@@ -149,72 +166,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--preview-only", action="store_true")
     parser.add_argument("--verify-reindex", action="store_true")
     return parser
-
-
-def _index_once(
-    client, settings, chunks_by_document, dense_model, sparse_model, dense_dimension: int
-) -> None:
-    for chunks in chunks_by_document.values():
-        index_chunks(
-            client,
-            chunks,
-            collection_name=settings.qdrant_collection,
-            vector_name=settings.dense_vector_name,
-            embedding_model=dense_model,
-            embedding_batch_size=settings.embedding_batch_size,
-            vector_size=dense_dimension,
-        )
-        index_hybrid_chunks(
-            client,
-            chunks,
-            collection_name=settings.qdrant_hybrid_collection,
-            dense_vector_name=settings.dense_vector_name,
-            sparse_vector_name=settings.sparse_vector_name,
-            dense_embedding_model=dense_model,
-            sparse_embedding_model=sparse_model,
-            dense_embedding_batch_size=settings.embedding_batch_size,
-            sparse_embedding_batch_size=settings.sparse_embedding_batch_size,
-            dense_vector_size=dense_dimension,
-        )
-
-
-def _validate_preview(chunks_by_document, batch_size: int) -> None:
-    if len(chunks_by_document) != 2:
-        raise Phase7Error("Both ATV320 manuals must produce chunks.")
-    for document_id, chunks in chunks_by_document.items():
-        indices = [chunk.metadata.get("chunk_index") for chunk in chunks]
-        if indices != list(range(len(chunks))):
-            raise Phase7Error(f"{document_id} has non-contiguous chunk indices.")
-        if not all(
-            chunk.filename and chunk.page_numbers and chunk.text.strip() for chunk in chunks
-        ):
-            raise Phase7Error(f"{document_id} has incomplete citation metadata.")
-        header_like = sum(1 for chunk in chunks if len(chunk.text) < 120 and not chunk.headings)
-        if header_like / len(chunks) > 0.25:
-            raise Phase7Error(f"{document_id} has too many likely header/footer-only chunks.")
-
-
-def _verify_index(client, settings, chunks_by_document) -> None:
-    expected_total = sum(len(chunks) for chunks in chunks_by_document.values())
-    for collection_name in (settings.qdrant_collection, settings.qdrant_hybrid_collection):
-        if client.count(collection_name, exact=True).count != expected_total:
-            raise Phase7Error(f"{collection_name} does not contain the expected total point count.")
-        for document_id, chunks in chunks_by_document.items():
-            actual = get_indexed_chunk_ids(
-                client, collection_name=collection_name, document_id=document_id
-            )
-            expected = {chunk.chunk_id for chunk in chunks}
-            if actual != expected:
-                raise Phase7Error(f"{collection_name} chunk IDs mismatch for {document_id}.")
-
-
-def _old_collection_guard(client) -> None:
-    old_dense = client.count("industrial_manual_chunks", exact=True).count
-    old_hybrid = client.count("industrial_manual_chunks_v2", exact=True).count
-    if (old_dense, old_hybrid) != (99, 99):
-        raise Phase7Error(
-            f"Protected collections are not frozen at 99/99: {old_dense}/{old_hybrid}"
-        )
 
 
 def _write_manifest(args, chunks_by_document, all_chunks, *, bm25_avg_len, dense_dimension) -> None:
