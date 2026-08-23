@@ -12,7 +12,8 @@ validation, scoring, and aggregate metrics from `app.evaluation` to `evaluation.
 `app.evaluation` remains a compatibility facade for existing scripts and evaluator-side modules.
 
 R07A2 moves sanitized snapshot validation and deterministic rank-only replay from
-`app.phase7_replay` to `evaluation.replay`. Its old module path also remains a compatibility facade.
+`app.phase7_replay` to `evaluation.replay`. Its old module path remained a compatibility facade until
+R07C14 removed it after all consumers moved to the canonical owner.
 
 R07A3 separates offline Phase 7 dataset/qrel contracts into `evaluation.phase7_dataset` and active
 corpus identity/file operations into `app.infrastructure.corpus_artifacts`. `app.phase7` becomes a
@@ -58,8 +59,10 @@ R07C12 archives the Phase 7.4 weighted-rerank shortlist evaluator. Phase 7.4.1�
 intermediate selection, while the sanitized v1–v3 artifacts and source remain historical evidence.
 R07C13 archives the remaining eight completed calibration, snapshot, CPU, stability, and readiness
 workflows as one provenance-only toolchain while retaining the current retrieval closure evaluator.
-Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
-slices.
+R07C14 completes evaluation ownership: retrieval-closure metrics move to `evaluation`, candidate
+audit leaves the production package, the expired replay facade is removed, and the supported
+retrieval-closure command becomes a thin top-level shim over `scripts.evaluation`.
+Documentation closure remains the final R07 slice.
 
 ## 2. Position in the system
 
@@ -77,7 +80,7 @@ production runtime  -X->  evaluation
 legacy evaluator code --> app.evaluation facade --> evaluation.retrieval
 
 sanitized snapshot --> evaluation.replay --> public retrieval/ranking contracts
-legacy calibration --> app.phase7_replay facade --> evaluation.replay
+archived calibration ---------------------> evaluation.replay
 
 offline Phase 7 JSONL --> evaluation.phase7_dataset --> domain documents / retrieval metrics
 supported indexing CLI --> app.infrastructure.corpus_artifacts --> retrieval contract
@@ -196,7 +199,8 @@ Shared frozen-corpus flow:
 | [`evaluation/replay.py`](../../evaluation/replay.py) | Canonical sanitized snapshot validation and deterministic rank-only replay. |
 | [`evaluation/phase7_dataset.py`](../../evaluation/phase7_dataset.py) | Canonical Phase 7 schemas, dataset validation, hashes, and qrel closure. |
 | [`app/evaluation.py`](../../app/evaluation.py) | Temporary import-compatible re-export facade. |
-| [`app/phase7_replay.py`](../../app/phase7_replay.py) | Temporary import-compatible replay facade. |
+| [`evaluation/candidate_audit.py`](../../evaluation/candidate_audit.py) | Canonical historical candidate-pool diagnostics. |
+| [`evaluation/retrieval_closure.py`](../../evaluation/retrieval_closure.py) | Canonical provider-free closure metrics and per-language aggregation. |
 | [`app/phase7.py`](../../app/phase7.py) | Temporary facade over dataset and corpus artifact owners. |
 | [`app/infrastructure/corpus_artifacts.py`](../../app/infrastructure/corpus_artifacts.py) | Active corpus constants, frozen-chunk parsing/identity, streamed hash, and atomic local file operations. |
 | [`scripts/operations/index_phase7_corpus.py`](../../scripts/operations/index_phase7_corpus.py) | Uses corpus artifacts without importing either evaluation compatibility facade. |
@@ -672,11 +676,11 @@ The caller owns paths and retrieval execution. Importing the module performs no 
 ## 14. Current limitations
 
 - `app.evaluation` remains until its consumers are migrated or explicitly retained.
-- `app.phase7_replay` remains as a facade until the calibration CLI is classified.
+- `app.phase7_replay` has been removed; archived consumers import `evaluation.replay` directly.
 - `app.phase7` remains as a facade until evaluator CLI consumers are classified.
 - `app.evaluation_e2e` is deliberately pinned to preserve source identity; relocation is deferred
   until a versioned artifact-identity transition is explicitly approved.
-- Most evaluator, calibration, readiness, freeze, and migration CLIs are not classified yet.
+- Completed calibration, readiness, freeze, migration, and historical evaluator CLIs are archived.
 - The corpus audit remains optional and requires the ingestion image's existing PDF dependency when
   run against local manuals; unit validation uses a fake and downloads nothing.
 - `scripts.archive.phase7` is unsupported: archived tools are provenance, not current commands.
@@ -1196,13 +1200,47 @@ The suite count decreases because sixteen private CLI tests and repetitive per-s
 were replaced by one table-driven archive boundary. Domain/runtime policy tests remain. The warning
 is the existing Starlette `TestClient`/`httpx` deprecation warning; no dependency changes are made.
 
-Proposed R07C13 commit:
+R07C13 was committed as:
 
 ```text
-chore: archive completed phase7 calibration workflows
+dcf0261 chore: archive completed phase7 calibration workflows
+```
+
+R07C14 pre-change characterization:
+
+| Check | Result |
+| --- | --- |
+| Candidate audit, replay, retrieval closure, and architecture tests | PASS — `42 passed` |
+| Supported retrieval-closure `--help` | PASS — exit `0`; four options recorded |
+
+R07C14 assigns canonical ownership to `evaluation.candidate_audit`, `evaluation.replay`, and
+`evaluation.retrieval_closure`. The top-level retrieval-closure path remains supported through a
+thin `main` re-export; its parser, output, and exit behavior stay in
+`scripts.evaluation.evaluate_phase7_retrieval_closure`. Architecture tests reject the removed app
+facades and prevent supported script implementations from importing one another.
+
+R07C14 validation:
+
+| Check | Result |
+| --- | --- |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused offline pytest | PASS — `55 passed` |
+| Top-level and canonical `--help` | PASS — identical four-option contract; both exit `0` |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `384 passed, 1 warning` |
+| Docker Compose config | PASS |
+| Changed-document Markdown links | PASS — all local targets resolve |
+| Pinned E2E sources | PASS — CLI blob `7ce4dc9c...` and evaluator blob `b8be722d...` unchanged |
+| Frozen/artifact and runtime source scope | PASS — no changes |
+| `git diff --check` | PASS |
+
+Proposed R07C14 commit:
+
+```text
+refactor: finalize evaluation and script boundaries
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07C12 are committed through `44821d0`. R07C13 is implemented and validated;
-evaluation boundary consolidation and documentation closure remain.
+`IN_PROGRESS` — R07A1–R07C13 are committed through `dcf0261`. R07C14 evaluation boundary
+consolidation is implemented; final validation and documentation closure remain.

@@ -30,7 +30,7 @@ from evaluation.phase7_dataset import (
 )
 from evaluation.replay import Phase7ReplayError, replay_role_prior, snapshot_candidates_to_retrieval
 from evaluation.retrieval import direct_evidence_rank
-from scripts.evaluate_phase7_retrieval_closure import aggregate_closure_rows
+from evaluation.retrieval_closure import aggregate_closure_rows
 
 FOLDS: tuple[tuple[str, str], ...] = (
     ("phase7_calibration_001", "phase7_calibration_002"),

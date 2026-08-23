@@ -1,4 +1,4 @@
-"""Dependency-free candidate-pool coverage helpers for Phase 5 handoff."""
+"""Offline candidate-pool coverage diagnostics for historical evaluation."""
 
 from __future__ import annotations
 
@@ -7,15 +7,16 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from app.domain import retrieval as candidate_assembly
-from app.evaluation import EvaluationCase, direct_evidence_rank
-from app.models import RetrievalCandidate
+from app.domain.retrieval import (
+    RetrievalCandidate,
+    union_dense_sparse_candidates,
+)
+from app.domain.retrieval import (
+    dense_results_to_candidates as dense_results_to_candidates,
+)
+from evaluation.retrieval import EvaluationCase, direct_evidence_rank
 
 POOL_NAMES = ("dense_top20", "sparse_top20", "hybrid_rrf_top20", "dense_sparse_union")
-
-dense_results_to_candidates = candidate_assembly.dense_results_to_candidates
-union_dense_sparse_candidates = candidate_assembly.union_dense_sparse_candidates
-
 
 def audit_case(
     case: EvaluationCase,

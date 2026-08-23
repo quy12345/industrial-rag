@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-import app.phase7_replay as compatibility_replay
-from evaluation import replay as canonical_replay
 from evaluation.replay import Phase7ReplayError, replay_role_prior, snapshot_candidates_to_retrieval
 
 
@@ -19,18 +17,6 @@ def _row(chunk_id: str, rank: int, score: float, role: str = "installation") -> 
         "query_identifier_match_count": 0,
         "bracketed_label_code_pair_count": 0,
     }
-
-
-def test_phase7_replay_facade_exports_canonical_utilities() -> None:
-    exported_symbols = (
-        "Phase7ReplayError",
-        "replay_role_prior",
-        "snapshot_candidates_to_retrieval",
-    )
-
-    assert set(compatibility_replay.__all__) == set(exported_symbols)
-    for symbol in exported_symbols:
-        assert getattr(compatibility_replay, symbol) is getattr(canonical_replay, symbol)
 
 
 def test_snapshot_replay_validates_and_reorders_without_raw_evidence() -> None:

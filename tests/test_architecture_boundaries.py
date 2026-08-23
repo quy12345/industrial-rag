@@ -58,6 +58,22 @@ def _local_imports(path: Path) -> set[str]:
     return imports
 
 
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    imports.update(
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    )
+    return imports
+
+
 def _import_graph() -> dict[str, set[str]]:
     paths = sorted(
         [*APP_ROOT.rglob("*.py"), *EVALUATION_ROOT.rglob("*.py"), *UI_ROOT.rglob("*.py")]
@@ -370,10 +386,19 @@ def test_retrieval_evaluation_is_owned_outside_production_package() -> None:
     assert "app.evaluation" not in graph["evaluation.retrieval"]
 
 
+def test_candidate_audit_is_owned_outside_production_package() -> None:
+    graph = _import_graph()
+
+    assert not (APP_ROOT / "candidate_audit.py").exists()
+    assert "app.domain.retrieval" in graph["evaluation.candidate_audit"]
+    assert "evaluation.retrieval" in graph["evaluation.candidate_audit"]
+    assert "app.evaluation" not in graph["evaluation.candidate_audit"]
+
+
 def test_sanitized_replay_is_owned_outside_production_package() -> None:
     graph = _import_graph()
 
-    assert "evaluation.replay" in graph["app.phase7_replay"]
+    assert not (APP_ROOT / "phase7_replay.py").exists()
     assert "app.domain.retrieval" in graph["evaluation.replay"]
     assert "app.domain.policies.ranking" in graph["evaluation.replay"]
     assert "app.models" not in graph["evaluation.replay"]
@@ -439,6 +464,53 @@ def test_dataset_validation_cli_uses_canonical_evaluation_interfaces() -> None:
         if isinstance(node, ast.ImportFrom) and node.module is not None
     }
     assert imported_modules == {"scripts.evaluation.validate_phase7_dataset"}
+
+
+def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
+    canonical_path = (
+        APP_ROOT.parent
+        / "scripts"
+        / "evaluation"
+        / "evaluate_phase7_retrieval_closure.py"
+    )
+    imports = _local_imports(canonical_path)
+
+    assert "app.application.reranking_service" in imports
+    assert "app.infrastructure.corpus_artifacts" in imports
+    assert "evaluation.phase7_dataset" in imports
+    assert "evaluation.retrieval" in imports
+    assert "evaluation.retrieval_closure" in imports
+    assert "app.evaluation" not in imports
+    assert "app.phase7" not in imports
+    assert "app.reranking" not in imports
+
+    compatibility_path = APP_ROOT.parent / "scripts" / "evaluate_phase7_retrieval_closure.py"
+    assert _imported_modules(compatibility_path) == {
+        "scripts.evaluation.evaluate_phase7_retrieval_closure"
+    }
+
+
+def test_supported_script_surface_is_explicit_and_has_no_private_cross_imports() -> None:
+    scripts_root = APP_ROOT.parent / "scripts"
+    supported = {
+        "audit_phase7_corpus.py",
+        "evaluate_phase7_e2e.py",
+        "evaluate_phase7_retrieval_closure.py",
+        "index_phase7_corpus.py",
+        "ingest_preview.py",
+        "query_smoke.py",
+        "validate_phase7_dataset.py",
+        "validate_query_runtime.py",
+    }
+    assert {path.name for path in scripts_root.glob("*.py")} == supported
+
+    for package in (scripts_root / "operations", scripts_root / "evaluation"):
+        for path in package.glob("*.py"):
+            if path.name == "__init__.py":
+                continue
+            assert not {
+                module for module in _imported_modules(path) if module.startswith("scripts.")
+            }
 
 
 def test_corpus_audit_cli_uses_canonical_artifact_infrastructure() -> None:

@@ -29,7 +29,7 @@ from evaluation.phase7_dataset import (
     validate_phase7_datasets,
 )
 from evaluation.retrieval import direct_evidence_rank
-from scripts.evaluate_phase7_retrieval_closure import aggregate_closure_rows
+from evaluation.retrieval_closure import aggregate_closure_rows
 
 MAX_PARETO_PROFILES = 6
 

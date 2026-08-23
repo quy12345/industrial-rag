@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.evaluate_phase7_retrieval_closure import aggregate_closure_rows
+from evaluation.retrieval_closure import aggregate_closure_rows
+from scripts import evaluate_phase7_retrieval_closure as compatibility_cli
+from scripts.evaluation import evaluate_phase7_retrieval_closure as canonical_cli
+
+
+def test_retrieval_closure_cli_shim_exports_canonical_main() -> None:
+    assert compatibility_cli.main is canonical_cli.main
 
 
 def _row(identifier: str, rank: int | None, *, wrong_document: bool = False) -> dict:

@@ -13,7 +13,6 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from app.candidate_audit import aggregate_candidate_audit, audit_case, dense_results_to_candidates
 from app.config import get_settings
 from app.evaluation import (
     EvaluationError,
@@ -40,6 +39,11 @@ from app.retrieval import (
     get_indexed_chunk_ids,
     validate_dense_collection,
     validate_index_manifest,
+)
+from evaluation.candidate_audit import (
+    aggregate_candidate_audit,
+    audit_case,
+    dense_results_to_candidates,
 )
 
 DEFAULT_DATASET = Path("data/eval/dense_smoke.jsonl")

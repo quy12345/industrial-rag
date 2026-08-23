@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from app.candidate_audit import (
+from app.domain import retrieval as candidate_assembly
+from app.models import RetrievalCandidate, RetrievedChunk
+from evaluation.candidate_audit import (
     aggregate_candidate_audit,
     audit_case,
     dense_results_to_candidates,
     union_dense_sparse_candidates,
 )
-from app.domain import retrieval as candidate_assembly
-from app.evaluation import EvaluationCase
-from app.models import RetrievalCandidate, RetrievedChunk
+from evaluation.retrieval import EvaluationCase
 
 
-def test_audit_facade_exports_canonical_candidate_assembly() -> None:
+def test_candidate_audit_exports_canonical_candidate_assembly() -> None:
     assert dense_results_to_candidates is candidate_assembly.dense_results_to_candidates
     assert union_dense_sparse_candidates is candidate_assembly.union_dense_sparse_candidates
 

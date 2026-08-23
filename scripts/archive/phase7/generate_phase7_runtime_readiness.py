@@ -16,7 +16,7 @@ from typing import Any
 
 from app.infrastructure.corpus_artifacts import write_json_atomic
 from app.phase7_optimization import PHASE7_CALIBRATION_FUSION_PROFILE
-from scripts.evaluate_phase7_retrieval_closure import _per_language
+from evaluation.retrieval_closure import aggregate_closure_rows_by_language
 
 
 def main() -> int:
@@ -90,7 +90,7 @@ def _gates(closure: dict[str, Any], cpu: dict[str, Any], facts: dict[str, Any]) 
     if not isinstance(closure_rows, list):
         raise ValueError("Closure artifact is missing per-query metrics.")
     overall = closure.get("overall", {})
-    per_language = _per_language(closure_rows)
+    per_language = aggregate_closure_rows_by_language(closure_rows)
     selected = cpu.get("quality", {}).get("selected_config")
     cpu_result = next(
         (

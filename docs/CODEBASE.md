@@ -65,10 +65,14 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   key/button, switch/change and technical-ID cues, then counts only targets after that relation in
   one candidate clause. It moved calibration 010 from rank 6 to 5 without runtime qrel access. This
   module has no Qdrant, provider, qrel, expected-page, expected-document, or answer-fact dependency.
-- `app/phase7_replay.py`: validates sanitized reranker snapshots and replays rank-only priors without
-  a model, Qdrant, provider, raw question, or chunk text.
-- `app/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage, critical
-  diagnostics, and RRF-demotion aggregation for the Phase 5 handoff.
+- `evaluation/replay.py`: validates sanitized reranker snapshots and replays rank-only priors without
+  a model, Qdrant, provider, raw question, or chunk text. The expired `app.phase7_replay` facade has
+  been removed.
+- `evaluation/candidate_audit.py`: dependency-free candidate-pool normalization, union, coverage,
+  critical diagnostics, and RRF-demotion aggregation for the historical Phase 5 handoff.
+- `evaluation/retrieval_closure.py`: shared provider-free closure aggregation, including aggregate
+  and per-language metrics; CLI modules consume this public evaluator instead of importing private
+  helpers from another script.
 - `app/reranking.py`: lazy FastEmbed cross-encoder adapter, exact candidate-text formatting,
   sparse/hybrid/union pool construction, strict output validation, deterministic reranking, stage
   latency, and direct-evidence failure classification.
@@ -109,8 +113,11 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   completed Phase 7 retrieval experiments retained for provenance.
 - `scripts/archive/phase7/evaluate_phase7_weighted_rerank.py`: unsupported completed local-Jina
   evaluation of the Phase 7.4 weighted-fusion shortlist, superseded by Phase 7.4.1–7.5 closure.
-- `scripts/evaluate_phase7_retrieval_closure.py`: runs the frozen Phase 7.4.1 retrieval and local Jina
-  reranker on answerable calibration only; no provider and no held-out execution.
+- `scripts/evaluate_phase7_retrieval_closure.py`: supported thin compatibility entry point for the
+  frozen Phase 7.4.1 retrieval closure. Its implementation lives in
+  `scripts/evaluation/evaluate_phase7_retrieval_closure.py`; metrics live in
+  `evaluation/retrieval_closure.py`. It uses local Jina on answerable calibration only, with no
+  provider and no held-out execution.
 - `scripts/archive/phase7/create_phase7_reranker_snapshot.py` and
   `calibrate_phase7_role_prior.py`: unsupported completed snapshot/replay selection workflow.
 - `scripts/archive/phase7/diagnose_phase7_calibration_005.py`: unsupported completed three-attempt
