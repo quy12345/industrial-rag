@@ -14,19 +14,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.evaluation import chunk_set_metadata, load_frozen_chunks
-from app.phase7 import (
+from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
+from app.infrastructure.corpus_artifacts import (
     PHASE7_DENSE_COLLECTION,
     PHASE7_HYBRID_COLLECTION,
+    chunk_set_metadata,
+    load_frozen_chunks,
+    write_json_atomic,
+    write_jsonl_atomic,
+)
+from evaluation.phase7_dataset import (
     Phase7DatasetItem,
     Phase7Error,
     dataset_sha256,
     read_phase7_dataset,
     validate_phase7_dataset,
-    write_json_atomic,
-    write_jsonl_atomic,
 )
-from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT
 
 APPROVAL_TOKEN = "APPROVE PHASE 7 HELDOUT V2 DATASET"
 PRIVATE_ROOT = Path("data/eval/phase7/private-heldout-v2")

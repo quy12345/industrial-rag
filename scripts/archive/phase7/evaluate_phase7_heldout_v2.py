@@ -16,13 +16,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.config import Settings
-from app.evaluation import chunk_set_metadata, load_frozen_chunks
 from app.evaluation_e2e import FACT_EVALUATOR_ID, aggregate_phase7_records, score_phase7_execution
 from app.generation import LangChainOpenAIGenerator
-from app.phase7 import (
-    dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_dataset,
+from app.infrastructure.corpus_artifacts import (
+    chunk_set_metadata,
+    load_frozen_chunks,
     write_json_atomic,
     write_jsonl_atomic,
 )
@@ -33,6 +31,11 @@ from app.retrieval_runtime import (
     LazyQueryRetriever,
     build_query_retriever,
     validate_frozen_runtime,
+)
+from evaluation.phase7_dataset import (
+    dataset_sha256,
+    read_phase7_dataset,
+    validate_phase7_dataset,
 )
 from scripts.evaluate_phase7_e2e import (
     _generation_configuration,

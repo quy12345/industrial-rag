@@ -120,10 +120,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `scripts/calibrate_phase7_role_prior.py`: runs six-fold, provider-free rank-prior selection from a
   schema-v2 snapshot, then tries the single registered list-completeness fallback if the finite rank
   grid fails. The fold mapping is evaluation-only and never imported by the runtime.
-- `scripts/diagnose_phase7_calibration_005.py`: separately approved three-attempt provider diagnostic
-  that reuses one retrieved/reranked evidence bundle. Raw answer debugging is restricted to ignored
-  `artifacts/private-debug/`; the metrics artifact is sanitized. The completed run produced three
-  positive deterministic matches with one retrieval and one reranker execution.
+- `scripts/archive/phase7/diagnose_phase7_calibration_005.py`: unsupported completed three-attempt
+  provider diagnostic retained with its private-debug and sanitization guards for provenance.
 - `scripts/aggregate_phase7_calibration_stability.py`: validates three independent schema-v5 runs,
   rejects identity/duplicate mismatches, and gates on the worst run instead of selecting the best.
 - `scripts/generate_phase7_calibration_closure_readiness.py`: writes the fail-closed technical and
@@ -133,8 +131,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `scripts/generate_phase7_fact_evaluator_readiness.py` and
   `scripts/generate_phase7_runtime_readiness.py`: fail-closed sanitized readiness artifacts for the
   typed-fact review boundary and provider-approval boundary.
-- `scripts/rescore_phase7_calibration_facts.py`: derives deterministic text-fact decisions from the
-  prior sanitized v2 diagnostics when raw provider answers are unavailable.
+- `scripts/archive/phase7/rescore_phase7_calibration_facts.py`: unsupported completed derivation of
+  deterministic text-fact decisions from the prior sanitized v2 diagnostics.
 - `scripts/archive/phase7/migrate_phase7_dataset_v2.py`: unsupported completed migration that revoked
   approval, added answer facts, and expanded qrels only across same-document exact-content duplicates.
 - `scripts/archive/phase7/draft_phase7_calibration_fact_types.py`: unsupported completed generator for
@@ -145,6 +143,10 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   generator retained for provenance; rerunning it would overwrite both frozen dataset splits.
 - `scripts/archive/phase7/freeze_phase7_dataset.py`: unsupported completed dataset-v2 approval/freeze
   command; the active evaluator uses calibration-v3 and its v3 manifest.
+- `scripts/archive/phase7/freeze_phase7_heldout_v2.py`: unsupported completed approval/freeze command
+  for the private replacement held-out v2 dataset.
+- `scripts/archive/phase7/evaluate_phase7_heldout_v2.py`: unsupported completed one-shot provider
+  evaluator for the private replacement held-out v2 dataset.
 
 ## Dense-index contract
 

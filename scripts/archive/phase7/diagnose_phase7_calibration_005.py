@@ -23,11 +23,10 @@ from app.errors import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
-from app.evaluation import load_frozen_chunks
 from app.evaluation_e2e import FACT_EVALUATOR_ID, score_expected_answer_fact
 from app.evidence_selection import select_evidence_candidates
 from app.generation import EvidenceBundle, LangChainOpenAIGenerator, format_evidence
-from app.phase7 import dataset_sha256, write_json_atomic
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
 from app.query_service import EvidenceGate
 from app.retrieval import create_qdrant_client
 from app.retrieval_runtime import (
@@ -35,6 +34,7 @@ from app.retrieval_runtime import (
     build_query_retriever,
     validate_frozen_runtime,
 )
+from evaluation.phase7_dataset import dataset_sha256
 from scripts.evaluate_phase7_e2e import (
     ACTIVE_CALIBRATION_PATH,
     ACTIVE_MANIFEST_PATH,

@@ -43,6 +43,14 @@ R07C5 archives the initial Phase 7 annotation generator. It had no approval toke
 and could overwrite both dataset splits plus the review receipt, so it cannot remain a supported tool.
 R07C6 archives the completed dataset-v2 freezer and corrects current docs that still presented it as a
 reproducibility command. The active evaluator pins calibration-v3 and the v3 manifest instead.
+R07C7 archives the completed private held-out-v2 freezer and resolves the stale walkthrough statement
+that the replacement set had not been frozen or executed.
+R07C8 archives the matching one-shot held-out-v2 evaluator. Its sanitized result is historical evidence,
+not a supported command or a tuning input.
+R07C9 archives the completed calibration-005 three-attempt provider diagnostic. Readiness keeps reading
+its sanitized artifact; the provider runner itself is no longer supported.
+R07C10 archives the completed provider-free fact rescore derived from an earlier sanitized diagnostics
+artifact. Both source and derived artifacts remain unchanged.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -195,6 +203,10 @@ Shared frozen-corpus flow:
 | [`scripts/archive/phase7/apply_phase7_answer_facts.py`](../../scripts/archive/phase7/apply_phase7_answer_facts.py) | Unsupported historical answer-fact source-review migration. |
 | [`scripts/archive/phase7/generate_phase7_annotation_draft.py`](../../scripts/archive/phase7/generate_phase7_annotation_draft.py) | Unsupported initial Phase 7 annotation generator. |
 | [`scripts/archive/phase7/freeze_phase7_dataset.py`](../../scripts/archive/phase7/freeze_phase7_dataset.py) | Unsupported historical dataset-v2 approval/freeze command. |
+| [`scripts/archive/phase7/freeze_phase7_heldout_v2.py`](../../scripts/archive/phase7/freeze_phase7_heldout_v2.py) | Unsupported completed private held-out-v2 freezer. |
+| [`scripts/archive/phase7/evaluate_phase7_heldout_v2.py`](../../scripts/archive/phase7/evaluate_phase7_heldout_v2.py) | Unsupported completed one-shot private held-out-v2 evaluator. |
+| [`scripts/archive/phase7/diagnose_phase7_calibration_005.py`](../../scripts/archive/phase7/diagnose_phase7_calibration_005.py) | Unsupported completed three-attempt provider diagnostic. |
+| [`scripts/archive/phase7/rescore_phase7_calibration_facts.py`](../../scripts/archive/phase7/rescore_phase7_calibration_facts.py) | Unsupported completed sanitized fact-rescore derivation. |
 | [`scripts/archive/phase7/README.md`](../../scripts/archive/phase7/README.md) | Archive policy, completion evidence, and no-rerun warning. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
@@ -353,6 +365,27 @@ evaluator explicitly pins `calibration-v3.jsonl` and `phase-7-evaluation-manifes
 v2 approval ceremony would therefore mutate frozen inputs without reproducing the active evaluator
 identity. Documentation now directs reproducibility checks to validation rather than mutation.
 
+The private held-out-v2 freezer is archived without a shim after its synthetic safety tests and help
+contract were recorded. Private approved JSONL/manifest paths and the sanitized final result exist, and
+README records the completed one-shot execution. The walkthrough's earlier “not frozen or executed”
+sentence contradicted that evidence and is corrected. No private dataset content was opened during this
+classification.
+
+The corresponding held-out-v2 evaluator is archived without a shim. Its provider approval, private-path
+guards, resumable checkpoint, and sanitization remain visible as provenance, but the command explicitly
+describes itself as a one-time execution and the final artifact already exists. Its run identity hashes
+shared evaluator/runtime sources, not this CLI file, so relocation does not rewrite historical identity.
+
+The calibration-005 diagnostic is archived without a shim. Its fake-provider tests recorded fixed
+evidence reuse, sanitized/private separation, the exactly-three-attempt guard, and private-debug path
+restriction before removal. The completed sanitized artifact remains consumed by readiness code; no
+consumer imports this CLI and its run identity does not hash this file.
+
+The fact-rescore command is archived without a shim. Its unit tests recorded the distinction between
+strict phrase matching and deterministic token-set reconstruction plus malformed-source rejection.
+Both its sanitized source artifact and derived output already exist, while no runtime/readiness code
+imports the command itself.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -418,6 +451,20 @@ unguarded writer.
 
 The dataset-v2 freeze archive boundary proves the old path is absent and the historical source depends
 on canonical domain, infrastructure, and evaluation owners rather than compatibility facades.
+
+The held-out-v2 freeze archive boundary provides the same dependency proof. Its four synthetic tests
+remain recorded as pre-move characterization rather than ongoing support for a completed command.
+
+The held-out-v2 evaluator boundary proves the old runner path is absent and that corpus/dataset concerns
+use canonical owners. Its two offline guards remain recorded as pre-move characterization.
+
+The calibration-005 diagnostic boundary proves the old provider runner path is absent and its
+corpus/dataset file concerns use canonical owners. Its three fake-provider tests are recorded as
+pre-move characterization rather than ongoing support.
+
+The fact-rescore boundary proves its former top-level path is absent and its dataset/output concerns
+use canonical evaluation and infrastructure owners. Its two unit tests remain recorded as pre-move
+characterization.
 
 ## 11. Commands and expected results
 
@@ -520,6 +567,42 @@ R07C6 pre-archive characterization:
 ```text
 python -m scripts.freeze_phase7_dataset --help
 exit 0; five historical options recorded without providing an approval token
+```
+
+R07C7 pre-archive characterization:
+
+```text
+pytest -q tests/test_freeze_phase7_heldout_v2.py
+4 passed
+python -m scripts.freeze_phase7_heldout_v2 --help
+exit 0; five historical options recorded without opening private data
+```
+
+R07C8 pre-archive characterization:
+
+```text
+pytest -q tests/test_evaluate_phase7_heldout_v2.py
+2 passed
+python -m scripts.evaluate_phase7_heldout_v2 --help
+exit 0; seven historical options recorded without provider or private-data access
+```
+
+R07C9 pre-archive characterization:
+
+```text
+pytest -q tests/test_phase7_005_diagnostic.py
+3 passed
+python -m scripts.diagnose_phase7_calibration_005 --help
+exit 0; seven historical options recorded without provider execution
+```
+
+R07C10 pre-archive characterization:
+
+```text
+pytest -q tests/test_phase7_fact_rescore.py
+2 passed
+python -m scripts.rescore_phase7_calibration_facts --help
+exit 0; three historical options recorded without reading artifact payloads
 ```
 
 ## 12. Small usage example
@@ -884,7 +967,112 @@ Proposed R07C6 commit after user review:
 chore: archive completed phase7 dataset freeze
 ```
 
+R07C6 was committed as `e3bcd40 chore: archive completed phase7 dataset freeze`.
+
+R07C7 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive synthetic tests | PASS — `4 passed` |
+| Legacy pre-archive `--help` | PASS — exit `0`; five options recorded |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `34 passed` |
+| Archived command `--help` | PASS — exit `0`; five-option contract preserved |
+| Removed top-level command | PASS — `scripts.freeze_phase7_heldout_v2` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `415 passed, 1 warning` |
+| Current-command reference search | PASS — current docs no longer advertise the old path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen/private-data scope | PASS — datasets, raw PDFs, artifacts, and review receipt are unchanged |
+| `git diff --check` | PASS |
+
+The suite count decreases by three because four synthetic tests for the unsupported freezer were
+replaced by one archive-boundary test. The warning remains the existing Starlette
+`TestClient`/`httpx` deprecation warning. R07C7 does not change dependencies.
+
+Proposed R07C7 commit after user review:
+
+```text
+chore: archive completed phase7 heldout freeze
+```
+
+R07C8 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive offline guards | PASS — `2 passed` |
+| Legacy pre-archive `--help` | PASS — exit `0`; seven options recorded |
+| Focused Ruff after import ordering | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `35 passed` |
+| Archived command `--help` | PASS — exit `0`; seven-option contract preserved |
+| Removed top-level command | PASS — `scripts.evaluate_phase7_heldout_v2` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `414 passed, 1 warning` |
+| Current-command reference search | PASS — current docs no longer advertise either old held-out path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen/private-data scope | PASS — datasets, raw PDFs, artifacts, and review receipt are unchanged |
+| `git diff --check` | PASS |
+
+The combined R07C7–R07C8 suite count is four lower than the committed baseline: six CLI-specific tests
+were replaced by two archive-boundary tests. The warning remains the existing Starlette
+`TestClient`/`httpx` deprecation warning. Neither slice changes dependencies.
+
+Proposed combined R07C7–R07C8 commit after user review:
+
+```text
+chore: archive completed phase7 heldout workflow
+```
+
+R07C9 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive fake-provider tests | PASS — `3 passed` |
+| Legacy pre-archive `--help` | PASS — exit `0`; seven options recorded |
+| Focused Ruff after import ordering | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `36 passed` |
+| Archived command `--help` | PASS — exit `0`; seven-option contract preserved |
+| Removed top-level command | PASS — `scripts.diagnose_phase7_calibration_005` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `412 passed, 1 warning` |
+| Current-command reference search | PASS — current docs no longer advertise the old runner |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen/private-data scope | PASS — datasets, debug output, artifacts, raw PDFs, and receipt are unchanged |
+| `git diff --check` | PASS |
+
+Across R07C7–R07C9, nine CLI-specific tests are replaced by three archive-boundary tests, so the suite
+is six tests smaller than the committed baseline. The warning remains the existing Starlette
+`TestClient`/`httpx` deprecation warning. These slices do not change dependencies.
+
+Proposed commit remains deferred until user review.
+
+R07C10 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive rescore tests | PASS — `2 passed` |
+| Legacy pre-archive `--help` | PASS — exit `0`; three options recorded |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `37 passed` |
+| Archived command `--help` | PASS — exit `0`; three-option contract preserved |
+| Removed top-level command | PASS — `scripts.rescore_phase7_calibration_facts` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `411 passed, 1 warning` |
+| Current-command reference search | PASS — no supported docs/code/tests reference the old path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen/artifact scope | PASS — datasets, debug output, artifacts, raw PDFs, and receipt are unchanged |
+| `git diff --check` | PASS |
+
+R07C10 replaces two CLI-specific tests with one archive-boundary test. The warning remains the existing
+Starlette `TestClient`/`httpx` deprecation warning; no dependency changes are made.
+
+No additional commit is proposed yet.
+
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07C5 are complete and committed through `ec2c52c`. R07C6 is implemented,
+`IN_PROGRESS` — R07A1–R07C6 are complete and committed through `e3bcd40`. R07C7–R07C10 are implemented,
 validated, and awaiting user review. Later R07 slices remain outside this slice.

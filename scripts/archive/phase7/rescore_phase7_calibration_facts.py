@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from app.evaluation_e2e import FACT_EVALUATOR_ID
-from app.phase7 import read_phase7_dataset, write_json_atomic
+from app.infrastructure.corpus_artifacts import write_json_atomic
+from evaluation.phase7_dataset import read_phase7_dataset
 
 
 def main() -> int:

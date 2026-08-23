@@ -9,6 +9,9 @@ and stable across three generations over one fixed evidence bundle. The 2026-08-
 continuation moves calibration 010 direct evidence into actual top 5, and the later three-run Gemini
 calibration passes all technical gates.
 
+The completed calibration-005 diagnostic runner is retained only under `scripts/archive/phase7/`.
+Its sanitized artifact remains an input to readiness checks; rerunning provider attempts is unsupported.
+
 Held-out status is `BLOCKED_GOVERNANCE`. Historical tracked documentation mirrored held-out content,
 and the old calibration CLI loaded both JSONL files. The current code closes those paths, but changing
 the present revision cannot erase statistical exposure in Git history.
@@ -22,11 +25,10 @@ held-out run, re-index, image build, or prune was performed.
 The historic split remains blocked forever as an unseen benchmark. A separate
 45-row replacement draft (30 answerable, 15 unanswerable) now lives under the
 Git-ignored local directory `data/eval/phase7/private-heldout-v2/`. Its qrels
-and expected phrases validated against the frozen 2,753-chunk corpus; it has
-not been frozen or executed. The generic freezer
-`scripts/freeze_phase7_heldout_v2.py` requires the exact human dataset token,
-keeps both the approved JSONL and its manifest in that private directory, and
-does not open calibration or historic held-out data. Git ignore reduces
+and expected phrases validated against the frozen 2,753-chunk corpus. It was subsequently frozen and
+used for the single approved final measurement described below. The completed freezer is retained only
+under `scripts/archive/phase7/`; it kept both the approved JSONL and its manifest in that private
+directory and did not open calibration or historic held-out data. Git ignore reduces
 repository exposure only; the workspace owner must apply OS-level ACLs if a
 stronger access boundary is needed.
 
@@ -35,7 +37,8 @@ The sanitized one-shot v2 artifact reports candidate recall `0.900`, Hit@5
 answerable rows), valid citation IDs `1.000`, two wrong-document citations,
 and abstention precision/recall `0.882`/`1.000`. It therefore does not meet the
 calibration release targets. It is a final observation for this v2 dataset, not
-a new tuning signal; any corrective iteration needs a fresh sealed benchmark.
+a new tuning signal. The completed one-shot evaluator is retained only under
+`scripts/archive/phase7/`; any corrective iteration needs a fresh sealed benchmark.
 The user-built ingestion image was only inspected: Python 3.11.15 and Docling/LangChain imports pass.
 Docker storage accounting reports 9.66 GB total, 9.515 GB unique, while image metadata reports
 3,255,679,310 bytes; image-size optimization remains a separate follow-up.

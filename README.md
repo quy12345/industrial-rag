@@ -31,26 +31,21 @@ JSONL in calibration mode and now refuses held-out execution, but Git history ca
 
 ### Replacement held-out v2 (private draft)
 
-A replacement v2 draft is stored only in the locally ignored
+A replacement v2 dataset is stored only in the locally ignored
 `data/eval/phase7/private-heldout-v2/` directory. It has 30 answerable and 15
 unanswerable items, was validated against the frozen 2,753-chunk corpus, and is
 not tracked by Git. Git ignore prevents accidental repository exposure; it is
-not an operating-system access-control list. Freeze it only after a human
-review with:
-
-```powershell
-docker compose --profile tools run --rm --no-deps `
-  -v "${PWD}:/workspace" -w /workspace ingestion `
-  python -m scripts.freeze_phase7_heldout_v2 `
-  --approval-token "APPROVE PHASE 7 HELDOUT V2 DATASET"
-```
+not an operating-system access-control list. Its human-reviewed freeze and one final execution are
+complete. The mutating freezer is retained under `scripts/archive/phase7/` for provenance and must not
+be rerun as a current workflow.
 
 Freezing is separate from provider egress. The user approved one final Gemini execution after freeze.
 The sanitized v2 artifact reports candidate recall `0.900`, Hit@5 `0.800`, MRR@5 `0.725`, deterministic
 fact accuracy `0.786` across 28 answered answerable items, valid citation IDs `1.000`, two
 wrong-document citations, and abstention precision/recall `0.882`/`1.000`. This is an honest final
 measurement for this v2 set, not a runtime-tuning input: the results do **not** meet the calibration
-release targets. Any further tuning needs a separately created and sealed future benchmark.
+release targets. The completed one-shot runner is retained under `scripts/archive/phase7/` and must not
+be rerun. Any further tuning needs a separately created and sealed future benchmark.
 
 The canonical runtime is Python 3.11 with `qdrant-client >=1.19.0,<1.20.0`, direct-pinned FastEmbed
 `0.8.0`,
@@ -195,7 +190,8 @@ python -m scripts.calibrate_phase7_role_prior
 python -m scripts.generate_phase7_calibration_closure_readiness
 ```
 
-The separately approved `diagnose_phase7_calibration_005` run is complete; its sanitized artifact is
+The separately approved calibration-005 diagnostic is complete; its unsupported runner is retained
+under `scripts/archive/phase7/`. Its sanitized artifact is
 `artifacts/metrics/phase-7-calibration-005-diagnostic-v1.json`, while raw debug data remains only in
 the ignored private-debug directory. The authorized V5 calibration ran three independent Gemini calls
 and passed worst-run aggregation: `12/12` deterministic answerable facts in every run, valid citation

@@ -14,6 +14,10 @@ modify frozen datasets or artifacts during Round 1.
 | `apply_phase7_answer_facts` | Applied the source-reviewed answer-fact mapping and narrow qrel correction before dataset approval. | The mapping was incorporated before the approved dataset-v2 and calibration-v3 freezes; no current runtime imports this command. |
 | `generate_phase7_annotation_draft` | Generated the initial review-only calibration/test annotation files and review document. | The tracked review receipt is now metadata-only and records the approved frozen dataset; no current consumer imports this generator. |
 | `freeze_phase7_dataset` | Approved dataset-v2 and wrote its historical evaluation manifest. | The active evaluator now pins calibration-v3 and the v3 manifest; both v2 and v3 receipts already exist. |
+| `freeze_phase7_heldout_v2` | Approved the private replacement held-out v2 dataset and wrote its private manifest. | The private approved files and sanitized one-shot result already exist; current governance forbids treating the set as a fresh tuning benchmark. |
+| `evaluate_phase7_heldout_v2` | Performed the explicitly approved one-shot private held-out-v2 provider evaluation. | The sanitized final artifact exists and is a historical measurement, not a rerunnable tuning command. |
+| `diagnose_phase7_calibration_005` | Reused one fixed evidence bundle for the approved three-attempt provider diagnostic. | The sanitized result records three positive attempts; readiness consumes that artifact rather than importing this command. |
+| `rescore_phase7_calibration_facts` | Reconstructed deterministic text-fact decisions from an earlier sanitized diagnostic artifact. | Both the historical source and derived rescore artifacts exist; no current consumer imports this command. |
 
 No compatibility shim is provided at the former top-level path. Read the source for provenance; do
 not run it against current data without a separately approved migration plan.
