@@ -24,6 +24,10 @@ thin error-translation wrapper so its public `EvaluationError` contract remains 
 
 R07B1 classifies the provider-free Phase 7 dataset validation command under `scripts.evaluation` and
 keeps `python -m scripts.validate_phase7_dataset` as a thin compatibility entry point.
+
+R07B2 classifies the redistribution-safe local PDF metadata audit under `scripts.operations`. It
+remains a supported reproducibility command because the current corpus walkthrough references it and
+its output documents source identity/parsing preconditions without storing substantial manual text.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -52,6 +56,9 @@ supported indexing CLI --> app.infrastructure.corpus_artifacts --> retrieval con
 
 legacy validation CLI --> scripts.evaluation.validate_phase7_dataset
                               --> evaluation.phase7_dataset / evaluation.retrieval
+
+legacy corpus audit CLI --> scripts.operations.audit_phase7_corpus
+                              --> app.infrastructure.corpus_artifacts
 ```
 
 The new top-level package makes ownership visible in the filesystem. It is installed in retrieval,
@@ -165,6 +172,8 @@ Shared frozen-corpus flow:
 | [`scripts/operations/index_phase7_corpus.py`](../../scripts/operations/index_phase7_corpus.py) | Uses corpus artifacts without importing either evaluation compatibility facade. |
 | [`scripts/evaluation/validate_phase7_dataset.py`](../../scripts/evaluation/validate_phase7_dataset.py) | Canonical provider-free dataset validation adapter. |
 | [`scripts/validate_phase7_dataset.py`](../../scripts/validate_phase7_dataset.py) | Thin compatibility entry point preserving the documented command. |
+| [`scripts/operations/audit_phase7_corpus.py`](../../scripts/operations/audit_phase7_corpus.py) | Canonical local corpus metadata/text-layer audit adapter. |
+| [`scripts/audit_phase7_corpus.py`](../../scripts/audit_phase7_corpus.py) | Thin compatibility entry point preserving the walkthrough command. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
 | [`tests/test_evaluate.py`](../../tests/test_evaluate.py) | Exercises the canonical module and verifies facade identity. |
@@ -172,6 +181,7 @@ Shared frozen-corpus flow:
 | [`tests/test_phase7.py`](../../tests/test_phase7.py) | Exercises canonical dataset contracts and both facade ownership branches. |
 | [`tests/test_phase7_index_cli.py`](../../tests/test_phase7_index_cli.py) | Protects supported indexing defaults through canonical corpus constants. |
 | [`tests/test_phase7_evaluation_cli.py`](../../tests/test_phase7_evaluation_cli.py) | Protects validation CLI defaults, orchestration, output, errors, and shim identity. |
+| [`tests/test_phase7_corpus_audit_cli.py`](../../tests/test_phase7_corpus_audit_cli.py) | Uses fake PDFs to protect sanitized audit behavior without reading manuals. |
 | [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) | Includes `evaluation` in the local import graph and forbids production reachability. |
 | This document | Records the implemented boundary and evidence for the whole R07 module. |
 
@@ -280,6 +290,11 @@ R07B1 starts CLI classification with the smallest current command that is read-o
 corpus/Qdrant/provider state and is not source-hashed. The old module remains executable and exports
 the exact canonical `main`; parser extraction only creates a test seam and does not change options.
 
+The corpus audit belongs in `scripts.operations`, not `scripts.evaluation`: it checks local source-file
+preconditions and emits metadata, but computes no retrieval or answer quality metric. It is retained
+rather than archived because the active Phase 7 corpus runbook still uses it. Tests substitute a fake
+PDF adapter and tiny placeholder files; no vendor manual content is opened or copied.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -319,6 +334,9 @@ indexing import guard now explicitly rejects both `app.phase7` and `app.evaluati
 Dataset-validation CLI tests protect all four default paths, helper call order, report output, success
 exit code, argparse error mapping, and old/new entry-point identity. Static tests reject compatibility
 facade imports in the canonical CLI and implementation code in the old shim.
+
+Corpus-audit CLI tests protect the two frozen source descriptors, parser defaults, streamed hashes,
+page/text-layer metadata, document cleanup, sanitized output, missing-file errors, and shim identity.
 
 ## 11. Commands and expected results
 
@@ -368,6 +386,13 @@ python -m scripts.validate_phase7_dataset --help
 exit 0; four existing options and description preserved
 ```
 
+R07B2 pre-move CLI characterization:
+
+```text
+python -m scripts.audit_phase7_corpus --help
+exit 0; existing `--raw-dir` and `--output` options preserved
+```
+
 ## 12. Small usage example
 
 ```python
@@ -403,6 +428,8 @@ The caller owns paths and retrieval execution. Importing the module performs no 
 - `app.evaluation_e2e` is deliberately pinned to preserve source identity; relocation is deferred
   until a versioned artifact-identity transition is explicitly approved.
 - Most evaluator, calibration, readiness, freeze, and migration CLIs are not classified yet.
+- The corpus audit remains optional and requires the ingestion image's existing PDF dependency when
+  run against local manuals; unit validation uses a fake and downloads nothing.
 - Evaluation and production packages are still present in the same installed image.
 - Frozen chunks and manifests remain explicit operational/reproducibility artifacts; R07A4 does not
   make the API read them per request and does not authorize deleting them.
@@ -526,14 +553,34 @@ R07B1 validation:
 | Local Markdown links | PASS — all links in this module document resolve |
 | `git diff --check` | PASS |
 
-Proposed R07B1 commit after user review:
+R07A4 and R07B1 were committed together as:
 
 ```text
-refactor: classify phase7 dataset validation CLI
+b9458bc refactor: separate corpus artifacts from evaluation commands
+```
+
+R07B2 validation:
+
+| Check | Result |
+| --- | --- |
+| Legacy pre-move `--help` | PASS — exit `0` |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused offline pytest with fake PDFs | PASS — `30 passed` |
+| Legacy/canonical exports | PASS — exact object identity |
+| Legacy and canonical `--help` | PASS — identical output, exit `0` |
+| Source-hash reference audit | PASS — command is not hashed by current identity builders |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `416 passed, 1 warning` |
+| Local Markdown links | PASS — all links in this module document resolve |
+| `git diff --check` | PASS |
+
+Proposed R07B2 commit after user review:
+
+```text
+refactor: classify phase7 corpus audit command
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07A3 are complete and committed. R07A4 remains validated and uncommitted by
-user request. R07B1 is implemented and validated; user review remains. Later R07 slices remain outside
-this slice.
+`IN_PROGRESS` — R07A1–R07B1 are complete and committed through `b9458bc`. R07B2 is implemented and
+validated; user review remains. Later R07 slices remain outside this slice.

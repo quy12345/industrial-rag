@@ -441,6 +441,26 @@ def test_dataset_validation_cli_uses_canonical_evaluation_interfaces() -> None:
     assert imported_modules == {"scripts.evaluation.validate_phase7_dataset"}
 
 
+def test_corpus_audit_cli_uses_canonical_artifact_infrastructure() -> None:
+    canonical_path = APP_ROOT.parent / "scripts" / "operations" / "audit_phase7_corpus.py"
+    imports = _local_imports(canonical_path)
+
+    assert imports == {"app.infrastructure.corpus_artifacts"}
+    assert "app.phase7" not in imports
+
+    compatibility_path = APP_ROOT.parent / "scripts" / "audit_phase7_corpus.py"
+    tree = ast.parse(
+        compatibility_path.read_text(encoding="utf-8"),
+        filename=str(compatibility_path),
+    )
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert imported_modules == {"scripts.operations.audit_phase7_corpus"}
+
+
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:
     graph = _import_graph()
 
