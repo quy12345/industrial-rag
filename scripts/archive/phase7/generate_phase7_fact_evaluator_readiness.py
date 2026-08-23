@@ -12,12 +12,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.evaluation import load_frozen_chunks
-from app.phase7 import (
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
+from evaluation.phase7_dataset import (
     dataset_sha256,
     read_phase7_dataset,
     validate_phase7_datasets,
-    write_json_atomic,
 )
 
 

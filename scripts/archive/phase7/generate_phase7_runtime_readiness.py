@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.infrastructure.corpus_artifacts import write_json_atomic
 from app.phase7_optimization import PHASE7_CALIBRATION_FUSION_PROFILE
 from scripts.evaluate_phase7_retrieval_closure import _per_language
 
@@ -152,8 +153,6 @@ def _sha256(path: Path) -> str:
 
 
 def _write(path: Path, value: dict[str, Any]) -> None:
-    from app.phase7 import write_json_atomic
-
     write_json_atomic(path, value)
 
 

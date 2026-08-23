@@ -51,6 +51,9 @@ R07C9 archives the completed calibration-005 three-attempt provider diagnostic. 
 its sanitized artifact; the provider runner itself is no longer supported.
 R07C10 archives the completed provider-free fact rescore derived from an earlier sanitized diagnostics
 artifact. Both source and derived artifacts remain unchanged.
+R07C11 archives the completed typed-fact and runtime readiness generators as one historical receipt
+chain. The typed draft is now approved as calibration-v3, runtime-readiness v2 exists, and the
+approved calibration provider run has completed; neither generator remains a current decision tool.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -207,6 +210,8 @@ Shared frozen-corpus flow:
 | [`scripts/archive/phase7/evaluate_phase7_heldout_v2.py`](../../scripts/archive/phase7/evaluate_phase7_heldout_v2.py) | Unsupported completed one-shot private held-out-v2 evaluator. |
 | [`scripts/archive/phase7/diagnose_phase7_calibration_005.py`](../../scripts/archive/phase7/diagnose_phase7_calibration_005.py) | Unsupported completed three-attempt provider diagnostic. |
 | [`scripts/archive/phase7/rescore_phase7_calibration_facts.py`](../../scripts/archive/phase7/rescore_phase7_calibration_facts.py) | Unsupported completed sanitized fact-rescore derivation. |
+| [`scripts/archive/phase7/generate_phase7_fact_evaluator_readiness.py`](../../scripts/archive/phase7/generate_phase7_fact_evaluator_readiness.py) | Unsupported completed typed-fact draft review receipt generator. |
+| [`scripts/archive/phase7/generate_phase7_runtime_readiness.py`](../../scripts/archive/phase7/generate_phase7_runtime_readiness.py) | Unsupported completed pre-egress runtime readiness receipt generator. |
 | [`scripts/archive/phase7/README.md`](../../scripts/archive/phase7/README.md) | Archive policy, completion evidence, and no-rerun warning. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
@@ -603,6 +608,17 @@ pytest -q tests/test_phase7_fact_rescore.py
 2 passed
 python -m scripts.rescore_phase7_calibration_facts --help
 exit 0; three historical options recorded without reading artifact payloads
+```
+
+R07C11 pre-archive characterization:
+
+```text
+pytest -q tests/test_phase7_fact_readiness.py tests/test_phase7_runtime_readiness.py
+2 passed
+python -m scripts.generate_phase7_fact_evaluator_readiness --help
+exit 0; five historical options recorded without reading datasets or artifacts
+python -m scripts.generate_phase7_runtime_readiness --help
+exit 0; four historical options recorded without reading readiness artifacts
 ```
 
 ## 12. Small usage example
@@ -1070,9 +1086,41 @@ R07C10 validation:
 R07C10 replaces two CLI-specific tests with one archive-boundary test. The warning remains the existing
 Starlette `TestClient`/`httpx` deprecation warning; no dependency changes are made.
 
-No additional commit is proposed yet.
+R07C7–R07C10 were committed together as:
+
+```text
+d8600cb chore: archive completed phase7 evaluation workflows
+```
+
+R07C11 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive offline tests | PASS — `2 passed` |
+| Legacy pre-archive `--help` | PASS — five and four options recorded without reading inputs |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `38 passed` |
+| Archived commands `--help` | PASS — five/four-option contracts preserved |
+| Removed top-level commands | PASS — both former module paths are unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `410 passed, 1 warning` |
+| Current-command reference search | PASS — current docs no longer advertise either old path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen/artifact scope | PASS — datasets, raw PDFs, artifacts, and review receipt are unchanged |
+| `git diff --check` | PASS |
+
+R07C11 replaces two CLI-specific tests with one archive-boundary test, so the suite has one fewer
+test. The warning remains the existing Starlette `TestClient`/`httpx` deprecation warning; no
+dependency changes are made.
+
+Proposed R07C11 commit after user review:
+
+```text
+chore: archive completed phase7 readiness receipts
+```
 
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07C6 are complete and committed through `e3bcd40`. R07C7–R07C10 are implemented,
+`IN_PROGRESS` — R07A1–R07C10 are complete and committed through `d8600cb`. R07C11 is implemented,
 validated, and awaiting user review. Later R07 slices remain outside this slice.

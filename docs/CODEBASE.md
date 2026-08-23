@@ -128,9 +128,9 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   governance decision without opening held-out content or calling Qdrant/provider.
 - `scripts/benchmark_phase7_reranker_cpu.py`: runs the bounded CPU micro/full ablation without Docker
   builds, re-indexing, provider calls, or held-out questions.
-- `scripts/generate_phase7_fact_evaluator_readiness.py` and
-  `scripts/generate_phase7_runtime_readiness.py`: fail-closed sanitized readiness artifacts for the
-  typed-fact review boundary and provider-approval boundary.
+- `scripts/archive/phase7/generate_phase7_fact_evaluator_readiness.py` and
+  `scripts/archive/phase7/generate_phase7_runtime_readiness.py`: unsupported completed generators for
+  the historical typed-fact review and pre-egress provider-approval receipts.
 - `scripts/archive/phase7/rescore_phase7_calibration_facts.py`: unsupported completed derivation of
   deterministic text-fact decisions from the prior sanitized v2 diagnostics.
 - `scripts/archive/phase7/migrate_phase7_dataset_v2.py`: unsupported completed migration that revoked

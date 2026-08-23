@@ -18,6 +18,8 @@ modify frozen datasets or artifacts during Round 1.
 | `evaluate_phase7_heldout_v2` | Performed the explicitly approved one-shot private held-out-v2 provider evaluation. | The sanitized final artifact exists and is a historical measurement, not a rerunnable tuning command. |
 | `diagnose_phase7_calibration_005` | Reused one fixed evidence bundle for the approved three-attempt provider diagnostic. | The sanitized result records three positive attempts; readiness consumes that artifact rather than importing this command. |
 | `rescore_phase7_calibration_facts` | Reconstructed deterministic text-fact decisions from an earlier sanitized diagnostic artifact. | Both the historical source and derived rescore artifacts exist; no current consumer imports this command. |
+| `generate_phase7_fact_evaluator_readiness` | Validated the review-required typed-fact draft and wrote a sanitized review receipt. | Calibration-v3 is approved and active, so the draft-only `HUMAN_REVIEW_REQUIRED` decision is historical. |
+| `generate_phase7_runtime_readiness` | Combined provider-free closure receipts into the pre-egress provider-approval decision. | The runtime-readiness v2 receipt exists and the approved calibration provider run has completed. |
 
 No compatibility shim is provided at the former top-level path. Read the source for provenance; do
 not run it against current data without a separately approved migration plan.

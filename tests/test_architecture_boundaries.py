@@ -654,6 +654,29 @@ def test_completed_phase7_fact_rescore_is_archive_only() -> None:
     assert "app.phase7" not in imports
 
 
+def test_completed_phase7_readiness_receipts_are_archive_only() -> None:
+    cases = {
+        "generate_phase7_fact_evaluator_readiness.py": {
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "generate_phase7_runtime_readiness.py": {
+            "app.infrastructure.corpus_artifacts",
+        },
+    }
+
+    for filename, required_imports in cases.items():
+        old_path = APP_ROOT.parent / "scripts" / filename
+        archived_path = APP_ROOT.parent / "scripts" / "archive" / "phase7" / filename
+
+        assert not old_path.exists()
+        assert archived_path.is_file()
+        imports = _local_imports(archived_path)
+        assert required_imports <= imports
+        assert "app.evaluation" not in imports
+        assert "app.phase7" not in imports
+
+
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:
     graph = _import_graph()
 
