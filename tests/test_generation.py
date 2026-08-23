@@ -24,6 +24,7 @@ from app.generation import (
     LangChainOpenAIGenerator,
     format_evidence,
 )
+from app.infrastructure.generation import langchain_structured as generation_adapter
 from app.models import RetrievalCandidate
 
 
@@ -112,6 +113,14 @@ def test_generation_facade_exports_canonical_contracts_and_prompt_policy() -> No
     assert generation_facade.SYSTEM_PROMPT is generation_prompt.SYSTEM_PROMPT
     assert generation_facade.HUMAN_PROMPT is generation_prompt.HUMAN_PROMPT
     assert generation_facade.format_evidence is generation_prompt.format_evidence
+    assert (
+        generation_facade.LangChainStructuredGenerator
+        is generation_adapter.LangChainStructuredGenerator
+    )
+    assert issubclass(
+        generation_facade.LangChainOpenAIGenerator,
+        generation_adapter.LangChainStructuredGenerator,
+    )
 
 
 def test_evidence_labels_mapping_and_format_are_deterministic() -> None:

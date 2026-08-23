@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import lru_cache
 
+from app.application.generation_prompt import HUMAN_PROMPT, SYSTEM_PROMPT, build_correction_text
 from app.config import Settings, get_settings, resolve_retrieval_runtime
-from app.generation import LangChainOpenAIGenerator
+from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
 from app.query_service import EvidenceGate, QueryService
 from app.retrieval import create_qdrant_client
 from app.retrieval_runtime import (
@@ -27,7 +28,12 @@ def build_query_service(settings: Settings) -> QueryService:
             lambda: build_query_retriever(resolved, contract=contract)
         ),
         evidence_gate=EvidenceGate(score_threshold=resolved.evidence_score_threshold),
-        generator=LangChainOpenAIGenerator(resolved),
+        generator=LangChainStructuredGenerator(
+            resolved,
+            system_prompt=SYSTEM_PROMPT,
+            human_prompt=HUMAN_PROMPT,
+            correction_text_builder=build_correction_text,
+        ),
         settings=resolved,
     )
 

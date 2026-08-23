@@ -30,13 +30,16 @@ def test_build_query_service_uses_one_resolved_graph_and_keeps_retrieval_lazy(mo
         events.append(("build_retriever", settings, contract))
         return retriever
 
-    def build_generator(settings):
+    prompt_policy: dict[str, object] = {}
+
+    def build_generator(settings, **kwargs):
         events.append(("build_generator", settings))
+        prompt_policy.update(kwargs)
         return generator
 
     monkeypatch.setattr(bootstrap, "resolve_retrieval_runtime", resolve)
     monkeypatch.setattr(bootstrap, "build_query_retriever", build_retriever)
-    monkeypatch.setattr(bootstrap, "LangChainOpenAIGenerator", build_generator)
+    monkeypatch.setattr(bootstrap, "LangChainStructuredGenerator", build_generator)
     monkeypatch.setattr(bootstrap, "LazyQueryRetriever", FakeLazyRetriever)
 
     service = bootstrap.build_query_service(source)
@@ -47,6 +50,11 @@ def test_build_query_service_uses_one_resolved_graph_and_keeps_retrieval_lazy(mo
     ]
     assert service.settings is resolved
     assert service.generator is generator
+    assert prompt_policy == {
+        "system_prompt": bootstrap.SYSTEM_PROMPT,
+        "human_prompt": bootstrap.HUMAN_PROMPT,
+        "correction_text_builder": bootstrap.build_correction_text,
+    }
     assert service.evidence_gate.score_threshold == -0.25
     assert isinstance(service.retriever, FakeLazyRetriever)
 

@@ -185,6 +185,18 @@ def test_grounded_query_consumers_use_canonical_generation_contracts_and_prompt_
     assert "app.generation" not in graph["app.citations"]
 
 
+def test_generation_adapter_is_composed_without_compatibility_or_application_dependencies() -> None:
+    graph = _import_graph()
+    adapter = graph["app.infrastructure.generation.langchain_structured"]
+
+    assert "app.domain.generation" in adapter
+    assert "app.generation" not in adapter
+    assert "app.application.generation_prompt" not in adapter
+    assert "app.infrastructure.generation.langchain_structured" in graph["app.bootstrap"]
+    assert "app.application.generation_prompt" in graph["app.bootstrap"]
+    assert "app.generation" not in graph["app.bootstrap"]
+
+
 def test_reranking_service_uses_domain_candidate_assembly_not_evaluation_audit() -> None:
     graph = _import_graph()
 
