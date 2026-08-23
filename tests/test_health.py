@@ -2,12 +2,21 @@
 
 from fastapi.testclient import TestClient
 
+from app.api import dependencies
 from app.api.app import create_app
-from app.config import Settings
+from app.application.query_service import QueryService
+from app.bootstrap import get_query_service
+from app.config import Settings, get_settings
 from app.main import app
 from app.retrieval import RetrievalError
 
 client = TestClient(app)
+
+
+def test_api_dependency_seams_preserve_composition_identity() -> None:
+    assert dependencies.QueryService is QueryService
+    assert dependencies.get_query_service is get_query_service
+    assert dependencies.get_settings is get_settings
 
 
 def test_health_endpoint() -> None:

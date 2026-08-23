@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.api.dependencies import (
+    QueryServiceProvider,
+    ReadinessChecker,
+    Settings,
+    build_readiness_checker,
+    get_query_service,
+    get_settings,
+)
+from app.api.health import create_health_router
 from app.api.query import router as query_router
-from app.bootstrap import ReadinessChecker, build_readiness_checker, get_query_service
-from app.config import Settings, get_settings
-from app.models import HealthResponse, ReadinessResponse
-from app.query_service import QueryService
 from app.request_context import request_id
-from app.retrieval import RetrievalError
-
-QueryServiceProvider = Callable[[], QueryService]
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -48,6 +49,13 @@ def create_app(
         default_response_class=UTF8JSONResponse,
     )
     application.include_router(query_router, prefix=effective_settings.api_prefix)
+    application.include_router(
+        create_health_router(
+            effective_settings,
+            readiness_checker=effective_readiness,
+        ),
+        prefix=effective_settings.api_prefix,
+    )
     if settings is not None:
         application.dependency_overrides[get_settings] = lambda: effective_settings
     if query_service_provider is not None:
@@ -68,43 +76,5 @@ def create_app(
             return response
         finally:
             request_id.reset(token)
-
-    @application.get(
-        f"{effective_settings.api_prefix}/health",
-        response_model=HealthResponse,
-    )
-    def health() -> HealthResponse:
-        """Return the service health status."""
-
-        return HealthResponse(
-            status="ok",
-            service="industrial-rag",
-            version=effective_settings.app_version,
-        )
-
-    @application.get(
-        f"{effective_settings.api_prefix}/ready",
-        response_model=ReadinessResponse,
-    )
-    def ready() -> ReadinessResponse:
-        """Check frozen Qdrant identity through the injected readiness seam."""
-
-        try:
-            effective_readiness()
-        except RetrievalError:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "detail": {
-                        "code": "retrieval_not_ready",
-                        "message": "Retrieval is unavailable.",
-                    }
-                },
-            )
-        return ReadinessResponse(
-            status="ok",
-            service="industrial-rag",
-            version=effective_settings.app_version,
-        )
 
     return application

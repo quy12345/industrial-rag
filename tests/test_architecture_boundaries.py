@@ -91,6 +91,8 @@ def test_inbound_adapters_are_not_imported_by_other_application_modules() -> Non
         "app.api",
         "app.api.app",
         "app.api.auth",
+        "app.api.dependencies",
+        "app.api.health",
         "app.api.query",
     }
     unexpected = {
@@ -174,6 +176,24 @@ def test_application_services_have_no_adapter_or_evaluation_dependency() -> None
             or dependency == "app.infrastructure"
             or dependency.startswith("app.infrastructure.")
         }
+
+
+def test_fastapi_modules_use_one_explicit_dependency_seam() -> None:
+    graph = _import_graph()
+
+    dependencies = graph["app.api.dependencies"]
+    assert "app.application.query_service" in dependencies
+    assert "app.bootstrap" in dependencies
+    assert "app.config" in dependencies
+
+    for module in ("app.api.app", "app.api.auth", "app.api.health", "app.api.query"):
+        assert "app.api.dependencies" in graph[module]
+        assert "app.bootstrap" not in graph[module]
+        assert "app.config" not in graph[module]
+        assert "app.query_service" not in graph[module]
+
+    assert "app.api.health" in graph["app.api.app"]
+    assert "app.api.query" in graph["app.api.app"]
 
 
 def test_grounded_query_consumers_use_canonical_generation_contracts_and_prompt_policy() -> None:

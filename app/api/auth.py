@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException
 
-from app.config import Settings, get_settings
+from app.api.dependencies import Settings, get_settings
 
 
 def require_query_auth(
