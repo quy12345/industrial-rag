@@ -60,9 +60,7 @@ included in reranker/evidence inputs; expected document IDs are never used as a 
 
 ```powershell
 python -m scripts.validate_phase7_dataset
-# Reproduce the already-completed dataset-v2 freeze if the reviewed files are unchanged.
-python -m scripts.freeze_phase7_dataset `
-  --approval-token "APPROVE PHASE 7 DATASET V2"
+# Dataset approval/freeze commands are completed and retained only under scripts/archive/phase7/.
 python -m scripts.audit_phase7_retrieval_failures
 python -m scripts.calibrate_phase7_retrieval
 python -m scripts.evaluate_phase7_retrieval_closure

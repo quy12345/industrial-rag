@@ -41,6 +41,8 @@ R07C4 archives the earlier answer-fact source-review migration. Its mappings rem
 provenance, but the command that can rewrite both frozen dataset splits is no longer supported.
 R07C5 archives the initial Phase 7 annotation generator. It had no approval token or argument parser
 and could overwrite both dataset splits plus the review receipt, so it cannot remain a supported tool.
+R07C6 archives the completed dataset-v2 freezer and corrects current docs that still presented it as a
+reproducibility command. The active evaluator pins calibration-v3 and the v3 manifest instead.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -192,6 +194,7 @@ Shared frozen-corpus flow:
 | [`scripts/archive/phase7/freeze_phase7_calibration_v3.py`](../../scripts/archive/phase7/freeze_phase7_calibration_v3.py) | Unsupported historical calibration-v3 approval/freeze command. |
 | [`scripts/archive/phase7/apply_phase7_answer_facts.py`](../../scripts/archive/phase7/apply_phase7_answer_facts.py) | Unsupported historical answer-fact source-review migration. |
 | [`scripts/archive/phase7/generate_phase7_annotation_draft.py`](../../scripts/archive/phase7/generate_phase7_annotation_draft.py) | Unsupported initial Phase 7 annotation generator. |
+| [`scripts/archive/phase7/freeze_phase7_dataset.py`](../../scripts/archive/phase7/freeze_phase7_dataset.py) | Unsupported historical dataset-v2 approval/freeze command. |
 | [`scripts/archive/phase7/README.md`](../../scripts/archive/phase7/README.md) | Archive policy, completion evidence, and no-rerun warning. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
@@ -344,6 +347,12 @@ The current tracked review file is instead a metadata-only frozen receipt, and t
 is already approved. Import-only characterization avoids both raw dataset access and mutation while
 recording the source contract before removal.
 
+The dataset-v2 freezer is archived without a shim. Although README and the Phase 7 walkthrough still
+called it reproducible, its defaults target `calibration.jsonl` and the non-v3 manifest. The active
+evaluator explicitly pins `calibration-v3.jsonl` and `phase-7-evaluation-manifest-v3.json`; rerunning the
+v2 approval ceremony would therefore mutate frozen inputs without reproducing the active evaluator
+identity. Documentation now directs reproducibility checks to validation rather than mutation.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -406,6 +415,9 @@ the move and then removed because archive provenance is intentionally unsupporte
 The annotation-generator archive boundary proves its former path is absent and its only application
 dependency is the canonical corpus-artifact loader. No functional test is added for an unsupported,
 unguarded writer.
+
+The dataset-v2 freeze archive boundary proves the old path is absent and the historical source depends
+on canonical domain, infrastructure, and evaluation owners rather than compatibility facades.
 
 ## 11. Commands and expected results
 
@@ -501,6 +513,13 @@ R07C5 pre-archive characterization:
 ```text
 import scripts.generate_phase7_annotation_draft
 PASS; `main()` has zero parameters and was not called
+```
+
+R07C6 pre-archive characterization:
+
+```text
+python -m scripts.freeze_phase7_dataset --help
+exit 0; five historical options recorded without providing an approval token
 ```
 
 ## 12. Small usage example
@@ -836,7 +855,36 @@ Proposed R07C5 commit after user review:
 chore: archive completed phase7 annotation generator
 ```
 
+R07C5 was committed as `ec2c52c chore: archive completed phase7 annotation generator`.
+
+R07C6 validation:
+
+| Check | Result |
+| --- | --- |
+| Legacy pre-archive `--help` | PASS — exit `0`; five options recorded without a token |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `33 passed` |
+| Archived command `--help` | PASS — exit `0`; five-option contract preserved |
+| Removed top-level command | PASS — `scripts.freeze_phase7_dataset` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `418 passed, 1 warning` |
+| Current-command reference search | PASS — README/walkthrough no longer advertise the old path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen-data/artifact scope | PASS — datasets, raw PDFs, artifacts, and review receipt are unchanged |
+| `git diff --check` | PASS |
+
+The suite gains one archive-boundary test because no functional freezer test existed to remove. The
+warning remains the existing Starlette `TestClient`/`httpx` deprecation warning. R07C6 does not change
+dependencies.
+
+Proposed R07C6 commit after user review:
+
+```text
+chore: archive completed phase7 dataset freeze
+```
+
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07C4 are complete and committed through `4f38d17`. R07C5 is implemented,
+`IN_PROGRESS` — R07A1–R07C5 are complete and committed through `ec2c52c`. R07C6 is implemented,
 validated, and awaiting user review. Later R07 slices remain outside this slice.

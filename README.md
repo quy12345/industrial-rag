@@ -100,13 +100,10 @@ dataset contract locally without models or Qdrant:
 python -m scripts.validate_phase7_dataset
 ```
 
-The reproducible freeze command is shown below. It has already completed for the current files; the
-historical v1 approval token is intentionally rejected:
-
-```powershell
-python -m scripts.freeze_phase7_dataset `
-  --approval-token "APPROVE PHASE 7 DATASET V2"
-```
+The dataset-v2 and calibration-v3 approval ceremonies are complete. Their mutating freeze commands are
+retained under `scripts/archive/phase7/` for provenance and are not supported reproducibility commands.
+Use the validation command above to verify the current frozen contract without rewriting datasets or
+manifests.
 
 The real end-to-end evaluator refuses draft datasets. Calibration mode validates only
 `calibration-v3.jsonl`, frozen chunks, and manifest metadata; it obtains the held-out hash from the

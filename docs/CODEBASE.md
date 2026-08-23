@@ -143,6 +143,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   for 42 answerable rows and the documented calibration 011/012 qrel correction.
 - `scripts/archive/phase7/generate_phase7_annotation_draft.py`: unsupported initial annotation
   generator retained for provenance; rerunning it would overwrite both frozen dataset splits.
+- `scripts/archive/phase7/freeze_phase7_dataset.py`: unsupported completed dataset-v2 approval/freeze
+  command; the active evaluator uses calibration-v3 and its v3 manifest.
 
 ## Dense-index contract
 
