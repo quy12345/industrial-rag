@@ -8,7 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.evaluation import (
+import app.evaluation as compatibility_evaluation
+from app.models import DocumentChunk
+from evaluation import retrieval as retrieval_evaluation
+from evaluation.retrieval import (
     EvaluationCase,
     EvaluationError,
     aggregate_rows,
@@ -18,7 +21,6 @@ from app.evaluation import (
     percentile_nearest_rank,
     validate_cases_against_chunks,
 )
-from app.models import DocumentChunk
 from scripts.archive.phase6 import evaluate as evaluate_cli
 
 
@@ -69,6 +71,33 @@ def _result(
         headings=["Heading"],
         score=0.9,
     )
+
+
+def test_app_evaluation_facade_exports_canonical_retrieval_utilities() -> None:
+    exported_symbols = (
+        "DocumentLanguage",
+        "EvaluationCase",
+        "EvaluationCategory",
+        "EvaluationError",
+        "EvaluationLanguage",
+        "RetrievedLike",
+        "RetrievalScenario",
+        "aggregate_rows",
+        "chunk_set_metadata",
+        "diagnostic_page_rank",
+        "diagnostic_phrase_rank",
+        "direct_evidence_rank",
+        "evaluate_cases",
+        "load_evaluation_cases",
+        "load_frozen_chunks",
+        "percentile_nearest_rank",
+        "phrase_matches",
+        "validate_cases_against_chunks",
+    )
+
+    assert set(compatibility_evaluation.__all__) == set(exported_symbols)
+    for symbol in exported_symbols:
+        assert getattr(compatibility_evaluation, symbol) is getattr(retrieval_evaluation, symbol)
 
 
 def test_dataset_loader_rejects_missing_qrels_duplicate_ids_and_bad_json(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ RUN useradd --create-home appuser \
 
 COPY pyproject.toml README.md ./
 COPY app ./app
+COPY evaluation ./evaluation
 
 RUN pip install --no-cache-dir ".[retrieval]"
 

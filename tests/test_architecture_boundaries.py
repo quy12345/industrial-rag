@@ -6,6 +6,7 @@ import ast
 from pathlib import Path
 
 APP_ROOT = Path(__file__).parents[1] / "app"
+EVALUATION_ROOT = Path(__file__).parents[1] / "evaluation"
 UI_ROOT = Path(__file__).parents[1] / "ui"
 
 PRODUCTION_RUNTIME_ROOTS = {
@@ -36,27 +37,34 @@ def _module_name(path: Path) -> str:
     return ".".join(parts)
 
 
-def _app_imports(path: Path) -> set[str]:
+def _local_imports(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imports: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module is not None:
-            if node.module == "app":
+            if node.module in {"app", "evaluation"}:
                 imports.update(
-                    f"app.{alias.name}" for alias in node.names if alias.name != "*"
+                    f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*"
                 )
-            elif node.module.startswith("app."):
+            elif node.module.startswith(("app.", "evaluation.")):
                 imports.add(node.module)
         elif isinstance(node, ast.Import):
-            imports.update(alias.name for alias in node.names if alias.name.startswith("app."))
+            imports.update(
+                alias.name
+                for alias in node.names
+                if alias.name in {"app", "evaluation"}
+                or alias.name.startswith(("app.", "evaluation."))
+            )
     return imports
 
 
 def _import_graph() -> dict[str, set[str]]:
-    paths = sorted([*APP_ROOT.rglob("*.py"), *UI_ROOT.rglob("*.py")])
+    paths = sorted(
+        [*APP_ROOT.rglob("*.py"), *EVALUATION_ROOT.rglob("*.py"), *UI_ROOT.rglob("*.py")]
+    )
     modules = {_module_name(path): path for path in paths}
     return {
-        module: {dependency for dependency in _app_imports(path) if dependency in modules}
+        module: {dependency for dependency in _local_imports(path) if dependency in modules}
         for module, path in modules.items()
     }
 
@@ -79,7 +87,9 @@ def test_production_runtime_cannot_reach_evaluation() -> None:
     for root in PRODUCTION_RUNTIME_ROOTS:
         for source in _reachable_modules(graph, root):
             for dependency in graph[source]:
-                if dependency == "app.evaluation" or dependency.startswith("app.evaluation."):
+                if dependency == "app.evaluation" or dependency.startswith(
+                    ("app.evaluation.", "evaluation.")
+                ) or dependency == "evaluation":
                     violations.add((root, source, dependency))
 
     assert violations == set()
@@ -179,6 +189,8 @@ def test_application_services_have_no_adapter_or_evaluation_dependency() -> None
             for dependency in dependencies
             if dependency == "app.evaluation"
             or dependency.startswith("app.evaluation.")
+            or dependency == "evaluation"
+            or dependency.startswith("evaluation.")
             or dependency == "app.infrastructure"
             or dependency.startswith("app.infrastructure.")
         }
@@ -346,6 +358,15 @@ def test_runtime_composes_canonical_reranking_service_not_evaluation_facade() ->
 
     assert "app.application.reranking_service" in graph["app.retrieval_runtime"]
     assert "app.reranking" not in graph["app.retrieval_runtime"]
+
+
+def test_retrieval_evaluation_is_owned_outside_production_package() -> None:
+    graph = _import_graph()
+
+    assert "evaluation.retrieval" in graph["app.evaluation"]
+    assert "app.domain.documents" in graph["evaluation.retrieval"]
+    assert "app.models" not in graph["evaluation.retrieval"]
+    assert "app.evaluation" not in graph["evaluation.retrieval"]
 
 
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:
