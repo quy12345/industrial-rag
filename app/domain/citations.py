@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from app.contracts.query import Citation
 from app.domain.generation import GeneratedAnswer
 from app.errors import CitationValidationError
-from app.models import Citation, RetrievalCandidate
+from app.models import RetrievalCandidate
 
 
 @dataclass(frozen=True)

@@ -2,8 +2,11 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field
 
+from app.contracts.query import Citation as Citation
+from app.contracts.query import QueryRequest as QueryRequest
+from app.contracts.query import QueryResponse as QueryResponse
 from app.domain.documents import DocumentChunk as DocumentChunk
 
 
@@ -59,55 +62,3 @@ class RetrievalCandidate(BaseModel):
     rrf_rank: int | None = Field(default=None, ge=1)
     rerank_score: float | None = None
     rerank_rank: int | None = Field(default=None, ge=1)
-
-
-class QueryRequest(BaseModel):
-    """Validated request body for the grounded query endpoint."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    question: str
-    document_id: str | None = None
-    top_k: int = Field(default=5, ge=1, le=10)
-
-    @field_validator("question")
-    @classmethod
-    def validate_question(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("question must not be empty")
-        return normalized
-
-    @field_validator("document_id")
-    @classmethod
-    def validate_document_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("document_id must not be empty")
-        return normalized
-
-
-class Citation(BaseModel):
-    """Trusted citation metadata built from a retrieved Qdrant payload."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    chunk_id: str
-    document_id: str
-    filename: str
-    page_numbers: list[int]
-    headings: list[str]
-    excerpt: str
-
-
-class QueryResponse(BaseModel):
-    """Public grounded-answer response."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    answer: str
-    abstained: bool
-    abstention_reason: str | None = None
-    citations: list[Citation] = Field(default_factory=list)

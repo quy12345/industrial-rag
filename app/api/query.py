@@ -10,6 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.auth import require_query_auth
 from app.api.dependencies import QueryService, get_query_service
+from app.contracts.query import QueryRequest, QueryResponse
 from app.errors import (
     LLMNotConfiguredError,
     LLMTimeoutError,
@@ -17,7 +18,6 @@ from app.errors import (
     RerankerUnavailableError,
     RetrievalUnavailableError,
 )
-from app.models import QueryRequest, QueryResponse
 
 logger = logging.getLogger(__name__)
 

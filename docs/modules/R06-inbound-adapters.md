@@ -17,6 +17,12 @@ thin compatibility shims. Archived Phase 6 tools remain unsupported and untouche
 R06B2 applies the same classification to the supported ingestion preview and guarded Phase 7 corpus
 index command. It moves no indexing policy and executes no ingestion or Qdrant operation.
 
+R06C1 establishes `app.contracts.query` as the canonical owner of the three public query DTOs. The
+old `app.models` symbols remain direct aliases, while UI imports move only in R06C2.
+
+R06C2 moves the Streamlit API client, state helpers, and renderer to that canonical contract. Static
+architecture coverage now proves the UI can reach backend code only through `app.contracts.query`.
+
 ## 2. Position in the system
 
 ```text
@@ -72,6 +78,10 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
 10. Operational smoke shims delegate to canonical Phase 7 command modules without duplicating logic.
 11. Ingestion/indexing shims delegate to canonical operational modules; the index command validates
     collection targets before reading chunks, creating models, or opening Qdrant.
+12. The application constructs a canonical `QueryResponse`; FastAPI serializes that same contract and
+    compatibility consumers receive the identical class through `app.models`.
+13. Streamlit sends JSON only through `RAGAPIClient`, validates the response as `QueryResponse`, then
+    passes that DTO to bounded session history and rendering helpers.
 
 ## 6. Responsibilities of changed files
 
@@ -106,6 +116,23 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
 - [`tests/test_ingestion.py`](../../tests/test_ingestion.py) and
   [`tests/test_phase7_index_cli.py`](../../tests/test_phase7_index_cli.py) protect shim identity,
   parser defaults, failure ordering, atomic output, mutation order, and verification behavior.
+- [`app/contracts/query.py`](../../app/contracts/query.py) owns `QueryRequest`, `Citation`, and
+  `QueryResponse`, including their exact Pydantic validation and schema behavior.
+- [`app/models.py`](../../app/models.py) retains internal retrieval/health records and directly
+  compatibility-exports the canonical query contracts.
+- [`app/application/query_service.py`](../../app/application/query_service.py),
+  [`app/domain/citations.py`](../../app/domain/citations.py), and
+  [`app/api/query.py`](../../app/api/query.py) consume canonical query contracts while continuing to
+  use internal candidate records where required.
+- [`tests/test_query_api.py`](../../tests/test_query_api.py) protects facade class identity in addition
+  to the established schema, validation, and HTTP mappings.
+- [`ui/api_client.py`](../../ui/api_client.py), [`ui/state.py`](../../ui/state.py), and
+  [`ui/streamlit_app.py`](../../ui/streamlit_app.py) consume only the shared query contract from the
+  backend package; all runtime communication remains HTTP-only.
+- [`tests/test_streamlit_api_client.py`](../../tests/test_streamlit_api_client.py) protects canonical
+  response typing, exact request bodies, auth, sanitized failures, timeout, and no POST retry.
+- [`tests/test_streamlit_app.py`](../../tests/test_streamlit_app.py) protects document options,
+  response/history behavior, and page labels using canonical contract instances.
 
 ## 7. Important symbols and why they exist
 
@@ -120,6 +147,10 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
 - `scripts.operations.validate_query_runtime.main`: supported read-only retrieval smoke orchestration.
 - `scripts.operations.ingest_preview.main`: supported document preview adapter with optional JSONL.
 - `scripts.operations.index_phase7_corpus.main`: explicit guarded corpus mutation adapter.
+- `QueryRequest`: strict, normalized public query input with bounded `top_k`.
+- `Citation`: public trusted citation metadata schema.
+- `QueryResponse`: public grounded answer or abstention schema shared by API and UI.
+- `RAGAPIClient`: the UI's only runtime gateway to health, readiness, and query HTTP endpoints.
 
 ## 8. Before-and-after structure
 
@@ -170,6 +201,31 @@ scripts.ingest_preview       ──> scripts.operations.ingest_preview
 scripts.index_phase7_corpus ──> scripts.operations.index_phase7_corpus
 ```
 
+After R06C1:
+
+```text
+app.contracts.query
+├── QueryRequest
+├── Citation
+└── QueryResponse
+       ↑             ↑                ↑
+application       FastAPI        app.models facade
+```
+
+After R06C2:
+
+```text
+Streamlit renderer/state
+        |
+        v
+RAGAPIClient ──HTTP──> FastAPI
+        |
+        v
+app.contracts.query.QueryResponse
+
+Streamlit  ✕→  application/domain/infrastructure/config/models facade
+```
+
 ## 9. Design decisions and trade-offs
 
 - Dependency symbols are direct aliases, so FastAPI override keys retain object identity.
@@ -177,8 +233,8 @@ scripts.index_phase7_corpus ──> scripts.operations.index_phase7_corpus
   module-level mutable state would make tests and multiple app instances unsafe.
 - Query, auth, and readiness error payloads are not consolidated in R06A because changing their
   construction while moving boundaries would mix structural work with transport-policy redesign.
-- HTTP DTOs remain in `app.models` during R06A. R06C owns separating stable shared query contracts and
-  updating Streamlit imports in one reviewed slice.
+- HTTP DTOs remain in `app.models` during R06A. R06C separates stable shared query contracts first,
+  then updates Streamlit imports in a second reviewable slice.
 - `app.main:app` remains unchanged because it is the documented Uvicorn and Compose entry point.
 - Canonical commands live under an explicit `operations` package so support status is visible without
   renaming established invocations. Shims use direct aliases and contain no runtime policy.
@@ -188,6 +244,16 @@ scripts.index_phase7_corpus ──> scripts.operations.index_phase7_corpus
   it safe to run automatically; protected-target validation and frozen archive verification remain.
 - The existing indexing command imports frozen-chunk/manifest helpers from evaluation-era modules.
   R07 owns relocating those helpers; R06B2 does not mix that dependency cleanup into CLI packaging.
+- Query DTOs stay Pydantic models because validation and JSON schema are part of the established public
+  contract. The new owner is framework-neutral: it imports Pydantic but no FastAPI or Streamlit.
+- `app.models` uses direct aliases rather than duplicate subclasses so `isinstance`, schema names,
+  dependency annotations, and historical imports remain stable.
+- R06C1 does not change UI imports in the same slice; this keeps the contract move reviewable before
+  enforcing Streamlit's narrowed dependency graph in R06C2.
+- R06C2 changes only import ownership. It deliberately keeps the same `httpx.Client`, one request per
+  operation, timeout, bearer header, response validation, and sanitized UI error messages.
+- No R06D Docker edit is necessary: images already install `app*` packages and copy whole source
+  directories, while all supported old script paths remain shims. Compose validation covers paths.
 
 ## 10. Tests and protected behavior
 
@@ -208,6 +274,12 @@ scripts.index_phase7_corpus ──> scripts.operations.index_phase7_corpus
 | indexing defaults | exact two manuals, batch/chunker, collection names, and opt-in flags |
 | indexing guard | protected targets fail before file/model/Qdrant access |
 | indexing order | dense then hybrid per document, followed by exact verification |
+| query schema snapshot | exact required/default/bounds/extra-field and OpenAPI `$ref` behavior |
+| contract facade identity | old `app.models` query symbols are canonical classes, not wrappers |
+| canonical consumers | application, citation policy, and FastAPI use the shared contract owner |
+| UI response type | HTTP payload validates to canonical `QueryResponse` |
+| UI API-only graph | UI cannot import backend models, services, domain, infrastructure, or config |
+| UI transport | exact path/body/auth/timeout/error mapping and no POST retry |
 
 ## 11. Commands and expected results
 
@@ -246,6 +318,22 @@ python -m scripts.ingest_preview --help
 python -m scripts.operations.ingest_preview --help
 python -m scripts.index_phase7_corpus --help
 python -m scripts.operations.index_phase7_corpus --help
+```
+
+R06C1 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_query_api.py tests/test_runtime_characterization.py tests/test_query_service.py tests/test_citations.py tests/test_streamlit_api_client.py tests/test_streamlit_app.py tests/test_architecture_boundaries.py
+python -m ruff check app/contracts app/models.py app/api/query.py app/application/query_service.py app/domain/citations.py tests/test_query_api.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_query_api.py tests/test_runtime_characterization.py tests/test_query_service.py tests/test_citations.py tests/test_streamlit_api_client.py tests/test_streamlit_app.py tests/test_architecture_boundaries.py
+```
+
+R06C2 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_streamlit_api_client.py tests/test_streamlit_app.py tests/test_query_api.py tests/test_runtime_characterization.py tests/test_architecture_boundaries.py
+python -m ruff check ui tests/test_streamlit_api_client.py tests/test_streamlit_app.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_streamlit_api_client.py tests/test_streamlit_app.py tests/test_query_api.py tests/test_runtime_characterization.py tests/test_architecture_boundaries.py
 ```
 
 Slice completion:
@@ -295,15 +383,19 @@ python -m scripts.index_phase7_corpus --help
   ordering; inspect the profile/key guard before changing an expected result.
 - An index command touching ingestion, frozen chunks, models, or Qdrant before target validation is a
   safety regression; never update the guard-order test to accept it.
+- A changed OpenAPI `$ref` or Pydantic required/default set means the DTO move changed public behavior;
+  compare canonical and compatibility class identity before editing expected schemas.
+- A UI architecture failure means Streamlit reached backend implementation code instead of the shared
+  contract; do not whitelist service/config/model imports to make the test pass.
 
 ## 14. Current limitations
 
 - Evaluation-era frozen-chunk and manifest helpers remain dependencies of the indexing command. R07
   must relocate them without changing manifest or chunk-set semantics.
-- Public HTTP DTOs still share `app.models` with internal retrieval records; R06C owns contract split.
-- Streamlit still imports `QueryResponse` from broad application models; R06C will preserve its
-  HTTP-only client while narrowing imports.
-- Docker/Compose entry points remain untouched because R06A changes no executable module path.
+- `app.models` keeps query-contract aliases for compatibility. R07 owns evidence-based shim removal,
+  not R06.
+- UI styling, streaming, uploads, and conversation memory beyond bounded display history are outside
+  Round 1.
 
 ## 15. Self-check questions
 
@@ -318,6 +410,10 @@ python -m scripts.index_phase7_corpus --help
 9. Which paths are allowed to perform a real provider or model smoke?
 10. Why is the Phase 7 indexing command never run as ordinary unit validation?
 11. Which validation must happen before any index input or external dependency is opened?
+12. Why are query DTOs direct aliases from `app.models` instead of compatibility subclasses?
+13. Why does moving a Pydantic class require rechecking OpenAPI `$ref` values?
+14. Which single backend package may Streamlit import after R06C2?
+15. Why does API-only communication matter even inside one repository?
 
 ## 16. Interview summary
 
@@ -332,6 +428,12 @@ and characterization proves guards, defaults, sanitized artifacts, and exit beha
 R06B2 uses the same compatibility pattern for ingestion and indexing commands. The package structure
 now distinguishes supported operations from research/evaluation scripts, while exact parser defaults,
 guard ordering, atomic preview output, indexing order, and verification remain protected offline.
+R06C1 then gives the public query schema a single shared owner. Application, citation policy, and
+FastAPI use canonical contracts, while direct aliases keep every historical import and schema class
+stable before the UI boundary is narrowed in the next slice.
+R06C2 completes the inbound boundary: Streamlit imports only shared DTOs and communicates with runtime
+capabilities exclusively over FastAPI. MockTransport and static import-graph tests demonstrate that
+the refactor changes ownership without changing requests, failures, rendering, or history behavior.
 
 ## 17. Validation results and proposed commit
 
@@ -359,15 +461,30 @@ R06B2 full Ruff Python 3.11.15   PASS
 R06B2 full pytest Python 3.11.15 PASS — 395 tests, 1 warning
 R06B2 Compose config             PASS
 R06B2 Markdown links (19) / diff check PASS
+R06C1 pre-move characterization  PASS — 83 tests, 1 warning
+R06C1 focused Ruff               PASS
+R06C1 focused query/schema suite PASS — 85 tests, 1 warning
+R06C1 full Ruff Python 3.11.15   PASS
+R06C1 full pytest Python 3.11.15 PASS — 397 tests, 1 warning
+R06C1 Compose config             PASS
+R06C1 Markdown links (25) / diff check PASS
+R06C2 pre-move characterization  PASS — 53 tests, 1 warning
+R06C2 focused Ruff               PASS
+R06C2 focused UI/API suite       PASS — 54 tests, 1 warning
+R06C2 full Ruff Python 3.11.15   PASS
+R06C2 full pytest Python 3.11.15 PASS — 398 tests, 1 warning
+R06C2 Compose config             PASS
+R06C2 Markdown links (30) / diff check PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: classify supported ingestion commands
+refactor: share query contracts with Streamlit
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R06A, R06B1, and R06B2 are implemented and validated. Phase 6 CLIs remain archived
-and unsupported. Shared HTTP/Streamlit contract work remains open.
+`COMPLETE` — R06A–R06C2 are implemented and validated. FastAPI and Streamlit are thin inbound
+adapters, supported CLIs have explicit operational ownership with stable shims, Phase 6 CLIs remain
+archived and unsupported, and no R06D Docker path edit is required.

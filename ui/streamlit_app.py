@@ -6,7 +6,7 @@ from typing import Any
 
 import streamlit as st
 
-from app.models import QueryResponse
+from app.contracts.query import QueryResponse
 from ui.api_client import RAGAPIClient, RAGAPIError
 from ui.config import DEMO_QUESTIONS, DOCUMENT_OPTIONS, UISettings
 from ui.state import append_history, page_label

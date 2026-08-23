@@ -6,6 +6,7 @@ import ast
 from pathlib import Path
 
 APP_ROOT = Path(__file__).parents[1] / "app"
+UI_ROOT = Path(__file__).parents[1] / "ui"
 
 PRODUCTION_RUNTIME_ROOTS = {
     "app.application.indexing_service",
@@ -52,7 +53,7 @@ def _app_imports(path: Path) -> set[str]:
 
 
 def _import_graph() -> dict[str, set[str]]:
-    paths = sorted(APP_ROOT.rglob("*.py"))
+    paths = sorted([*APP_ROOT.rglob("*.py"), *UI_ROOT.rglob("*.py")])
     modules = {_module_name(path): path for path in paths}
     return {
         module: {dependency for dependency in _app_imports(path) if dependency in modules}
@@ -94,6 +95,11 @@ def test_inbound_adapters_are_not_imported_by_other_application_modules() -> Non
         "app.api.dependencies",
         "app.api.health",
         "app.api.query",
+        "ui",
+        "ui.api_client",
+        "ui.config",
+        "ui.state",
+        "ui.streamlit_app",
     }
     unexpected = {
         (source, dependency)
@@ -194,6 +200,35 @@ def test_fastapi_modules_use_one_explicit_dependency_seam() -> None:
 
     assert "app.api.health" in graph["app.api.app"]
     assert "app.api.query" in graph["app.api.app"]
+
+
+def test_query_runtime_uses_shared_public_contracts_not_the_models_facade() -> None:
+    graph = _import_graph()
+
+    for module in (
+        "app.api.query",
+        "app.application.query_service",
+        "app.domain.citations",
+    ):
+        assert "app.contracts.query" in graph[module]
+
+    assert "app.models" not in graph["app.api.query"]
+    assert "app.contracts.query" in graph["app.models"]
+    assert "app.models" not in graph["app.contracts.query"]
+
+
+def test_streamlit_is_an_http_only_adapter_over_shared_query_contracts() -> None:
+    graph = _import_graph()
+
+    for module in ("ui.api_client", "ui.state", "ui.streamlit_app"):
+        app_dependencies = {
+            dependency for dependency in graph[module] if dependency.startswith("app.")
+        }
+        assert app_dependencies == {"app.contracts.query"}
+
+    assert "app.models" not in graph["ui.api_client"]
+    assert "app.models" not in graph["ui.state"]
+    assert "app.models" not in graph["ui.streamlit_app"]
 
 
 def test_grounded_query_consumers_use_canonical_generation_contracts_and_prompt_policy() -> None:

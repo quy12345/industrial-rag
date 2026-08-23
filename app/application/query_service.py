@@ -8,6 +8,7 @@ from time import perf_counter
 from typing import Literal, Protocol
 
 from app.application.generation_prompt import format_evidence
+from app.contracts.query import QueryResponse
 from app.domain.citations import build_citations, validate_generated_answer
 from app.domain.evidence import EvidenceDuplicateGroup as EvidenceDuplicateGroup
 from app.domain.evidence import EvidenceGate as EvidenceGate
@@ -16,7 +17,7 @@ from app.domain.evidence import EvidenceSelectionError, select_evidence_candidat
 from app.domain.generation import AnswerGenerator, TokenUsage
 from app.domain.retrieval import QueryRetriever
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
-from app.models import QueryResponse, RetrievalCandidate
+from app.models import RetrievalCandidate
 from app.request_context import request_id
 
 # Keep the established category stable while the implementation moves behind a facade.

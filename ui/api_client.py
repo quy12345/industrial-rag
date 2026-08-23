@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from app.models import QueryResponse
+from app.contracts.query import QueryResponse
 
 _ERROR_MESSAGES = {
     "unauthorized": "API authentication failed.",
