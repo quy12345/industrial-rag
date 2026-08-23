@@ -6,13 +6,29 @@ from types import SimpleNamespace
 
 import pytest
 
-import scripts.index_phase7_corpus as index_cli
+import scripts.index_phase7_corpus as compatibility_index_cli
 from app.application.indexing_service import (
     IndexingSafetyError,
     Phase7IndexingService,
     validate_chunk_preview,
 )
 from app.domain.documents import DocumentChunk
+from app.phase7 import PHASE7_DENSE_COLLECTION, PHASE7_HYBRID_COLLECTION
+from scripts.operations import index_phase7_corpus as index_cli
+
+
+def test_indexing_shim_and_parser_preserve_supported_contract() -> None:
+    assert compatibility_index_cli.main is index_cli.main
+    assert compatibility_index_cli._parser is index_cli._parser
+
+    args = index_cli._parser().parse_args([])
+    assert args.inputs == list(index_cli.DEFAULT_INPUTS)
+    assert args.page_batch_size == 16
+    assert args.chunker == "hybrid"
+    assert args.dense_collection == PHASE7_DENSE_COLLECTION
+    assert args.hybrid_collection == PHASE7_HYBRID_COLLECTION
+    assert args.preview_only is False
+    assert args.verify_reindex is False
 
 
 def _chunk(chunk_id: str, document_id: str, index: int) -> DocumentChunk:

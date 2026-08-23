@@ -10,9 +10,15 @@ import pytest
 from docling.datamodel.base_models import ConversionStatus
 
 import app.ingestion as ingestion
-import scripts.ingest_preview as ingest_preview
+import scripts.ingest_preview as compatibility_ingest_preview
 from app.domain import documents
 from app.models import DocumentChunk
+from scripts.operations import ingest_preview
+
+
+def test_ingestion_preview_shim_preserves_supported_entry_point_identity() -> None:
+    assert compatibility_ingest_preview.main is ingest_preview.main
+    assert compatibility_ingest_preview._build_parser is ingest_preview._build_parser
 
 
 def test_legacy_ingestion_exports_are_canonical_domain_objects() -> None:

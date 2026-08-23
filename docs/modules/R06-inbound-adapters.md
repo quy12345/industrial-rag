@@ -14,6 +14,9 @@ R06B1 is also implemented. It classifies the two active runtime smoke commands u
 `scripts.operations` while preserving both historical `python -m scripts.<name>` entry points as
 thin compatibility shims. Archived Phase 6 tools remain unsupported and untouched.
 
+R06B2 applies the same classification to the supported ingestion preview and guarded Phase 7 corpus
+index command. It moves no indexing policy and executes no ingestion or Qdrant operation.
+
 ## 2. Position in the system
 
 ```text
@@ -67,6 +70,8 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
 8. Health is process liveness only; readiness invokes the injected frozen-corpus checker.
 9. Middleware adds the established safe correlation header without logging request bodies or tokens.
 10. Operational smoke shims delegate to canonical Phase 7 command modules without duplicating logic.
+11. Ingestion/indexing shims delegate to canonical operational modules; the index command validates
+    collection targets before reading chunks, creating models, or opening Qdrant.
 
 ## 6. Responsibilities of changed files
 
@@ -91,6 +96,16 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
   entry-point shims.
 - [`tests/test_phase7_operational_smoke.py`](../../tests/test_phase7_operational_smoke.py) protects
   parser defaults, guards, artifact sanitization, exit behavior, and shim identity.
+- [`scripts/operations/ingest_preview.py`](../../scripts/operations/ingest_preview.py) owns the
+  supported parse/preview/optional-JSONL command adapter.
+- [`scripts/operations/index_phase7_corpus.py`](../../scripts/operations/index_phase7_corpus.py) owns
+  guarded Phase 7 indexing composition, manifest output, and the explicit mutation entry point.
+- [`scripts/ingest_preview.py`](../../scripts/ingest_preview.py) and
+  [`scripts/index_phase7_corpus.py`](../../scripts/index_phase7_corpus.py) preserve historical command
+  paths as thin shims.
+- [`tests/test_ingestion.py`](../../tests/test_ingestion.py) and
+  [`tests/test_phase7_index_cli.py`](../../tests/test_phase7_index_cli.py) protect shim identity,
+  parser defaults, failure ordering, atomic output, mutation order, and verification behavior.
 
 ## 7. Important symbols and why they exist
 
@@ -103,6 +118,8 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
 - `query`: thin async HTTP mapping around synchronous `QueryService.execute`.
 - `scripts.operations.query_smoke.main`: supported bounded query smoke orchestration.
 - `scripts.operations.validate_query_runtime.main`: supported read-only retrieval smoke orchestration.
+- `scripts.operations.ingest_preview.main`: supported document preview adapter with optional JSONL.
+- `scripts.operations.index_phase7_corpus.main`: explicit guarded corpus mutation adapter.
 
 ## 8. Before-and-after structure
 
@@ -146,6 +163,13 @@ thin compatibility shim ──> scripts.operations.validate_query_runtime
 scripts.archive.phase6.* remains unsupported
 ```
 
+After R06B2, the same pattern also applies to:
+
+```text
+scripts.ingest_preview       ──> scripts.operations.ingest_preview
+scripts.index_phase7_corpus ──> scripts.operations.index_phase7_corpus
+```
+
 ## 9. Design decisions and trade-offs
 
 - Dependency symbols are direct aliases, so FastAPI override keys retain object identity.
@@ -160,6 +184,10 @@ scripts.archive.phase6.* remains unsupported
   renaming established invocations. Shims use direct aliases and contain no runtime policy.
 - The bounded query smoke is still an explicit integration command, not a unit-test operation. R06B1
   validates only its fake/no-key paths and never authorizes a real provider call.
+- The indexing command remains intentionally explicit and mutation-capable. Packaging does not make
+  it safe to run automatically; protected-target validation and frozen archive verification remain.
+- The existing indexing command imports frozen-chunk/manifest helpers from evaluation-era modules.
+  R07 owns relocating those helpers; R06B2 does not mix that dependency cleanup into CLI packaging.
 
 ## 10. Tests and protected behavior
 
@@ -176,6 +204,10 @@ scripts.archive.phase6.* remains unsupported
 | CLI facade identity | old command imports resolve to canonical `main` and parser objects |
 | retrieval smoke guard | unsupported profile exits before building a retriever |
 | query smoke no-key path | sanitized artifact is written without constructing the service |
+| ingestion shim/parser | old entry point identity and preview argument contract |
+| indexing defaults | exact two manuals, batch/chunker, collection names, and opt-in flags |
+| indexing guard | protected targets fail before file/model/Qdrant access |
+| indexing order | dense then hybrid per document, followed by exact verification |
 
 ## 11. Commands and expected results
 
@@ -202,6 +234,18 @@ python -m scripts.query_smoke --help
 python -m scripts.operations.query_smoke --help
 python -m scripts.validate_query_runtime --help
 python -m scripts.operations.validate_query_runtime --help
+```
+
+R06B2 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_ingestion.py tests/test_phase7_index_cli.py tests/test_architecture_boundaries.py
+python -m ruff check scripts/operations scripts/ingest_preview.py scripts/index_phase7_corpus.py tests/test_ingestion.py tests/test_phase7_index_cli.py
+python -m pytest -q tests/test_ingestion.py tests/test_phase7_index_cli.py tests/test_architecture_boundaries.py
+python -m scripts.ingest_preview --help
+python -m scripts.operations.ingest_preview --help
+python -m scripts.index_phase7_corpus --help
+python -m scripts.operations.index_phase7_corpus --help
 ```
 
 Slice completion:
@@ -234,6 +278,8 @@ Supported runtime smoke invocations remain:
 ```text
 python -m scripts.validate_query_runtime --help
 python -m scripts.query_smoke --help
+python -m scripts.ingest_preview --help
+python -m scripts.index_phase7_corpus --help
 ```
 
 ## 13. Common failures and debugging
@@ -247,11 +293,13 @@ python -m scripts.query_smoke --help
 - A shim identity failure means operational logic was copied or wrapped instead of directly exported.
 - A smoke test constructing a retriever/provider on a rejected or no-key path violates fail-closed
   ordering; inspect the profile/key guard before changing an expected result.
+- An index command touching ingestion, frozen chunks, models, or Qdrant before target validation is a
+  safety regression; never update the guard-order test to accept it.
 
 ## 14. Current limitations
 
-- Phase 7 ingestion/indexing commands retain their established top-level paths. Their logic was
-  already bounded in R03; any packaging-only classification must be a separate R06B slice.
+- Evaluation-era frozen-chunk and manifest helpers remain dependencies of the indexing command. R07
+  must relocate them without changing manifest or chunk-set semantics.
 - Public HTTP DTOs still share `app.models` with internal retrieval records; R06C owns contract split.
 - Streamlit still imports `QueryResponse` from broad application models; R06C will preserve its
   HTTP-only client while narrowing imports.
@@ -268,6 +316,8 @@ python -m scripts.query_smoke --help
 7. Which R06 slice owns the shared query DTO move?
 8. Why are the old smoke module paths retained after classification?
 9. Which paths are allowed to perform a real provider or model smoke?
+10. Why is the Phase 7 indexing command never run as ordinary unit validation?
+11. Which validation must happen before any index input or external dependency is opened?
 
 ## 16. Interview summary
 
@@ -279,6 +329,9 @@ offline API characterization proves paths, schemas, statuses, headers, errors, a
 R06B1 separately makes support status explicit for the two active runtime smoke commands. Canonical
 implementations live under `scripts.operations`; historical module invocations remain direct shims,
 and characterization proves guards, defaults, sanitized artifacts, and exit behavior stay unchanged.
+R06B2 uses the same compatibility pattern for ingestion and indexing commands. The package structure
+now distinguishes supported operations from research/evaluation scripts, while exact parser defaults,
+guard ordering, atomic preview output, indexing order, and verification remain protected offline.
 
 ## 17. Validation results and proposed commit
 
@@ -298,15 +351,23 @@ R06B1 full Ruff Python 3.11.15   PASS
 R06B1 full pytest Python 3.11.15 PASS — 393 tests, 1 warning
 R06B1 Compose config             PASS
 R06B1 Markdown links (13) / diff check PASS
+R06B2 pre-move characterization  PASS — 52 tests
+R06B2 focused Ruff               PASS
+R06B2 focused ingestion suite    PASS — 54 tests
+R06B2 old/new help contracts     PASS — 4 commands
+R06B2 full Ruff Python 3.11.15   PASS
+R06B2 full pytest Python 3.11.15 PASS — 395 tests, 1 warning
+R06B2 Compose config             PASS
+R06B2 Markdown links (19) / diff check PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: classify supported runtime smoke commands
+refactor: classify supported ingestion commands
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R06A and R06B1 are implemented and validated. Phase 6 CLIs remain archived and
-unsupported. Shared HTTP/Streamlit contract work remains open.
+`IN_PROGRESS` — R06A, R06B1, and R06B2 are implemented and validated. Phase 6 CLIs remain archived
+and unsupported. Shared HTTP/Streamlit contract work remains open.
