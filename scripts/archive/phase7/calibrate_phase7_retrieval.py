@@ -16,20 +16,13 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal
 
-from app.candidate_audit import dense_results_to_candidates, union_dense_sparse_candidates
+from app.application.reranking_service import deduplicate_candidates_by_content
 from app.config import Settings
-from app.evaluation import direct_evidence_rank, load_frozen_chunks
+from app.domain.policies.query_analysis import augment_vietnamese_technical_query
+from app.domain.retrieval import dense_results_to_candidates, union_dense_sparse_candidates
 from app.hybrid_retrieval import create_sparse_embedding_model, fuse_rrf, sparse_search
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
 from app.models import RetrievalCandidate
-from app.phase7 import (
-    Phase7DatasetItem,
-    dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_datasets,
-    write_json_atomic,
-)
-from app.query_expansion import augment_vietnamese_technical_query
-from app.reranking import deduplicate_candidates_by_content
 from app.retrieval import (
     create_embedding_model,
     create_qdrant_client,
@@ -37,6 +30,13 @@ from app.retrieval import (
     get_embedding_dimension,
 )
 from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, validate_frozen_runtime
+from evaluation.phase7_dataset import (
+    Phase7DatasetItem,
+    dataset_sha256,
+    read_phase7_dataset,
+    validate_phase7_datasets,
+)
+from evaluation.retrieval import direct_evidence_rank
 
 MAX_DENSE_LIMIT = 60
 MAX_SPARSE_LIMIT = 60

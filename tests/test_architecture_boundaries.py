@@ -461,211 +461,114 @@ def test_corpus_audit_cli_uses_canonical_artifact_infrastructure() -> None:
     assert imported_modules == {"scripts.operations.audit_phase7_corpus"}
 
 
-def test_completed_phase7_dataset_migration_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "migrate_phase7_dataset_v2.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "migrate_phase7_dataset_v2.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "evaluation.retrieval" in imports
-    assert "app.evaluation" not in imports
-    assert "app.phase7" not in imports
-
-
-def test_completed_phase7_typed_fact_draft_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "draft_phase7_calibration_fact_types.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "draft_phase7_calibration_fact_types.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "app.phase7" not in imports
-
-
-def test_completed_phase7_calibration_freeze_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "freeze_phase7_calibration_v3.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "freeze_phase7_calibration_v3.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.domain.retrieval_contracts" in imports
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "app.evaluation" not in imports
-    assert "app.phase7" not in imports
-    assert "app.retrieval_runtime" not in imports
-
-
-def test_completed_phase7_answer_fact_migration_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "apply_phase7_answer_facts.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "apply_phase7_answer_facts.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "app.evaluation" not in imports
-    assert "app.phase7" not in imports
-
-
-def test_completed_phase7_annotation_generator_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "generate_phase7_annotation_draft.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "generate_phase7_annotation_draft.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "app.evaluation" not in imports
-
-
-def test_completed_phase7_dataset_freeze_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "freeze_phase7_dataset.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "freeze_phase7_dataset.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.domain.retrieval_contracts" in imports
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "app.evaluation" not in imports
-    assert "app.phase7" not in imports
-    assert "app.retrieval_runtime" not in imports
-
-
-def test_completed_phase7_heldout_freeze_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "freeze_phase7_heldout_v2.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "freeze_phase7_heldout_v2.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.domain.retrieval_contracts" in imports
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "app.evaluation" not in imports
-    assert "app.phase7" not in imports
-    assert "app.retrieval_runtime" not in imports
-
-
-def test_completed_phase7_heldout_evaluator_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "evaluate_phase7_heldout_v2.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "evaluate_phase7_heldout_v2.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "app.evaluation" not in imports
-    assert "app.phase7" not in imports
-
-
-def test_completed_phase7_calibration_005_diagnostic_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "diagnose_phase7_calibration_005.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "diagnose_phase7_calibration_005.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "app.evaluation" not in imports
-    assert "app.phase7" not in imports
-
-
-def test_completed_phase7_fact_rescore_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "rescore_phase7_calibration_facts.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "rescore_phase7_calibration_facts.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "app.phase7" not in imports
-
-
-def test_completed_phase7_readiness_receipts_are_archive_only() -> None:
-    cases = {
+def test_phase7_archive_has_one_way_canonical_dependencies() -> None:
+    required_by_script = {
+        "aggregate_phase7_calibration_stability.py": {"app.infrastructure.corpus_artifacts"},
+        "apply_phase7_answer_facts.py": {
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "audit_phase7_retrieval_failures.py": {
+            "app.domain.retrieval",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+            "evaluation.retrieval",
+        },
+        "benchmark_phase7_reranker_cpu.py": {
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+            "evaluation.retrieval",
+        },
+        "calibrate_phase7_retrieval.py": {
+            "app.domain.retrieval",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+            "evaluation.retrieval",
+        },
+        "calibrate_phase7_role_prior.py": {
+            "app.domain.policies.ranking",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+            "evaluation.replay",
+            "evaluation.retrieval",
+        },
+        "calibrate_phase7_weighted_fusion.py": {
+            "app.domain.policies.ranking",
+            "app.domain.retrieval",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+            "evaluation.retrieval",
+        },
+        "diagnose_phase7_calibration_005.py": {
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "draft_phase7_calibration_fact_types.py": {
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "evaluate_phase7_heldout_v2.py": {
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "evaluate_phase7_weighted_rerank.py": {
+            "app.domain.policies.ranking",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+            "evaluation.retrieval",
+        },
+        "freeze_phase7_calibration_v3.py": {
+            "app.domain.retrieval_contracts",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "freeze_phase7_dataset.py": {
+            "app.domain.retrieval_contracts",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "freeze_phase7_heldout_v2.py": {
+            "app.domain.retrieval_contracts",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "generate_phase7_annotation_draft.py": {"app.infrastructure.corpus_artifacts"},
+        "generate_phase7_calibration_closure_readiness.py": {
+            "app.infrastructure.corpus_artifacts"
+        },
         "generate_phase7_fact_evaluator_readiness.py": {
             "app.infrastructure.corpus_artifacts",
             "evaluation.phase7_dataset",
         },
-        "generate_phase7_runtime_readiness.py": {
+        "generate_phase7_runtime_readiness.py": {"app.infrastructure.corpus_artifacts"},
+        "migrate_phase7_dataset_v2.py": {
             "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+            "evaluation.retrieval",
+        },
+        "rescore_phase7_calibration_facts.py": {
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
+        },
+        "create_phase7_reranker_snapshot.py": {
+            "app.domain.policies.ranking",
+            "app.infrastructure.corpus_artifacts",
+            "evaluation.phase7_dataset",
         },
     }
+    forbidden_imports = {
+        "app.candidate_audit",
+        "app.evaluation",
+        "app.phase7",
+        "app.phase7_replay",
+    }
+    no_runtime_scripts = {
+        "freeze_phase7_calibration_v3.py",
+        "freeze_phase7_dataset.py",
+        "freeze_phase7_heldout_v2.py",
+    }
 
-    for filename, required_imports in cases.items():
+    for filename, required_imports in required_by_script.items():
         old_path = APP_ROOT.parent / "scripts" / filename
         archived_path = APP_ROOT.parent / "scripts" / "archive" / "phase7" / filename
 
@@ -673,30 +576,9 @@ def test_completed_phase7_readiness_receipts_are_archive_only() -> None:
         assert archived_path.is_file()
         imports = _local_imports(archived_path)
         assert required_imports <= imports
-        assert "app.evaluation" not in imports
-        assert "app.phase7" not in imports
-
-
-def test_superseded_phase7_weighted_rerank_is_archive_only() -> None:
-    old_path = APP_ROOT.parent / "scripts" / "evaluate_phase7_weighted_rerank.py"
-    archived_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "archive"
-        / "phase7"
-        / "evaluate_phase7_weighted_rerank.py"
-    )
-
-    assert not old_path.exists()
-    assert archived_path.is_file()
-    imports = _local_imports(archived_path)
-    assert "app.domain.policies.ranking" in imports
-    assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
-    assert "evaluation.retrieval" in imports
-    assert "app.evaluation" not in imports
-    assert "app.phase7" not in imports
-    assert "app.phase7_optimization" not in imports
+        assert forbidden_imports.isdisjoint(imports)
+        if filename in no_runtime_scripts:
+            assert "app.retrieval_runtime" not in imports
 
 
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:

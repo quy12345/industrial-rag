@@ -155,14 +155,10 @@ Executed provider-free commands:
 python -m ruff check .
 python -m pytest -q --basetemp .pytest-tmp-closure-full1
 docker compose config --quiet
-
-docker compose --profile tools run --rm --no-deps `
-  -v "${PWD}:/workspace" -w /workspace ingestion `
-  python -m scripts.create_phase7_reranker_snapshot
-
-python -m scripts.calibrate_phase7_role_prior
-python -m scripts.generate_phase7_calibration_closure_readiness
 ```
+
+The completed snapshot, role-prior, and readiness commands that produced the receipts below are now
+retained only under `scripts/archive/phase7/` and must not be rerun as current evaluation commands.
 
 Generated ignored artifacts:
 
@@ -224,9 +220,5 @@ python -m scripts.evaluate_phase7_e2e --dataset calibration `
   --checkpoint artifacts/metrics/phase-7-calibration-e2e-v5-run-1-checkpoint.jsonl `
   --output artifacts/metrics/phase-7-calibration-e2e-v5-run-1.json
 
-# Repeat with run-2 and run-3 in both path arguments.
-python -m scripts.aggregate_phase7_calibration_stability `
-  --run artifacts/metrics/phase-7-calibration-e2e-v5-run-1.json `
-  --run artifacts/metrics/phase-7-calibration-e2e-v5-run-2.json `
-  --run artifacts/metrics/phase-7-calibration-e2e-v5-run-3.json
+# The completed three-run stability aggregator is retained under scripts/archive/phase7/.
 ```

@@ -58,16 +58,13 @@ not a probability and not a raw-score mixture.
 Run these against Qdrant plus the shared FastEmbed cache. They do not call a generation provider:
 
 ```powershell
-python -m scripts.calibrate_phase7_weighted_fusion
-python -m scripts.audit_phase7_retrieval_failures `
-  --output artifacts/metrics/phase-7-calibration-004-005-010-audit-v2.json
 python -m scripts.evaluate_phase7_retrieval_closure `
   --output artifacts/metrics/phase-7-retrieval-closure-v2.json
 ```
 
-The weighted-rerank evaluator produced the historical v1–v3 calibration artifacts and has been
-superseded by the Phase 7.4.1–7.5 closure. Its unsupported source is retained under
-`scripts/archive/phase7/`; do not rerun it as a current evaluation command.
+The weighted-fusion calibration, targeted failure audit, and weighted-rerank evaluator produced the
+historical Phase 7.4 artifacts and were superseded by Phase 7.4.1–7.5. Their unsupported source is
+retained under `scripts/archive/phase7/`; do not rerun them as current evaluation commands.
 
 The completed `draft_phase7_calibration_fact_types` construction command is now retained only under
 `scripts/archive/phase7/`. It produced the review-required calibration-v3 draft while preserving every

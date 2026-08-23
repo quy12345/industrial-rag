@@ -104,30 +104,20 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   manifest and live frozen hash before it sends anything to a provider. Calibration mode reads one
   split only and records a full non-secret run identity. Held-out execution currently fails closed
   with `BLOCKED_GOVERNANCE` because historical repository content exposed that split.
-- `scripts/calibrate_phase7_retrieval.py`: provider-free, calibration-only dense/sparse 20--60
-  union/RRF/expanded-RRF ablation, including the fixed top-30 reranker budget; it never loads the
-  cross-encoder or executes held-out queries.
-- `scripts/audit_phase7_retrieval_failures.py`: sanitized top-200 dense/sparse audit for calibration
-  004/005/010, including source/index integrity and query-variant ranks; no provider or reranker.
-- `scripts/calibrate_phase7_weighted_fusion.py`: retrieval-only 144-profile weighted-RRF/role/reserve
-  ablation and Pareto shortlist; no reranker, provider, or held-out query.
+- `scripts/archive/phase7/calibrate_phase7_retrieval.py`,
+  `audit_phase7_retrieval_failures.py`, and `calibrate_phase7_weighted_fusion.py`: unsupported
+  completed Phase 7 retrieval experiments retained for provenance.
 - `scripts/archive/phase7/evaluate_phase7_weighted_rerank.py`: unsupported completed local-Jina
   evaluation of the Phase 7.4 weighted-fusion shortlist, superseded by Phase 7.4.1–7.5 closure.
 - `scripts/evaluate_phase7_retrieval_closure.py`: runs the frozen Phase 7.4.1 retrieval and local Jina
   reranker on answerable calibration only; no provider and no held-out execution.
-- `scripts/create_phase7_reranker_snapshot.py`: makes a sanitized baseline Jina snapshot once; replay
-  artifacts include IDs/ranks/scores and roles but exclude questions and raw evidence.
-- `scripts/calibrate_phase7_role_prior.py`: runs six-fold, provider-free rank-prior selection from a
-  schema-v2 snapshot, then tries the single registered list-completeness fallback if the finite rank
-  grid fails. The fold mapping is evaluation-only and never imported by the runtime.
+- `scripts/archive/phase7/create_phase7_reranker_snapshot.py` and
+  `calibrate_phase7_role_prior.py`: unsupported completed snapshot/replay selection workflow.
 - `scripts/archive/phase7/diagnose_phase7_calibration_005.py`: unsupported completed three-attempt
   provider diagnostic retained with its private-debug and sanitization guards for provenance.
-- `scripts/aggregate_phase7_calibration_stability.py`: validates three independent schema-v5 runs,
-  rejects identity/duplicate mismatches, and gates on the worst run instead of selecting the best.
-- `scripts/generate_phase7_calibration_closure_readiness.py`: writes the fail-closed technical and
-  governance decision without opening held-out content or calling Qdrant/provider.
-- `scripts/benchmark_phase7_reranker_cpu.py`: runs the bounded CPU micro/full ablation without Docker
-  builds, re-indexing, provider calls, or held-out questions.
+- `scripts/archive/phase7/aggregate_phase7_calibration_stability.py`,
+  `generate_phase7_calibration_closure_readiness.py`, and `benchmark_phase7_reranker_cpu.py`:
+  unsupported completed stability, readiness, and CPU-measurement workflows.
 - `scripts/archive/phase7/generate_phase7_fact_evaluator_readiness.py` and
   `scripts/archive/phase7/generate_phase7_runtime_readiness.py`: unsupported completed generators for
   the historical typed-fact review and pre-egress provider-approval receipts.

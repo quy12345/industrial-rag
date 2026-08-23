@@ -10,7 +10,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from app.phase7 import write_json_atomic
+from app.infrastructure.corpus_artifacts import write_json_atomic
 
 REQUIRED_REGRESSION_IDS = (
     "phase7_calibration_003",

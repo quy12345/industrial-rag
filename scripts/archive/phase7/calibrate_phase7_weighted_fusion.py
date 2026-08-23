@@ -16,26 +16,22 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from app.candidate_audit import dense_results_to_candidates
 from app.config import Settings
-from app.evaluation import direct_evidence_rank, load_frozen_chunks
-from app.hybrid_retrieval import create_sparse_embedding_model, sparse_search
-from app.models import RetrievalCandidate
-from app.phase7 import (
-    Phase7DatasetItem,
-    dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_datasets,
-    write_json_atomic,
+from app.domain.policies.query_analysis import (
+    QUERY_EXPANSION_PROFILE,
+    augment_vietnamese_technical_query,
 )
-from app.phase7_optimization import (
+from app.domain.policies.ranking import (
     Phase7FusionProfile,
     Phase7OptimizationError,
     infer_query_role,
     phase7_fusion_profile_grid,
     select_coverage_preserving_candidates,
 )
-from app.query_expansion import QUERY_EXPANSION_PROFILE, augment_vietnamese_technical_query
+from app.domain.retrieval import dense_results_to_candidates
+from app.hybrid_retrieval import create_sparse_embedding_model, sparse_search
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
+from app.models import RetrievalCandidate
 from app.retrieval import (
     create_embedding_model,
     create_qdrant_client,
@@ -43,6 +39,13 @@ from app.retrieval import (
     get_embedding_dimension,
 )
 from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, validate_frozen_runtime
+from evaluation.phase7_dataset import (
+    Phase7DatasetItem,
+    dataset_sha256,
+    read_phase7_dataset,
+    validate_phase7_datasets,
+)
+from evaluation.retrieval import direct_evidence_rank
 
 MAX_DENSE_LIMIT = 60
 MAX_SPARSE_LIMIT = 40

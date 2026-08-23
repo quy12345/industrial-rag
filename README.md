@@ -178,16 +178,13 @@ Canonical ingestion-container Python 3.11.15 validation: Ruff PASS and pytest
 checks; it is not the canonical interpreter and was not overwritten. The warning is the known
 third-party Starlette/TestClient deprecation.
 
-Run the provider-free Phase 7.4.1--7.5 diagnostics only after Qdrant and the shared FastEmbed cache are
-available. These commands never call Gemini/OpenAI and never execute held-out questions:
+The completed Phase 7.4.1--7.5 calibration, snapshot, and readiness workflows are retained under
+`scripts/archive/phase7/` and are not supported rerun commands. The current provider-free retrieval
+regression command remains:
 
 ```powershell
-python -m scripts.calibrate_phase7_weighted_fusion
 python -m scripts.evaluate_phase7_retrieval_closure `
   --output artifacts/metrics/phase-7-contamination-closure-v5.json
-python -m scripts.create_phase7_reranker_snapshot
-python -m scripts.calibrate_phase7_role_prior
-python -m scripts.generate_phase7_calibration_closure_readiness
 ```
 
 The separately approved calibration-005 diagnostic is complete; its unsupported runner is retained

@@ -15,21 +15,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.evaluation import direct_evidence_rank, load_frozen_chunks
-from app.evidence_selection import select_evidence_candidates_for_role
-from app.phase7 import (
-    dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_dataset,
-    write_json_atomic,
-)
-from app.phase7_optimization import (
+from app.domain.policies.ranking import (
     PHASE7_CALIBRATION_FUSION_PROFILE,
     Phase7FusionProfile,
     apply_list_completeness_from_metadata,
     apply_relation_list_completeness_from_metadata,
 )
-from app.phase7_replay import Phase7ReplayError, replay_role_prior, snapshot_candidates_to_retrieval
+from app.evidence_selection import select_evidence_candidates_for_role
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
+from evaluation.phase7_dataset import (
+    dataset_sha256,
+    read_phase7_dataset,
+    validate_phase7_dataset,
+)
+from evaluation.replay import Phase7ReplayError, replay_role_prior, snapshot_candidates_to_retrieval
+from evaluation.retrieval import direct_evidence_rank
 from scripts.evaluate_phase7_retrieval_closure import aggregate_closure_rows
 
 FOLDS: tuple[tuple[str, str], ...] = (

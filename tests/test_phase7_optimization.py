@@ -21,7 +21,6 @@ from app.phase7_optimization import (
     relation_list_completeness_features,
     select_coverage_preserving_candidates,
 )
-from scripts.calibrate_phase7_weighted_fusion import _select_pareto_profiles
 
 
 def test_phase7_facade_exports_canonical_ranking_policy() -> None:
@@ -336,34 +335,3 @@ def test_selector_fails_instead_of_silently_truncating_mandatory_reserves() -> N
 def test_profile_rejects_invalid_bounds(updates: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         _profile(**updates)
-
-
-def test_pareto_selection_prefers_recall_then_contamination_then_simplicity() -> None:
-    summaries = {
-        "high-contamination": {
-            "valid": True,
-            "candidate_recall": 1.0,
-            "wrong_document_top1_rate": 0.25,
-            "wrong_document_candidate_rate_at_5": 0.3,
-            "profile": {"sparse_weight": 1.5, "fusion_role_multiplier": 0.1, "rrf_k": 60},
-        },
-        "winner": {
-            "valid": True,
-            "candidate_recall": 1.0,
-            "wrong_document_top1_rate": 0.0,
-            "wrong_document_candidate_rate_at_5": 0.1,
-            "profile": {"sparse_weight": 1.0, "fusion_role_multiplier": 0.0, "rrf_k": 60},
-        },
-        "lower-recall": {
-            "valid": True,
-            "candidate_recall": 11 / 12,
-            "wrong_document_top1_rate": 0.0,
-            "wrong_document_candidate_rate_at_5": 0.0,
-            "profile": {"sparse_weight": 1.0, "fusion_role_multiplier": 0.0, "rrf_k": 20},
-        },
-    }
-    assert [row["name"] for row in _select_pareto_profiles(summaries)] == [
-        "winner",
-        "high-contamination",
-        "lower-recall",
-    ]

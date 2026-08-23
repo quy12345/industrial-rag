@@ -17,14 +17,7 @@ from typing import Any
 
 from app.config import Settings
 from app.content_identity import evidence_content_fingerprint
-from app.evaluation import load_frozen_chunks
-from app.phase7 import (
-    dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_dataset,
-    write_json_atomic,
-)
-from app.phase7_optimization import (
+from app.domain.policies.ranking import (
     LIST_COMPLETENESS_PROFILE,
     QUERY_ROLE_PROFILE,
     RELATION_LIST_COMPLETENESS_PROFILE,
@@ -34,8 +27,14 @@ from app.phase7_optimization import (
     list_completeness_features,
     relation_list_completeness_features,
 )
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
 from app.reranking import PHASE7_CANDIDATE_TEXT_FORMAT, execute_rerank
 from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, build_union_rerank_runtime
+from evaluation.phase7_dataset import (
+    dataset_sha256,
+    read_phase7_dataset,
+    validate_phase7_dataset,
+)
 
 
 def main() -> int:

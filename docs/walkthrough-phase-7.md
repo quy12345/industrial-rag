@@ -61,13 +61,14 @@ included in reranker/evidence inputs; expected document IDs are never used as a 
 ```powershell
 python -m scripts.validate_phase7_dataset
 # Dataset approval/freeze commands are completed and retained only under scripts/archive/phase7/.
-python -m scripts.audit_phase7_retrieval_failures
-python -m scripts.calibrate_phase7_retrieval
 python -m scripts.evaluate_phase7_retrieval_closure
 # Requires explicit approval to send calibration questions/evidence externally:
 python -m scripts.evaluate_phase7_e2e --dataset calibration
 python -m scripts.evaluate_phase7_e2e --dataset test
 ```
+
+The retrieval calibration and targeted failure-audit commands that produced this historical
+checkpoint are retained only under `scripts/archive/phase7/`; they are not current rerun commands.
 
 Calibration comes first. If it reveals a correctness issue, fix code and rerun
 calibration; do not tune on the held-out test. The last two commands send selected

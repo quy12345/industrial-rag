@@ -13,18 +13,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.candidate_audit import dense_results_to_candidates
 from app.config import Settings
-from app.evaluation import direct_evidence_rank, load_frozen_chunks, phrase_matches
+from app.domain.retrieval import dense_results_to_candidates
 from app.evaluation_e2e import score_expected_answer_fact
 from app.hybrid_retrieval import create_sparse_embedding_model, sparse_search
-from app.phase7 import (
-    Phase7DatasetItem,
-    dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_datasets,
-    write_json_atomic,
-)
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
 from app.retrieval import (
     create_embedding_model,
     create_qdrant_client,
@@ -33,6 +26,13 @@ from app.retrieval import (
     get_indexed_chunk_ids,
 )
 from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, validate_frozen_runtime
+from evaluation.phase7_dataset import (
+    Phase7DatasetItem,
+    dataset_sha256,
+    read_phase7_dataset,
+    validate_phase7_datasets,
+)
+from evaluation.retrieval import direct_evidence_rank, phrase_matches
 
 AUDIT_IDS = (
     "phase7_calibration_004",

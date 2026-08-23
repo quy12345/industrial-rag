@@ -88,18 +88,14 @@ Use the existing Python 3.11 ingestion container with the source bind-mounted an
 cache. Do not build an image, re-index, prune Docker, or delete Qdrant volumes for these commands.
 
 ```powershell
-python -m scripts.create_phase7_reranker_snapshot
-python -m scripts.calibrate_phase7_role_prior
 python -m scripts.evaluate_phase7_retrieval_closure `
   --output artifacts/metrics/phase-7-contamination-closure-v4.json
-python -m scripts.benchmark_phase7_reranker_cpu --stage micro
-python -m scripts.benchmark_phase7_reranker_cpu --stage full
 ```
 
-The first, third, and CPU commands use local Qdrant/Jina and model cache. The two readiness receipts
-listed above have already been generated and their unsupported one-off generators now live under
-`scripts/archive/phase7/`; do not rerun them as current evaluation commands. Standard offline
-validation remains:
+The snapshot, role-prior, CPU benchmark, and readiness workflows have already produced their
+sanitized receipts. Their unsupported one-off generators now live under `scripts/archive/phase7/`;
+do not rerun them as current evaluation commands. The remaining closure command uses local
+Qdrant/Jina and model cache. Standard offline validation remains:
 
 ```powershell
 python -m ruff check .

@@ -21,6 +21,14 @@ modify frozen datasets or artifacts during Round 1.
 | `generate_phase7_fact_evaluator_readiness` | Validated the review-required typed-fact draft and wrote a sanitized review receipt. | Calibration-v3 is approved and active, so the draft-only `HUMAN_REVIEW_REQUIRED` decision is historical. |
 | `generate_phase7_runtime_readiness` | Combined provider-free closure receipts into the pre-egress provider-approval decision. | The runtime-readiness v2 receipt exists and the approved calibration provider run has completed. |
 | `evaluate_phase7_weighted_rerank` | Reran at most six weighted-fusion profiles through local Jina and selected an intermediate calibration profile. | Phase 7.4.1–7.5 superseded this Phase 7.4 experiment, and the v1–v3 sanitized result artifacts remain as historical evidence. |
+| `audit_phase7_retrieval_failures` | Audited three named calibration misses with sanitized dense/sparse ranks and fixed query variants. | The audit artifact exists and the later frozen retrieval closure resolves the tracked misses. |
+| `calibrate_phase7_retrieval` | Compared early dense/sparse union and RRF candidate-pool profiles. | The ablation artifact exists and the Phase 7.4.1–7.5 runtime profile is frozen. |
+| `calibrate_phase7_weighted_fusion` | Searched the bounded weighted-RRF, role and reserve grid before reranking. | The weighted-fusion artifact exists and the selected frozen profile was validated by later closure. |
+| `create_phase7_reranker_snapshot` | Created sanitized Jina snapshots for deterministic rank-policy replay. | Snapshot v3 and its downstream relation-list ablation already exist. |
+| `calibrate_phase7_role_prior` | Replayed the sanitized snapshot through the finite role/list policy grid. | The relation-list ablation and real runtime closure both record the released profile. |
+| `benchmark_phase7_reranker_cpu` | Measured the bounded micro/full CPU configuration grid. | Both sanitized benchmark artifacts exist; further latency work is deferred to Round 2. |
+| `aggregate_phase7_calibration_stability` | Applied worst-run gates to three approved calibration runs. | The three run artifacts and the stability receipt exist and record a technical pass. |
+| `generate_phase7_calibration_closure_readiness` | Combined calibration closure receipts into the historical technical/governance decision. | The readiness artifact exists and the replacement held-out-v2 one-shot workflow has completed. |
 
 No compatibility shim is provided at the former top-level path. Read the source for provenance; do
 not run it against current data without a separately approved migration plan.

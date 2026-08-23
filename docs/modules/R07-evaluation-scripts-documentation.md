@@ -56,6 +56,8 @@ chain. The typed draft is now approved as calibration-v3, runtime-readiness v2 e
 approved calibration provider run has completed; neither generator remains a current decision tool.
 R07C12 archives the Phase 7.4 weighted-rerank shortlist evaluator. Phase 7.4.1–7.5 superseded its
 intermediate selection, while the sanitized v1–v3 artifacts and source remain historical evidence.
+R07C13 archives the remaining eight completed calibration, snapshot, CPU, stability, and readiness
+workflows as one provenance-only toolchain while retaining the current retrieval closure evaluator.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -633,6 +635,13 @@ python -m scripts.evaluate_phase7_weighted_rerank --help
 exit 0; seven historical options recorded without loading Jina, Qdrant, datasets, or artifacts
 ```
 
+R07C13 pre-archive characterization:
+
+```text
+16 passed across the six CLI-specific offline test groups
+all eight historical `--help` commands exited 0 without running integrations
+```
+
 ## 12. Small usage example
 
 ```python
@@ -1162,7 +1171,38 @@ Proposed R07C12 commit after user review:
 chore: archive superseded phase7 weighted rerank
 ```
 
+R07C12 was committed as `44821d0 chore: archive superseded phase7 weighted rerank`.
+
+R07C13 validation:
+
+| Check | Result |
+| --- | --- |
+| Pre-archive offline characterization | PASS — `16 passed` |
+| Eight legacy `--help` contracts | PASS — all exit `0` without integration execution |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture/policy pytest | PASS — `54 passed` |
+| Eight archived `--help` contracts | PASS — all exit `0` |
+| Removed top-level commands | PASS — all eight old module paths are unavailable |
+| Top-level script inventory | PASS — eight supported entry points remain |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `381 passed, 1 warning` |
+| Docker Compose config | PASS |
+| Local Markdown links | PASS — all links in changed documentation resolve |
+| Pinned E2E sources | PASS — CLI blob `7ce4dc9c...` and evaluator blob `b8be722d...` unchanged |
+| Frozen/artifact scope | PASS — datasets, raw PDFs, artifacts, and review receipt are unchanged |
+| `git diff --check` | PASS |
+
+The suite count decreases because sixteen private CLI tests and repetitive per-script archive tests
+were replaced by one table-driven archive boundary. Domain/runtime policy tests remain. The warning
+is the existing Starlette `TestClient`/`httpx` deprecation warning; no dependency changes are made.
+
+Proposed R07C13 commit:
+
+```text
+chore: archive completed phase7 calibration workflows
+```
+
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07C11 are complete and committed through `6240aec`. R07C12 is implemented,
-validated, and awaiting user review. Later R07 slices remain outside this slice.
+`IN_PROGRESS` — R07A1–R07C12 are committed through `44821d0`. R07C13 is implemented and validated;
+evaluation boundary consolidation and documentation closure remain.
