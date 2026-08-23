@@ -19,6 +19,7 @@ from app.domain.policies.query_analysis import (
 from app.domain.reranking import RerankingError
 from app.errors import RerankerUnavailableError, RetrievalUnavailableError
 from app.infrastructure.models.reranker import FastEmbedCrossEncoder
+from app.infrastructure.qdrant.dense import dense_search
 from app.infrastructure.qdrant.hybrid import (
     create_sparse_embedding_model,
     sparse_search,
@@ -259,6 +260,8 @@ def build_union_rerank_runtime(
             ),
             union_rrf_prune_limit=contract.union_rrf_prune_limit,
             phase7_fusion_profile=contract.phase7_fusion_profile,
+            dense_search_fn=dense_search,
+            sparse_search_fn=sparse_search,
         )
         return pipeline, {
             "collections": {

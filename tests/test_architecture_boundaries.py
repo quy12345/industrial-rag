@@ -7,7 +7,13 @@ from pathlib import Path
 
 APP_ROOT = Path(__file__).parents[1] / "app"
 
-KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS: set[tuple[str, str]] = set()
+PRODUCTION_RUNTIME_ROOTS = {
+    "app.application.indexing_service",
+    "app.application.reranking_service",
+    "app.bootstrap",
+    "app.main",
+    "app.retrieval_runtime",
+}
 
 DOMAIN_FORBIDDEN_IMPORT_ROOTS = {
     "docling",
@@ -65,18 +71,16 @@ def _reachable_modules(graph: dict[str, set[str]], root: str) -> set[str]:
     return reachable
 
 
-def test_active_runtime_evaluation_imports_match_owned_baseline_debt() -> None:
+def test_production_runtime_cannot_reach_evaluation() -> None:
     graph = _import_graph()
-    active_runtime = _reachable_modules(graph, "app.main")
-    actual = {
-        (source, dependency)
-        for source in active_runtime
-        for dependency in graph[source]
-        if dependency == "app.evaluation" or dependency.startswith("app.evaluation.")
-    }
+    violations: set[tuple[str, str, str]] = set()
+    for root in PRODUCTION_RUNTIME_ROOTS:
+        for source in _reachable_modules(graph, root):
+            for dependency in graph[source]:
+                if dependency == "app.evaluation" or dependency.startswith("app.evaluation."):
+                    violations.add((root, source, dependency))
 
-    assert actual == set(KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS)
-    assert actual == set()
+    assert violations == set()
 
 
 def test_inbound_adapters_are_not_imported_by_other_application_modules() -> None:
@@ -154,18 +158,18 @@ def test_hybrid_facade_does_not_import_private_dense_facade_helpers() -> None:
     assert private_imports == set()
 
 
-def test_indexing_application_service_has_no_adapter_or_evaluation_dependency() -> None:
+def test_application_services_have_no_adapter_or_evaluation_dependency() -> None:
     graph = _import_graph()
-    dependencies = graph["app.application.indexing_service"]
-
-    assert not {
-        dependency
-        for dependency in dependencies
-        if dependency == "app.evaluation"
-        or dependency.startswith("app.evaluation.")
-        or dependency == "app.infrastructure"
-        or dependency.startswith("app.infrastructure.")
-    }
+    for module in ("app.application.indexing_service", "app.application.reranking_service"):
+        dependencies = graph[module]
+        assert not {
+            dependency
+            for dependency in dependencies
+            if dependency == "app.evaluation"
+            or dependency.startswith("app.evaluation.")
+            or dependency == "app.infrastructure"
+            or dependency.startswith("app.infrastructure.")
+        }
 
 
 def test_reranking_service_uses_domain_candidate_assembly_not_evaluation_audit() -> None:
@@ -208,8 +212,9 @@ def test_runtime_uses_canonical_dense_search_adapter() -> None:
     graph = _import_graph()
 
     service = graph["app.application.reranking_service"]
-    assert "app.infrastructure.qdrant.dense" in service
+    assert "app.infrastructure.qdrant.dense" in graph["app.retrieval_runtime"]
     assert "app.infrastructure.qdrant.dense" in graph["app.hybrid_retrieval"]
+    assert "app.infrastructure.qdrant.dense" not in service
     assert "app.retrieval" not in service
     assert "app.retrieval" not in graph["app.hybrid_retrieval"]
 
@@ -218,11 +223,13 @@ def test_runtime_uses_canonical_sparse_search_adapter() -> None:
     graph = _import_graph()
 
     for module in (
-        "app.application.reranking_service",
         "app.retrieval_runtime",
         "app.hybrid_retrieval",
     ):
         assert "app.infrastructure.qdrant.hybrid" in graph[module]
+    assert "app.infrastructure.qdrant.hybrid" not in graph[
+        "app.application.reranking_service"
+    ]
     assert "app.hybrid_retrieval" not in graph["app.application.reranking_service"]
     assert "app.hybrid_retrieval" not in graph["app.retrieval_runtime"]
 

@@ -207,3 +207,32 @@ def test_importing_runtime_does_not_construct_models() -> None:
 
     assert runtime.PHASE7_RETRIEVAL_CONTRACT.chunk_count == 2753
     assert not hasattr(runtime, "PHASE6_RETRIEVAL_CONTRACT")
+
+
+def test_runtime_composition_injects_canonical_search_adapters(monkeypatch) -> None:
+    import app.retrieval_runtime as runtime
+
+    settings, contract = resolve_retrieval_runtime(Settings())
+    captured: dict[str, object] = {}
+    pipeline = object()
+
+    monkeypatch.setattr(runtime, "create_qdrant_client", lambda settings: object())
+    monkeypatch.setattr(runtime, "validate_hybrid_collection", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime, "validate_dense_collection", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime, "_validate_frozen_collection", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime, "create_embedding_model", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runtime, "get_embedding_dimension", lambda model: contract.dense_dimension)
+    monkeypatch.setattr(runtime, "create_sparse_embedding_model", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runtime, "FastEmbedCrossEncoder", lambda *args, **kwargs: object())
+
+    def capture_pipeline(**kwargs):
+        captured.update(kwargs)
+        return pipeline
+
+    monkeypatch.setattr(runtime, "RerankPipeline", capture_pipeline)
+
+    built, _ = runtime.build_union_rerank_runtime(settings, contract=contract)
+
+    assert built is pipeline
+    assert captured["dense_search_fn"] is runtime.dense_search
+    assert captured["sparse_search_fn"] is runtime.sparse_search

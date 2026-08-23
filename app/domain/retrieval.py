@@ -3,8 +3,42 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, Protocol
 
 from app.models import RetrievalCandidate, RetrievedChunk
+
+
+class DenseSearcher(Protocol):
+    """Port for retrieving dense candidates without naming a vector-store adapter."""
+
+    def __call__(
+        self,
+        client: Any,
+        query: str,
+        *,
+        collection_name: str,
+        vector_name: str,
+        embedding_model: Any,
+        limit: int,
+        document_id: str | None = None,
+        score_threshold: float | None = None,
+    ) -> list[RetrievedChunk]: ...
+
+
+class SparseSearcher(Protocol):
+    """Port for retrieving sparse candidates without naming a vector-store adapter."""
+
+    def __call__(
+        self,
+        client: Any,
+        query: str,
+        *,
+        collection_name: str,
+        sparse_vector_name: str,
+        sparse_embedding_model: Any,
+        limit: int,
+        document_id: str | None = None,
+    ) -> list[RetrievalCandidate]: ...
 
 
 def dense_results_to_candidates(

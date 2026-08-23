@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+from inspect import signature
 from types import ModuleType
 
 import pytest
@@ -15,6 +16,8 @@ from app.config import Settings
 from app.domain import reranking as reranking_contracts
 from app.evaluation import EvaluationCase
 from app.infrastructure.models import reranker as reranker_adapter
+from app.infrastructure.qdrant import dense as dense_adapter
+from app.infrastructure.qdrant import hybrid as hybrid_adapter
 from app.models import RetrievalCandidate, RetrievedChunk
 from app.reranking import (
     CANDIDATE_TEXT_FORMAT,
@@ -54,7 +57,6 @@ def test_compatibility_facade_preserves_runtime_symbol_identity() -> None:
     runtime_symbols = (
         "CandidatePool",
         "RerankExecution",
-        "RerankPipeline",
         "build_candidate_pool",
         "build_candidate_text",
         "deduplicate_candidates_by_content",
@@ -64,6 +66,14 @@ def test_compatibility_facade_preserves_runtime_symbol_identity() -> None:
 
     for name in runtime_symbols:
         assert getattr(reranking, name) is getattr(reranking_service, name)
+    assert issubclass(reranking.RerankPipeline, reranking_service.RerankPipeline)
+
+
+def test_compatibility_pipeline_preserves_canonical_search_defaults() -> None:
+    parameters = signature(reranking.RerankPipeline).parameters
+
+    assert parameters["dense_search_fn"].default is dense_adapter.dense_search
+    assert parameters["sparse_search_fn"].default is hybrid_adapter.sparse_search
 
 
 def _candidate(

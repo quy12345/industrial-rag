@@ -21,9 +21,12 @@ from app.domain.policies.ranking import (
     select_coverage_preserving_candidates,
 )
 from app.domain.reranking import CrossEncoder, CrossEncoderScore, RerankingError
-from app.domain.retrieval import dense_results_to_candidates, union_dense_sparse_candidates
-from app.infrastructure.qdrant.dense import dense_search
-from app.infrastructure.qdrant.hybrid import sparse_search
+from app.domain.retrieval import (
+    DenseSearcher,
+    SparseSearcher,
+    dense_results_to_candidates,
+    union_dense_sparse_candidates,
+)
 from app.models import RetrievalCandidate, RetrievedChunk
 
 RerankStrategy = Literal["sparse", "hybrid", "union"]
@@ -72,8 +75,8 @@ class RerankPipeline:
         union_rrf_prune_limit: int | None = None,
         phase7_fusion_profile: Phase7FusionProfile | None = None,
         query_role_inferer: Callable[[str], QueryRoleInference] = infer_query_role,
-        dense_search_fn: Callable[..., list[RetrievedChunk]] = dense_search,
-        sparse_search_fn: Callable[..., list[RetrievalCandidate]] = sparse_search,
+        dense_search_fn: DenseSearcher,
+        sparse_search_fn: SparseSearcher,
     ) -> None:
         self.client = client
         self.dense_embedding_model = dense_embedding_model

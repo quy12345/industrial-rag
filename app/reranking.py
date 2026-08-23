@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
 from app.application.reranking_service import (
@@ -14,7 +14,7 @@ from app.application.reranking_service import (
 )
 from app.application.reranking_service import CandidatePool as CandidatePool
 from app.application.reranking_service import RerankExecution as RerankExecution
-from app.application.reranking_service import RerankPipeline as RerankPipeline
+from app.application.reranking_service import RerankPipeline as _RerankPipeline
 from app.application.reranking_service import RerankStrategy as RerankStrategy
 from app.application.reranking_service import build_candidate_pool as build_candidate_pool
 from app.application.reranking_service import build_candidate_text as build_candidate_text
@@ -23,9 +23,11 @@ from app.application.reranking_service import (
 )
 from app.application.reranking_service import execute_rerank as execute_rerank
 from app.application.reranking_service import rerank_candidates as rerank_candidates
+from app.domain.policies.ranking import Phase7FusionProfile, QueryRoleInference, infer_query_role
 from app.domain.reranking import CrossEncoder as CrossEncoder
 from app.domain.reranking import CrossEncoderScore as CrossEncoderScore
 from app.domain.reranking import RerankingError as RerankingError
+from app.domain.retrieval import DenseSearcher, SparseSearcher
 from app.evaluation import (
     EvaluationCase,
     EvaluationError,
@@ -40,9 +42,62 @@ from app.infrastructure.models.reranker import (
 from app.infrastructure.models.reranker import (
     fastembed_model_metadata as fastembed_model_metadata,
 )
+from app.infrastructure.qdrant.dense import dense_search
+from app.infrastructure.qdrant.hybrid import sparse_search
 from app.models import RetrievalCandidate
 
 FailureClass = Literal["candidate_miss", "reranker_miss_top5", "reranker_miss_top20", "hit"]
+
+
+class RerankPipeline(_RerankPipeline):
+    """Compatibility constructor retaining the historical concrete search defaults."""
+
+    def __init__(
+        self,
+        *,
+        client: Any,
+        dense_embedding_model: Any,
+        sparse_embedding_model: Any,
+        cross_encoder: CrossEncoder,
+        dense_collection: str,
+        hybrid_collection: str,
+        dense_vector_name: str,
+        sparse_vector_name: str,
+        dense_candidate_limit: int = 20,
+        sparse_candidate_limit: int = 20,
+        rrf_k: int = 60,
+        rerank_batch_size: int = 16,
+        deduplicate_content: bool = False,
+        document_contexts: Mapping[str, Mapping[str, str]] | None = None,
+        sparse_query_transform: Callable[[str], str] | None = None,
+        union_rrf_prune_limit: int | None = None,
+        phase7_fusion_profile: Phase7FusionProfile | None = None,
+        query_role_inferer: Callable[[str], QueryRoleInference] = infer_query_role,
+        dense_search_fn: DenseSearcher = dense_search,
+        sparse_search_fn: SparseSearcher = sparse_search,
+    ) -> None:
+        super().__init__(
+            client=client,
+            dense_embedding_model=dense_embedding_model,
+            sparse_embedding_model=sparse_embedding_model,
+            cross_encoder=cross_encoder,
+            dense_collection=dense_collection,
+            hybrid_collection=hybrid_collection,
+            dense_vector_name=dense_vector_name,
+            sparse_vector_name=sparse_vector_name,
+            dense_candidate_limit=dense_candidate_limit,
+            sparse_candidate_limit=sparse_candidate_limit,
+            rrf_k=rrf_k,
+            rerank_batch_size=rerank_batch_size,
+            deduplicate_content=deduplicate_content,
+            document_contexts=document_contexts,
+            sparse_query_transform=sparse_query_transform,
+            union_rrf_prune_limit=union_rrf_prune_limit,
+            phase7_fusion_profile=phase7_fusion_profile,
+            query_role_inferer=query_role_inferer,
+            dense_search_fn=dense_search_fn,
+            sparse_search_fn=sparse_search_fn,
+        )
 
 
 def evaluate_reranked_cases(
