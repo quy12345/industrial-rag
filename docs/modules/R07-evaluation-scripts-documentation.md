@@ -54,6 +54,8 @@ artifact. Both source and derived artifacts remain unchanged.
 R07C11 archives the completed typed-fact and runtime readiness generators as one historical receipt
 chain. The typed draft is now approved as calibration-v3, runtime-readiness v2 exists, and the
 approved calibration provider run has completed; neither generator remains a current decision tool.
+R07C12 archives the Phase 7.4 weighted-rerank shortlist evaluator. Phase 7.4.1–7.5 superseded its
+intermediate selection, while the sanitized v1–v3 artifacts and source remain historical evidence.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -212,6 +214,7 @@ Shared frozen-corpus flow:
 | [`scripts/archive/phase7/rescore_phase7_calibration_facts.py`](../../scripts/archive/phase7/rescore_phase7_calibration_facts.py) | Unsupported completed sanitized fact-rescore derivation. |
 | [`scripts/archive/phase7/generate_phase7_fact_evaluator_readiness.py`](../../scripts/archive/phase7/generate_phase7_fact_evaluator_readiness.py) | Unsupported completed typed-fact draft review receipt generator. |
 | [`scripts/archive/phase7/generate_phase7_runtime_readiness.py`](../../scripts/archive/phase7/generate_phase7_runtime_readiness.py) | Unsupported completed pre-egress runtime readiness receipt generator. |
+| [`scripts/archive/phase7/evaluate_phase7_weighted_rerank.py`](../../scripts/archive/phase7/evaluate_phase7_weighted_rerank.py) | Unsupported superseded Phase 7.4 weighted-rerank shortlist evaluator. |
 | [`scripts/archive/phase7/README.md`](../../scripts/archive/phase7/README.md) | Archive policy, completion evidence, and no-rerun warning. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
@@ -619,6 +622,15 @@ python -m scripts.generate_phase7_fact_evaluator_readiness --help
 exit 0; five historical options recorded without reading datasets or artifacts
 python -m scripts.generate_phase7_runtime_readiness --help
 exit 0; four historical options recorded without reading readiness artifacts
+```
+
+R07C12 pre-archive characterization:
+
+```text
+pytest -q tests/test_phase7_weighted_rerank.py
+3 passed
+python -m scripts.evaluate_phase7_weighted_rerank --help
+exit 0; seven historical options recorded without loading Jina, Qdrant, datasets, or artifacts
 ```
 
 ## 12. Small usage example
@@ -1120,7 +1132,37 @@ Proposed R07C11 commit after user review:
 chore: archive completed phase7 readiness receipts
 ```
 
+R07C11 was committed as `6240aec chore: archive completed phase7 readiness receipts`.
+
+R07C12 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive offline tests | PASS — `3 passed` |
+| Legacy pre-archive `--help` | PASS — exit `0`; seven options recorded without loading integrations |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `39 passed` |
+| Archived command `--help` | PASS — seven-option contract preserved |
+| Removed top-level command | PASS — old module path is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `408 passed, 1 warning` |
+| Current-command reference search | PASS — current docs no longer advertise the old path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen/artifact scope | PASS — datasets, raw PDFs, artifacts, and review receipt are unchanged |
+| `git diff --check` | PASS |
+
+R07C12 replaces three CLI-specific tests with one archive-boundary test, so the suite has two fewer
+tests. The warning remains the existing Starlette `TestClient`/`httpx` deprecation warning; no
+dependency changes are made.
+
+Proposed R07C12 commit after user review:
+
+```text
+chore: archive superseded phase7 weighted rerank
+```
+
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07C10 are complete and committed through `d8600cb`. R07C11 is implemented,
+`IN_PROGRESS` — R07A1–R07C11 are complete and committed through `6240aec`. R07C12 is implemented,
 validated, and awaiting user review. Later R07 slices remain outside this slice.

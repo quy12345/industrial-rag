@@ -111,8 +111,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   004/005/010, including source/index integrity and query-variant ranks; no provider or reranker.
 - `scripts/calibrate_phase7_weighted_fusion.py`: retrieval-only 144-profile weighted-RRF/role/reserve
   ablation and Pareto shortlist; no reranker, provider, or held-out query.
-- `scripts/evaluate_phase7_weighted_rerank.py`: local Jina evaluation of at most six shortlisted
-  calibration profiles, with deterministic profile selection and no generation provider.
+- `scripts/archive/phase7/evaluate_phase7_weighted_rerank.py`: unsupported completed local-Jina
+  evaluation of the Phase 7.4 weighted-fusion shortlist, superseded by Phase 7.4.1–7.5 closure.
 - `scripts/evaluate_phase7_retrieval_closure.py`: runs the frozen Phase 7.4.1 retrieval and local Jina
   reranker on answerable calibration only; no provider and no held-out execution.
 - `scripts/create_phase7_reranker_snapshot.py`: makes a sanitized baseline Jina snapshot once; replay

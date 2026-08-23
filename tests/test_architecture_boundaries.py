@@ -677,6 +677,28 @@ def test_completed_phase7_readiness_receipts_are_archive_only() -> None:
         assert "app.phase7" not in imports
 
 
+def test_superseded_phase7_weighted_rerank_is_archive_only() -> None:
+    old_path = APP_ROOT.parent / "scripts" / "evaluate_phase7_weighted_rerank.py"
+    archived_path = (
+        APP_ROOT.parent
+        / "scripts"
+        / "archive"
+        / "phase7"
+        / "evaluate_phase7_weighted_rerank.py"
+    )
+
+    assert not old_path.exists()
+    assert archived_path.is_file()
+    imports = _local_imports(archived_path)
+    assert "app.domain.policies.ranking" in imports
+    assert "app.infrastructure.corpus_artifacts" in imports
+    assert "evaluation.phase7_dataset" in imports
+    assert "evaluation.retrieval" in imports
+    assert "app.evaluation" not in imports
+    assert "app.phase7" not in imports
+    assert "app.phase7_optimization" not in imports
+
+
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:
     graph = _import_graph()
 

@@ -17,18 +17,18 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.evaluation import direct_evidence_rank, load_frozen_chunks
-from app.phase7 import (
-    dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_datasets,
-    write_json_atomic,
-)
-from app.phase7_optimization import Phase7FusionProfile, phase7_profile_from_mapping
+from app.domain.policies.ranking import Phase7FusionProfile, phase7_profile_from_mapping
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
 from app.retrieval_runtime import (
     PHASE7_RETRIEVAL_CONTRACT,
     build_query_retriever,
 )
+from evaluation.phase7_dataset import (
+    dataset_sha256,
+    read_phase7_dataset,
+    validate_phase7_datasets,
+)
+from evaluation.retrieval import direct_evidence_rank
 from scripts.evaluate_phase7_retrieval_closure import aggregate_closure_rows
 
 MAX_PARETO_PROFILES = 6
