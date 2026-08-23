@@ -200,3 +200,12 @@ def test_runtime_uses_canonical_domain_ranking_policy() -> None:
     for module in ("app.reranking", "app.evidence_selection", "app.domain.retrieval_contracts"):
         assert "app.domain.policies.ranking" in graph[module]
         assert "app.phase7_optimization" not in graph[module]
+
+
+def test_runtime_uses_canonical_dense_search_adapter() -> None:
+    graph = _import_graph()
+
+    assert "app.infrastructure.qdrant.dense" in graph["app.reranking"]
+    assert "app.infrastructure.qdrant.dense" in graph["app.hybrid_retrieval"]
+    assert "app.retrieval" not in graph["app.reranking"]
+    assert "app.retrieval" not in graph["app.hybrid_retrieval"]

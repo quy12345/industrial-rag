@@ -5,13 +5,14 @@
 R04 separates framework-neutral retrieval policies from evaluation helpers, Qdrant search, and model
 adapters without changing ranking behavior. This document is shared by all R04 slices.
 
-R04A and all R04B slices are implemented. R04A moves dense-result conversion and dense/sparse
+R04A, all R04B slices, and R04C1 are implemented. R04A moves dense-result conversion and dense/sparse
 candidate union into the domain, retains `app.candidate_audit` as a compatibility facade for these public
 imports, and removes the production reranking path's dependency on that evaluation-oriented module.
 R04B1 moves unweighted reciprocal-rank fusion (RRF) out of the Qdrant-facing hybrid facade. R04B2a
 moves deterministic Vietnamese technical query expansion into domain policy. R04B2b moves query-role,
 list-completeness, weighted-RRF, reserve, and post-rerank policies into the same domain policy layer.
-R04C–R04E remain pending.
+R04C1 moves dense Qdrant search into its infrastructure owner. Sparse search remains for R04C2;
+R04D–R04E remain pending.
 
 ## 2. Position in the system
 
@@ -33,10 +34,12 @@ evaluation cases ──> app.candidate_audit ──> qrel-oriented audit records
 question ──> app.domain.policies.query_analysis ──> sparse query augmentation
 
 query + ranked candidates ──> app.domain.policies.ranking ──> bounded ranked candidates
+
+question + dense model ──> app.infrastructure.qdrant.dense ──> Qdrant ──> RetrievedChunk
 ```
 
-R04A–R04B change ownership and dependency direction only. They do not query Qdrant, initialize a
-model, call a provider, execute a benchmark, or modify the frozen Phase 7 retrieval profile.
+R04A–R04C1 change ownership and dependency direction only. Validation does not query live Qdrant,
+initialize a model, call a provider, execute a benchmark, or modify the frozen Phase 7 profile.
 
 ## 3. Relevant background concepts
 
@@ -81,6 +84,11 @@ Weighted RRF, component reserves, list windows, post-rerank rank priors, metadat
 tie-breaks, and `Phase7OptimizationError` remain unchanged. `app.phase7_optimization` explicitly
 re-exports every established public symbol from the canonical domain module.
 
+`dense_search(...)` preserves trimmed-question validation, one query embedding, float conversion,
+named-vector selection, optional document filter and score threshold, payload/vector flags, result
+order, citation metadata mapping, and exact `RetrievalError` normalization. `app.retrieval` and
+`app.hybrid_retrieval` retain compatibility aliases to the canonical adapter function.
+
 ## 5. Step-by-step data flow
 
 1. Dense search returns `RetrievedChunk` records with citation metadata and a raw dense score.
@@ -106,6 +114,9 @@ re-exports every established public symbol from the canonical domain module.
 21. Coverage selection retains mandatory dense/sparse reserves inside the fixed candidate budget.
 22. Post-rerank policies use rank-only priors and bounded ranks 5–10 list windows.
 23. Evidence selection and reranking import these policies directly from their canonical domain owner.
+24. Dense search validates input and converts exactly one query embedding to plain floats.
+25. The adapter sends the established named-vector/filter/threshold request to Qdrant.
+26. Returned payloads are validated and mapped in Qdrant response order to `RetrievedChunk`.
 
 ## 6. Responsibilities of changed files
 
@@ -119,10 +130,14 @@ re-exports every established public symbol from the canonical domain module.
   frozen Vietnamese technical glossary and its deterministic lexical augmentation.
 - [`app/domain/policies/ranking.py`](../../app/domain/policies/ranking.py) owns query-role/list
   inference, weighted RRF, coverage reserves, list fallbacks, and post-rerank rank fusion.
+- [`app/infrastructure/qdrant/dense.py`](../../app/infrastructure/qdrant/dense.py) now owns dense search
+  and payload mapping in addition to established dense embedding/indexing infrastructure.
 - [`app/candidate_audit.py`](../../app/candidate_audit.py) owns qrel/evaluation audit behavior and
   temporarily re-exports the two moved functions for compatibility.
 - [`app/hybrid_retrieval.py`](../../app/hybrid_retrieval.py) retains sparse/hybrid Qdrant coordination
-  and exposes the canonical RRF policy through a compatibility alias.
+  and exposes canonical dense-search and RRF functions through compatibility aliases.
+- [`app/retrieval.py`](../../app/retrieval.py) is now a pure compatibility facade over dense Qdrant
+  infrastructure and manifests.
 - [`app/reranking.py`](../../app/reranking.py) consumes candidate assembly from the domain instead of
   importing the evaluation-oriented audit module, and consumes RRF directly from its domain owner.
 - [`app/query_expansion.py`](../../app/query_expansion.py) remains a compatibility facade with an
@@ -158,6 +173,7 @@ re-exports every established public symbol from the canonical domain module.
 - `fuse_weighted_rrf`, `select_coverage_preserving_candidates`: bounded pre-rerank ordering policy.
 - `apply_role_aware_rank_fusion`: rank-only post-rerank prior that preserves cross-encoder scores.
 - `apply_*_list_completeness_*`: bounded runtime and sanitized-metadata replay of list ordering.
+- `dense_search`: canonical dense Qdrant query adapter with fail-closed payload/error mapping.
 - `candidate_assembly` in `app.candidate_audit`: explicit facade reference that makes temporary
   compatibility ownership visible.
 - `KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS`: executable debt inventory; after R04A it records only the
@@ -165,7 +181,7 @@ re-exports every established public symbol from the canonical domain module.
 
 ## 8. Before-and-after structure
 
-Before R04A–R04B:
+Before R04A–R04C1:
 
 ```text
 app.candidate_audit   runtime candidate assembly + evaluation audit
@@ -177,9 +193,11 @@ app.hybrid_retrieval  Qdrant sparse search + client-side RRF policy
 app.query_expansion   query policy implementation and historical source-identity path
 
 app.phase7_optimization  role/list/fusion implementation and historical phase-named owner
+
+app.retrieval  dense Qdrant search implementation + indexing compatibility exports
 ```
 
-After R04A–R04B:
+After R04A–R04C1:
 
 ```text
 app.domain.retrieval  canonical candidate assembly
@@ -197,6 +215,10 @@ app.retrieval_runtime + app.query_expansion compatibility facade
 app.domain.policies.ranking  canonical role/list/fusion policy
         ↑
 runtime/domain consumers + app.phase7_optimization compatibility facade
+
+app.infrastructure.qdrant.dense  canonical dense index + search adapter
+        ↑
+runtime consumers + app.retrieval/app.hybrid_retrieval compatibility facades
 ```
 
 ## 9. Design decisions and trade-offs
@@ -218,6 +240,8 @@ runtime/domain consumers + app.phase7_optimization compatibility facade
   benchmark artifacts are separate R07 responsibilities.
 - Historical profile/symbol names remain because artifacts and scripts use them. Renaming those
   contracts would add no dependency benefit and would obscure behavior preservation.
+- Dense search stays beside dense indexing because both adapt the same Qdrant vector/payload schema
+  and embedding boundary. No separate abstraction is introduced for a single concrete backend.
 - The facade remains evaluation-oriented and therefore may import `app.evaluation`; the architecture
   guard now proves it is unreachable from `app.main` through the reranking edge.
 - The remaining direct import from `app.reranking` to `app.evaluation` is documented debt for R04D/E,
@@ -244,6 +268,10 @@ runtime/domain consumers + app.phase7_optimization compatibility facade
 | weighted ranking goldens | weights, reserves, budget, rank-only priors, metadata, and stable errors |
 | ranking facade identity | legacy classes, profile, errors, and functions are canonical objects |
 | ranking architecture graph | active runtime/domain consumers bypass the phase-named facade |
+| exact dense query snapshot | named vector, converted query, filter, limit, flags, and threshold |
+| dense in-memory tests | response order, scores, citation payload, filters, and invalid payload errors |
+| dense facade identity | historical imports resolve to the canonical infrastructure adapter |
+| dense architecture graph | reranking/hybrid runtime bypass `app.retrieval` for dense search |
 
 The exact dense snapshot was added before the implementation move and passed against the old owner.
 
@@ -286,6 +314,14 @@ python -m ruff check app/domain/policies/ranking.py app/phase7_optimization.py a
 python -m pytest -q tests/test_phase7_optimization.py tests/test_evidence_selection.py tests/test_reranking.py tests/test_config_contracts.py tests/test_retrieval_runtime.py tests/test_query_service.py tests/test_architecture_boundaries.py
 ```
 
+R04C1 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_retrieval.py tests/test_hybrid_retrieval.py tests/test_reranking.py
+python -m ruff check app/infrastructure/qdrant/dense.py app/retrieval.py app/hybrid_retrieval.py app/reranking.py tests/test_retrieval.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_retrieval.py tests/test_hybrid_retrieval.py tests/test_reranking.py tests/test_retrieval_runtime.py tests/test_query_service.py tests/test_architecture_boundaries.py
+```
+
 Slice-completion validation:
 
 ```text
@@ -294,7 +330,7 @@ python -m pytest -q
 git diff --check
 ```
 
-Unit tests must run offline with fake models and in-memory stores. No R04A–R04B command requires
+Unit tests must run offline with fake models and in-memory stores. No R04A–R04C1 command requires
 source PDFs, model downloads, a provider, live Qdrant, or held-out benchmark payloads.
 
 ## 12. Small usage example
@@ -339,10 +375,12 @@ Historical `app.phase7_optimization` imports remain compatible in the same way.
   refactor. Do not overwrite the artifact or claim its metrics were produced by current source.
 - A role/list or fusion golden failure means a cue boundary, feature scope, rank window, weight,
   reserve, tie-break, or metadata contract drifted; do not tune the expected result during R04.
+- A dense query snapshot failure means vector conversion, named-vector selection, filter, threshold,
+  or payload/vector flags changed; do not update the expected call during an adapter move.
 
 ## 14. Current limitations
 
-- Dense and sparse search remain in compatibility modules until R04C.
+- Sparse search remains in the hybrid compatibility module until R04C2.
 - Cross-encoder construction and reranking orchestration remain combined until R04D.
 - `app.reranking` still directly imports evaluation types/helpers; R04E cannot enable the final
   production-to-evaluation prohibition until those runtime/evaluator responsibilities are separated.
@@ -361,6 +399,7 @@ Historical `app.phase7_optimization` imports remain compatible in the same way.
 7. Why does RRF combine ranks rather than raw dense and sparse scores?
 8. Why must historical artifact hashes remain unchanged after moving query policy code?
 9. Why does post-rerank role fusion preserve `rerank_score` and write a separate rank-derived score?
+10. Why does dense search belong in Qdrant infrastructure rather than the retrieval domain?
 
 ## 16. Interview summary
 
@@ -372,11 +411,12 @@ policy and removes a reverse dependency from frozen contracts. R04B2b completes 
 with query-only role/list analysis, weighted fusion, reserves, and bounded post-rerank ordering. Exact
 record snapshots, lexical and ranking goldens, and static
 import-graph tests demonstrate improved dependency direction without changing scores, ranks,
-provenance, candidate ordering, limits, or error behavior.
+provenance, candidate ordering, limits, or error behavior. R04C1 moves dense search behind the Qdrant
+adapter while preserving exact request and response mapping contracts.
 
 ## 17. Validation results and proposed commit
 
-Current R04A–R04B validation:
+Current R04A–R04C1 validation:
 
 ```text
 Pre-refactor candidate/reranking characterization  PASS — 34 tests
@@ -399,16 +439,21 @@ R04B2b focused ranking/runtime/architecture suite  PASS — 108 tests
 R04B2b full Ruff                                   PASS
 R04B2b full pytest Python 3.11.15                  PASS — 365 tests, 1 warning
 R04B2b Markdown links (17 targets) / diff check    PASS
+Pre-refactor dense-search characterization         PASS — 69 tests
+R04C1 focused dense/runtime/architecture suite     PASS — 108 tests
+R04C1 full Ruff                                    PASS
+R04C1 full pytest Python 3.11.15                   PASS — 367 tests, 1 warning
+R04C1 Markdown links (19 targets) / diff check     PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: move ranking policies into the domain
+refactor: isolate dense search infrastructure
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R04A and R04B are implemented and focused checks pass. R04 remains open for search
-adapters, the reranking adapter, and the final
+`IN_PROGRESS` — R04A, R04B, and R04C1 are implemented and focused checks pass. R04 remains open for
+the sparse-search adapter, the reranking adapter, and the final
 production/evaluation boundary slices.

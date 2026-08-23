@@ -31,8 +31,8 @@ from app.evaluation import (
     percentile_nearest_rank,
 )
 from app.hybrid_retrieval import sparse_search
+from app.infrastructure.qdrant.dense import dense_search
 from app.models import RetrievalCandidate, RetrievedChunk
-from app.retrieval import dense_search
 
 RerankStrategy = Literal["sparse", "hybrid", "union"]
 FailureClass = Literal["candidate_miss", "reranker_miss_top5", "reranker_miss_top20", "hit"]

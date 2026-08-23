@@ -39,6 +39,7 @@ def test_retrieval_facade_exports_canonical_infrastructure_symbols() -> None:
     assert retrieval.RetrievalError is CanonicalRetrievalError
     assert retrieval.create_qdrant_client is qdrant_client_adapter.create_qdrant_client
     assert retrieval.build_point_id is dense_infrastructure.build_point_id
+    assert retrieval.dense_search is dense_infrastructure.dense_search
     assert retrieval.index_chunks is dense_infrastructure.index_chunks
     assert retrieval.ensure_dense_collection is dense_infrastructure.ensure_dense_collection
     assert retrieval.write_index_manifest is dense_manifests.write_index_manifest
@@ -354,6 +355,45 @@ def test_dense_search_returns_ranked_payload_and_respects_limit() -> None:
     assert [result.score for result in results] == sorted(
         (result.score for result in results), reverse=True
     )
+
+
+def test_dense_search_sends_exact_named_vector_query_contract() -> None:
+    captured: dict[str, object] = {}
+
+    class RecordingClient:
+        def query_points(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(points=[])
+
+    results = dense_search(
+        RecordingClient(),  # type: ignore[arg-type]
+        " sensor ",
+        collection_name=COLLECTION,
+        vector_name=VECTOR_NAME,
+        embedding_model=FakeEmbeddingModel(),
+        limit=7,
+        document_id="manual-a",
+        score_threshold=0.42,
+    )
+
+    assert results == []
+    assert captured == {
+        "collection_name": COLLECTION,
+        "query": [1.0, 0.0, 0.0],
+        "using": VECTOR_NAME,
+        "query_filter": models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="document_id",
+                    match=models.MatchValue(value="manual-a"),
+                )
+            ]
+        ),
+        "limit": 7,
+        "with_payload": True,
+        "with_vectors": False,
+        "score_threshold": 0.42,
+    }
 
 
 def test_dense_search_uses_qdrant_document_filter() -> None:

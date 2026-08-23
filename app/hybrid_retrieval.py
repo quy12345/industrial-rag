@@ -9,12 +9,11 @@ from pydantic import ValidationError
 from qdrant_client import QdrantClient
 
 import app.domain.policies.fusion as fusion_policy
+import app.infrastructure.qdrant.dense as dense_infrastructure
 from app.errors import RetrievalError
-from app.infrastructure.qdrant import dense as dense_infrastructure
 from app.infrastructure.qdrant import hybrid as hybrid_infrastructure
 from app.infrastructure.qdrant import manifests as index_manifests
 from app.models import RetrievalCandidate, RetrievedChunk
-from app.retrieval import dense_search
 
 HYBRID_INDEX_MANIFEST_PATH = index_manifests.HYBRID_INDEX_MANIFEST_PATH
 HYBRID_SCHEMA_VERSION = index_manifests.HYBRID_SCHEMA_VERSION
@@ -29,6 +28,7 @@ validate_hybrid_index_manifest = index_manifests.validate_hybrid_index_manifest
 _document_filter = dense_infrastructure.document_filter
 _to_sparse_vector = hybrid_infrastructure.to_sparse_vector
 _runtime_versions = index_manifests.runtime_versions
+dense_search = dense_infrastructure.dense_search
 fuse_rrf = fusion_policy.fuse_rrf
 
 
