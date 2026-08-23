@@ -32,6 +32,9 @@ its output documents source identity/parsing preconditions without storing subst
 R07C1 starts evidence-based archival with the completed dataset-v2 migration. The source remains
 available under `scripts.archive.phase7`, but its old top-level command is intentionally unsupported
 because rerunning it would mutate frozen dataset files.
+R07C2 archives the completed typed-fact calibration draft generator for the same reason. The approved,
+frozen calibration-v3 identity remains untouched; only the obsolete construction entry point leaves
+the supported top-level script surface.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -179,6 +182,7 @@ Shared frozen-corpus flow:
 | [`scripts/operations/audit_phase7_corpus.py`](../../scripts/operations/audit_phase7_corpus.py) | Canonical local corpus metadata/text-layer audit adapter. |
 | [`scripts/audit_phase7_corpus.py`](../../scripts/audit_phase7_corpus.py) | Thin compatibility entry point preserving the walkthrough command. |
 | [`scripts/archive/phase7/migrate_phase7_dataset_v2.py`](../../scripts/archive/phase7/migrate_phase7_dataset_v2.py) | Unsupported historical dataset-v2 migration retained for provenance. |
+| [`scripts/archive/phase7/draft_phase7_calibration_fact_types.py`](../../scripts/archive/phase7/draft_phase7_calibration_fact_types.py) | Unsupported historical typed-fact calibration-v3 draft generator. |
 | [`scripts/archive/phase7/README.md`](../../scripts/archive/phase7/README.md) | Archive policy, completion evidence, and no-rerun warning. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
@@ -307,6 +311,12 @@ test imports the script, and no identity builder hashes it. Keeping the former c
 suggest that mutating frozen calibration/test files is supported; retaining the source under an
 explicit archive preserves provenance without that ambiguity.
 
+The typed-fact draft generator is likewise archived without a shim. Its pre-move test established that
+retrieval ground truth stayed unchanged and the output required review. The current README and
+evaluation manifest establish that calibration-v3 was subsequently approved and frozen; the manifest
+hashes the dataset and draft content, not this generator source. Its historical walkthrough no longer
+presents regeneration as a current command.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -353,6 +363,10 @@ page/text-layer metadata, document cleanup, sanitized output, missing-file error
 The archive boundary test proves the old migration path is absent, the historical source exists under
 `scripts.archive.phase7`, and the archived module uses canonical corpus/evaluation owners rather than
 keeping compatibility facades alive.
+
+The typed-fact archive boundary adds the same proof for the completed draft generator. Its former
+functional test served as pre-move characterization; unsupported archive tools do not retain a test
+contract that would imply ongoing support.
 
 ## 11. Commands and expected results
 
@@ -414,6 +428,15 @@ R07C1 pre-archive characterization:
 ```text
 python -m scripts.migrate_phase7_dataset_v2 --help
 exit 0; historical four-option contract recorded before removal
+```
+
+R07C2 pre-archive characterization:
+
+```text
+pytest -q tests/test_phase7_typed_fact_draft.py
+1 passed
+python -m scripts.draft_phase7_calibration_fact_types --help
+exit 0; historical `--input` and `--output` options recorded before removal
 ```
 
 ## 12. Small usage example
@@ -631,7 +654,36 @@ Proposed R07C1 commit after user review:
 chore: archive completed phase7 dataset migration
 ```
 
+R07C1 was committed as `808907b chore: archive completed phase7 dataset migration`.
+
+R07C2 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive functional test | PASS — `1 passed` |
+| Legacy pre-archive `--help` | PASS — exit `0`; two options recorded |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `29 passed` |
+| Archived command `--help` | PASS — exit `0`; two-option contract preserved |
+| Removed top-level command | PASS — `scripts.draft_phase7_calibration_fact_types` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `417 passed, 1 warning` |
+| Current-command reference search | PASS — no supported docs/code/tests reference the old path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen-data/artifact scope | PASS — no changes under `data/eval/`, `data/raw/`, or `artifacts/` |
+| `git diff --check` | PASS |
+
+The warning remains the existing Starlette `TestClient`/`httpx` deprecation warning. R07C2 does not
+change dependencies.
+
+Proposed R07C2 commit after user review:
+
+```text
+chore: archive completed phase7 typed-fact draft
+```
+
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07B2 are complete and committed through `09a3352`. R07C1 is implemented,
+`IN_PROGRESS` — R07A1–R07C1 are complete and committed through `808907b`. R07C2 is implemented,
 validated, and awaiting user review. Later R07 slices remain outside this slice.

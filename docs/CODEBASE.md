@@ -137,6 +137,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   prior sanitized v2 diagnostics when raw provider answers are unavailable.
 - `scripts/archive/phase7/migrate_phase7_dataset_v2.py`: unsupported completed migration that revoked
   approval, added answer facts, and expanded qrels only across same-document exact-content duplicates.
+- `scripts/archive/phase7/draft_phase7_calibration_fact_types.py`: unsupported completed generator for
+  the review-required typed-fact calibration-v3 draft.
 - `scripts/apply_phase7_answer_facts.py`: explicit source-review mapping for 42 answerable rows plus
   the documented calibration 011/012 qrel correction; it reads no retrieval/provider output.
 

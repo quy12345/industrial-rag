@@ -11,7 +11,8 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from app.phase7 import Phase7DatasetItem, Phase7Error, read_phase7_dataset, write_jsonl_atomic
+from app.infrastructure.corpus_artifacts import write_jsonl_atomic
+from evaluation.phase7_dataset import Phase7DatasetItem, Phase7Error, read_phase7_dataset
 
 REVIEW_NOTE = (
     "Phase 7.4 typed-fact draft derived from source-reviewed v2 aliases; qrels, pages and "

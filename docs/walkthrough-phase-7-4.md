@@ -58,7 +58,6 @@ not a probability and not a raw-score mixture.
 Run these against Qdrant plus the shared FastEmbed cache. They do not call a generation provider:
 
 ```powershell
-python -m scripts.draft_phase7_calibration_fact_types
 python -m scripts.calibrate_phase7_weighted_fusion
 python -m scripts.evaluate_phase7_weighted_rerank --max-profiles 6
 python -m scripts.audit_phase7_retrieval_failures `
@@ -67,9 +66,10 @@ python -m scripts.evaluate_phase7_retrieval_closure `
   --output artifacts/metrics/phase-7-retrieval-closure-v2.json
 ```
 
-`draft_phase7_calibration_fact_types` writes a review-required calibration-v3 draft. It preserves
-every qrel/page/phrase and does not touch the sealed held-out file; do not use that draft for provider
-evaluation until it has separate human approval and a new dataset freeze.
+The completed `draft_phase7_calibration_fact_types` construction command is now retained only under
+`scripts/archive/phase7/`. It produced the review-required calibration-v3 draft while preserving every
+qrel/page/phrase and without touching the sealed held-out file. Calibration-v3 was subsequently
+reviewed, approved, and frozen, so regenerating that draft is not a supported current workflow.
 
 Use the existing ingestion image for canonical Python 3.11 validation; do not rebuild it merely for
 these commands. The local `.venv` in this workspace is Python 3.13.5 and is not the canonical Phase
