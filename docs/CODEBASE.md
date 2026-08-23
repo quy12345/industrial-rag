@@ -98,8 +98,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 - `scripts/query_smoke.py`: bounded real-provider smoke and sanitized Phase 7 artifact writer.
 - `scripts/audit_phase7_corpus.py`, `scripts/index_phase7_corpus.py`: source audit and guarded
   indexing for the isolated ATV320 collections.
-- `scripts/freeze_phase7_calibration_v3.py`: copies the review-required typed calibration draft to an
-  approved v3 file and manifest only after an exact human token; it cannot modify held-out.
+- `scripts/archive/phase7/freeze_phase7_calibration_v3.py`: unsupported completed approval tool that
+  copied the reviewed typed calibration draft to the frozen v3 file and manifest.
 - `scripts/evaluate_phase7_e2e.py`: resumable integration evaluator that validates the approved
   manifest and live frozen hash before it sends anything to a provider. Calibration mode reads one
   split only and records a full non-secret run identity. Held-out execution currently fails closed

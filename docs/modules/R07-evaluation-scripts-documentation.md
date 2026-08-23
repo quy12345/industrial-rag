@@ -35,6 +35,8 @@ because rerunning it would mutate frozen dataset files.
 R07C2 archives the completed typed-fact calibration draft generator for the same reason. The approved,
 frozen calibration-v3 identity remains untouched; only the obsolete construction entry point leaves
 the supported top-level script surface.
+R07C3 archives the completed calibration-v3 approval/freeze command. This removes a top-level command
+that can overwrite the active dataset and manifest while preserving its implementation as provenance.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -183,6 +185,7 @@ Shared frozen-corpus flow:
 | [`scripts/audit_phase7_corpus.py`](../../scripts/audit_phase7_corpus.py) | Thin compatibility entry point preserving the walkthrough command. |
 | [`scripts/archive/phase7/migrate_phase7_dataset_v2.py`](../../scripts/archive/phase7/migrate_phase7_dataset_v2.py) | Unsupported historical dataset-v2 migration retained for provenance. |
 | [`scripts/archive/phase7/draft_phase7_calibration_fact_types.py`](../../scripts/archive/phase7/draft_phase7_calibration_fact_types.py) | Unsupported historical typed-fact calibration-v3 draft generator. |
+| [`scripts/archive/phase7/freeze_phase7_calibration_v3.py`](../../scripts/archive/phase7/freeze_phase7_calibration_v3.py) | Unsupported historical calibration-v3 approval/freeze command. |
 | [`scripts/archive/phase7/README.md`](../../scripts/archive/phase7/README.md) | Archive policy, completion evidence, and no-rerun warning. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
@@ -317,6 +320,12 @@ evaluation manifest establish that calibration-v3 was subsequently approved and 
 hashes the dataset and draft content, not this generator source. Its historical walkthrough no longer
 presents regeneration as a current command.
 
+The calibration-v3 freeze command is archived without a shim after the same evidence check. Its
+synthetic pre-move tests proved that approval changed only `review_status` and rejected preapproved or
+ground-truth-mutated drafts. The active manifest records the frozen dataset and draft hashes but no
+source hash for this command. Leaving a writer for the active dataset and manifest at top level would
+misrepresent a completed approval ceremony as routine operation.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -367,6 +376,10 @@ keeping compatibility facades alive.
 The typed-fact archive boundary adds the same proof for the completed draft generator. Its former
 functional test served as pre-move characterization; unsupported archive tools do not retain a test
 contract that would imply ongoing support.
+
+The calibration-freeze archive boundary additionally proves that its historical source uses canonical
+domain, infrastructure, and evaluation owners rather than compatibility facades. Its synthetic
+approval tests are retained as recorded pre-move characterization, not an ongoing supported contract.
 
 ## 11. Commands and expected results
 
@@ -437,6 +450,15 @@ pytest -q tests/test_phase7_typed_fact_draft.py
 1 passed
 python -m scripts.draft_phase7_calibration_fact_types --help
 exit 0; historical `--input` and `--output` options recorded before removal
+```
+
+R07C3 pre-archive characterization:
+
+```text
+pytest -q tests/test_freeze_phase7_calibration_v3.py
+2 passed
+python -m scripts.freeze_phase7_calibration_v3 --help
+exit 0; six historical options recorded before removal
 ```
 
 ## 12. Small usage example
@@ -683,7 +705,37 @@ Proposed R07C2 commit after user review:
 chore: archive completed phase7 typed-fact draft
 ```
 
+R07C2 was committed as `b582c87 chore: archive completed phase7 typed-fact draft`.
+
+R07C3 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive synthetic tests | PASS — `2 passed` |
+| Legacy pre-archive `--help` | PASS — exit `0`; six options recorded |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `30 passed` |
+| Archived command `--help` | PASS — exit `0`; six-option contract preserved |
+| Removed top-level command | PASS — `scripts.freeze_phase7_calibration_v3` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `416 passed, 1 warning` |
+| Current-command reference search | PASS — no supported docs/code/tests reference the old path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen-data/artifact scope | PASS — no changes under `data/eval/`, `data/raw/`, or `artifacts/` |
+| `git diff --check` | PASS |
+
+The suite count decreases by one because two synthetic unit tests for the unsupported command were
+replaced by one archive-boundary test. The warning remains the existing Starlette
+`TestClient`/`httpx` deprecation warning. R07C3 does not change dependencies.
+
+Proposed R07C3 commit after user review:
+
+```text
+chore: archive completed phase7 calibration freeze
+```
+
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07C1 are complete and committed through `808907b`. R07C2 is implemented,
+`IN_PROGRESS` — R07A1–R07C2 are complete and committed through `b582c87`. R07C3 is implemented,
 validated, and awaiting user review. Later R07 slices remain outside this slice.
