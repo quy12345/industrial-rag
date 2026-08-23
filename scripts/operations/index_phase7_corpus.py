@@ -24,16 +24,15 @@ from app.hybrid_retrieval import (
     create_sparse_embedding_model,
     index_hybrid_chunks,
 )
-from app.ingestion import IngestionError, ingest_document, write_chunks_jsonl
-from app.phase7 import (
+from app.infrastructure.corpus_artifacts import (
     PHASE7_CORPUS_VERSION,
     PHASE7_DENSE_COLLECTION,
     PHASE7_HYBRID_COLLECTION,
     PROTECTED_COLLECTIONS,
-    Phase7Error,
     file_sha256,
     write_json_atomic,
 )
+from app.ingestion import IngestionError, ingest_document, write_chunks_jsonl
 from app.retrieval import (
     RetrievalError,
     create_embedding_model,
@@ -138,7 +137,7 @@ def main() -> int:
             bm25_avg_len=bm25_avg_len,
             dense_dimension=dense_dimension,
         )
-    except (IngestionError, RetrievalError, Phase7Error, OSError, ValueError) as exc:
+    except (IngestionError, RetrievalError, OSError, ValueError) as exc:
         print(f"Phase 7 corpus indexing FAILED: {exc}")
         return 1
     print(f"Phase 7 corpus indexing PASS: {args.manifest_output}")

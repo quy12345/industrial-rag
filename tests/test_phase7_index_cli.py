@@ -13,7 +13,10 @@ from app.application.indexing_service import (
     validate_chunk_preview,
 )
 from app.domain.documents import DocumentChunk
-from app.phase7 import PHASE7_DENSE_COLLECTION, PHASE7_HYBRID_COLLECTION
+from app.infrastructure.corpus_artifacts import (
+    PHASE7_DENSE_COLLECTION,
+    PHASE7_HYBRID_COLLECTION,
+)
 from scripts.operations import index_phase7_corpus as index_cli
 
 

@@ -13,8 +13,12 @@ validation, scoring, and aggregate metrics from `app.evaluation` to `evaluation.
 
 R07A2 moves sanitized snapshot validation and deterministic rank-only replay from
 `app.phase7_replay` to `evaluation.replay`. Its old module path also remains a compatibility facade.
-The E2E evaluator, Phase 7 dataset helpers, CLI classification, archive work, shim removal, and
-documentation closure remain later R07 slices.
+
+R07A3 separates offline Phase 7 dataset/qrel contracts into `evaluation.phase7_dataset` and active
+corpus identity/file operations into `app.infrastructure.corpus_artifacts`. `app.phase7` becomes a
+compatibility facade, while the supported indexing command imports corpus artifacts directly.
+The E2E evaluator, remaining CLI classification, archive work, shim removal, and documentation closure
+remain later R07 slices.
 
 ## 2. Position in the system
 
@@ -33,6 +37,9 @@ legacy evaluator code --> app.evaluation facade --> evaluation.retrieval
 
 sanitized snapshot --> evaluation.replay --> public retrieval/ranking contracts
 legacy calibration --> app.phase7_replay facade --> evaluation.replay
+
+offline Phase 7 JSONL --> evaluation.phase7_dataset --> domain documents / retrieval metrics
+supported indexing CLI --> app.infrastructure.corpus_artifacts --> retrieval contract
 ```
 
 The new top-level package makes ownership visible in the filesystem. It is installed in retrieval,
@@ -81,6 +88,12 @@ existing deterministic domain ranking policy. R07A2 preserves validation order a
 one-based rank rules, score/fingerprint checks, feature metadata, candidate sorting, and exception
 translation.
 
+`Phase7DatasetItem` and `ExpectedAnswerFact` preserve the strict Phase 7 annotation schema.
+Dataset loaders and validators retain record order, canonical hashes, qrel/phrase/page validation,
+review-state rules, and exact-content qrel expansion. Corpus artifact functions preserve streamed
+SHA-256 and atomic UTF-8 JSON/JSONL output. Collection names continue to equal the frozen retrieval
+contract.
+
 ## 5. Step-by-step data flow
 
 1. `load_evaluation_cases` reads UTF-8 JSONL in file order.
@@ -102,6 +115,14 @@ Sanitized replay follows a separate deterministic flow:
 4. Sort by cross-encoder rank and call the public domain role-aware ranking policy.
 5. Translate a ranking-policy error into the existing `Phase7ReplayError` contract.
 
+Phase 7 dataset/corpus flow is now explicit:
+
+1. Indexing reads active collection identity and filesystem helpers from corpus infrastructure.
+2. Offline tools read strict JSONL through `evaluation.phase7_dataset`.
+3. Dataset models validate answerability, scenario, qrel, citation, review, and answer-fact invariants.
+4. Validators compare qrels with frozen domain chunks and compute canonical summaries/hashes.
+5. Existing scripts may still enter through `app.phase7`; each export is the exact canonical object.
+
 ## 6. Responsibilities of changed files
 
 | File | R07 responsibility |
@@ -109,12 +130,18 @@ Sanitized replay follows a separate deterministic flow:
 | [`evaluation/__init__.py`](../../evaluation/__init__.py) | Marks the offline evaluation package. |
 | [`evaluation/retrieval.py`](../../evaluation/retrieval.py) | Canonical retrieval evaluation schemas, validation, scoring, and aggregation. |
 | [`evaluation/replay.py`](../../evaluation/replay.py) | Canonical sanitized snapshot validation and deterministic rank-only replay. |
+| [`evaluation/phase7_dataset.py`](../../evaluation/phase7_dataset.py) | Canonical Phase 7 schemas, dataset validation, hashes, and qrel closure. |
 | [`app/evaluation.py`](../../app/evaluation.py) | Temporary import-compatible re-export facade. |
 | [`app/phase7_replay.py`](../../app/phase7_replay.py) | Temporary import-compatible replay facade. |
+| [`app/phase7.py`](../../app/phase7.py) | Temporary facade over dataset and corpus artifact owners. |
+| [`app/infrastructure/corpus_artifacts.py`](../../app/infrastructure/corpus_artifacts.py) | Active corpus constants plus streamed hash and atomic local file operations. |
+| [`scripts/operations/index_phase7_corpus.py`](../../scripts/operations/index_phase7_corpus.py) | Uses corpus artifacts without importing the Phase 7 dataset facade. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
 | [`tests/test_evaluate.py`](../../tests/test_evaluate.py) | Exercises the canonical module and verifies facade identity. |
 | [`tests/test_phase7_replay.py`](../../tests/test_phase7_replay.py) | Protects replay validation/ranking and facade identity. |
+| [`tests/test_phase7.py`](../../tests/test_phase7.py) | Exercises canonical dataset contracts and both facade ownership branches. |
+| [`tests/test_phase7_index_cli.py`](../../tests/test_phase7_index_cli.py) | Protects supported indexing defaults through canonical corpus constants. |
 | [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) | Includes `evaluation` in the local import graph and forbids production reachability. |
 | This document | Records the implemented boundary and evidence for the whole R07 module. |
 
@@ -134,6 +161,14 @@ Sanitized replay follows a separate deterministic flow:
 - `Phase7ReplayError`: stable error category for malformed sanitized snapshots and replay failures.
 - `snapshot_candidates_to_retrieval`: validates sanitized rows and reconstructs rank-only candidates.
 - `replay_role_prior`: replays the registered domain policy without model, provider, Qdrant, or text.
+- `Phase7DatasetItem`: strict answerable/unanswerable annotation and review-state contract.
+- `ExpectedAnswerFact`: typed deterministic answer-fact contract used by offline scoring.
+- `validate_phase7_dataset(s)`: frozen-corpus qrel integrity and split-isolation guards.
+- `dataset_sha256`: line-ending-independent canonical record identity.
+- `build_exact_content_equivalence` / `expand_exact_equivalent_qrels`: bounded same-document,
+  exact-normalized qrel closure.
+- `file_sha256`: streamed source identity without loading a manual into memory.
+- `write_json_atomic` / `write_jsonl_atomic`: replace-on-success local artifact writes.
 
 ## 8. Before-and-after structure
 
@@ -143,6 +178,7 @@ Before R07A1:
 app/
   evaluation.py       # implementation inside production package
   evaluation_e2e.py
+  phase7.py           # corpus constants, file I/O, and offline dataset implementation
   phase7_replay.py    # replay implementation inside production package
 ```
 
@@ -152,11 +188,15 @@ After R07A1:
 app/
   evaluation.py       # temporary compatibility facade
   evaluation_e2e.py   # unchanged; source identity work is deferred
+  phase7.py           # temporary compatibility facade
   phase7_replay.py    # temporary compatibility facade
+  infrastructure/
+    corpus_artifacts.py # active corpus identity and local artifact I/O
 evaluation/
   __init__.py
   retrieval.py        # canonical implementation
   replay.py           # canonical sanitized replay
+  phase7_dataset.py   # canonical Phase 7 offline dataset contracts
 ```
 
 The move changes ownership and dependency direction, not evaluator behavior.
@@ -185,6 +225,13 @@ consumers are classified.
 dependency direction without moving the shared `RetrievalCandidate` model in the same slice. The
 calibration CLI keeps its old import until script classification so source changes remain scoped.
 
+R07A3 does not leave active collection values in the evaluation package. Dense/hybrid names are
+derived from `PHASE7_RETRIEVAL_CONTRACT`, giving the supported indexing adapter the same canonical
+configuration as runtime composition. Historical protected collection names and corpus-version text
+remain explicit frozen constants. File operations stay in infrastructure because they cause local
+filesystem side effects; the deterministic dataset module remains side-effect free except explicit
+dataset reads.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -212,6 +259,11 @@ rank-only reordering, empty raw-evidence fields, malformed-record rejection, and
 old replay facade exports. The architecture suite additionally proves canonical replay uses the domain
 interfaces and remains unreachable from production roots.
 
+Phase 7 dataset tests protect schema/default/error behavior, review rules, qrel validation, canonical
+hashes, exact-content closure, source-manifest validation, and facade identity. Indexing CLI tests
+protect collection defaults and import direction. Architecture tests prove dataset code depends on
+canonical domain/retrieval interfaces while corpus infrastructure cannot depend on evaluation.
+
 ## 11. Commands and expected results
 
 Pre-move characterization executed in the offline Python 3.11 validation container:
@@ -232,6 +284,17 @@ R07A2 pre-move characterization:
 python -m pytest -q tests/test_phase7_replay.py tests/test_phase7_optimization.py \
   tests/test_architecture_boundaries.py
 55 passed
+```
+
+R07A3 pre-move characterization:
+
+```text
+python -m pytest -q tests/test_phase7.py tests/test_phase7_index_cli.py \
+  tests/test_evaluation_e2e.py tests/test_phase7_calibration.py \
+  tests/test_phase7_005_diagnostic.py tests/test_phase7_typed_fact_draft.py \
+  tests/test_freeze_phase7_calibration_v3.py tests/test_freeze_phase7_heldout_v2.py \
+  tests/test_architecture_boundaries.py
+88 passed
 ```
 
 ## 12. Small usage example
@@ -265,7 +328,10 @@ The caller owns paths and retrieval execution. Importing the module performs no 
 
 - `app.evaluation` remains until its consumers are migrated or explicitly retained.
 - `app.phase7_replay` remains as a facade until the calibration CLI is classified.
-- `app.evaluation_e2e`, Phase 7 dataset helpers, and evaluator CLIs are not isolated yet.
+- `app.phase7` remains as a facade until evaluator CLI consumers are classified.
+- `app.evaluation_e2e` and evaluator CLIs are not isolated yet.
+- The supported indexing command still obtains frozen-chunk parsing/metadata through
+  `app.evaluation`; a later script-boundary slice owns moving those shared artifact helpers.
 - Evaluation and production packages are still present in the same installed image.
 - Historical defaults in `EvaluationCase` are preserved as behavior; changing them is not part of this
   structural slice.
@@ -279,14 +345,15 @@ The caller owns paths and retrieval execution. Importing the module performs no 
 4. Why is `app.evaluation_e2e` excluded from this move?
 5. Which test detects a future production-to-evaluation dependency?
 6. Why does sanitized replay deliberately reconstruct candidates with empty text?
+7. Why do collection constants and atomic file writes not belong in the dataset module?
 
 ## 16. Interview summary
 
-R07A1–R07A2 turn evaluation ownership into an enforceable architectural boundary without changing the
-retrieval benchmark contract. Retrieval metrics and sanitized replay now live in a top-level offline
-package, depend inward on public domain contracts, and remain accessible through identity-preserving
-legacy facades. Golden tests and static reachability checks demonstrate that evaluator behavior and
-production isolation remain intact.
+R07A1–R07A3 turn evaluation ownership into an enforceable architectural boundary without changing the
+retrieval benchmark contract. Retrieval metrics, sanitized replay, and Phase 7 dataset contracts now
+live in a top-level offline package and depend inward on public domain contracts. Active corpus
+identity and file side effects have a distinct infrastructure owner. Identity-preserving facades,
+golden tests, and static reachability checks keep existing consumers stable during migration.
 
 ## 17. Validation results and proposed commit
 
@@ -323,13 +390,31 @@ R07A2 validation:
 | Local Markdown links | PASS — all links in this module document resolve |
 | `git diff --check` | PASS |
 
-Proposed R07A2 commit after user review:
+R07A2 was committed as `8ab8d5a refactor: isolate sanitized evaluation replay`.
+
+R07A3 validation:
+
+| Check | Result |
+| --- | --- |
+| Pre-move characterization | PASS — `88 passed` |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused offline pytest | PASS — `92 passed` |
+| Full facade export identity | PASS |
+| UTF-8/atomic artifact writer characterization | PASS |
+| Collection contract/import identity smoke | PASS |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `406 passed, 1 warning` |
+| `docker compose config --quiet` | PASS |
+| Local Markdown links | PASS — all links in this module document resolve |
+| `git diff --check` | PASS |
+
+Proposed R07A3 commit after user review:
 
 ```text
-refactor: isolate sanitized evaluation replay
+refactor: separate phase7 dataset and corpus artifacts
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R07A1 is complete and committed. R07A2 is implemented and validated; user review
-remains. Later R07 slices remain outside this slice.
+`IN_PROGRESS` — R07A1 and R07A2 are complete and committed. R07A3 is implemented and validated; user
+review remains. Later R07 slices remain outside this slice.

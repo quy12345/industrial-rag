@@ -380,6 +380,38 @@ def test_sanitized_replay_is_owned_outside_production_package() -> None:
     assert "app.phase7_replay" not in graph["evaluation.replay"]
 
 
+def test_phase7_dataset_and_corpus_artifact_ownership_are_separate() -> None:
+    graph = _import_graph()
+
+    assert "evaluation.phase7_dataset" in graph["app.phase7"]
+    assert "app.infrastructure.corpus_artifacts" in graph["app.phase7"]
+    assert "evaluation.retrieval" in graph["evaluation.phase7_dataset"]
+    assert "app.domain.documents" in graph["evaluation.phase7_dataset"]
+    assert "app.evaluation" not in graph["evaluation.phase7_dataset"]
+    assert "app.models" not in graph["evaluation.phase7_dataset"]
+    assert "app.phase7" not in graph["evaluation.phase7_dataset"]
+    assert "app.domain.retrieval_contracts" in graph["app.infrastructure.corpus_artifacts"]
+    assert not {
+        dependency
+        for dependency in graph["app.infrastructure.corpus_artifacts"]
+        if dependency == "evaluation" or dependency.startswith("evaluation.")
+    }
+
+
+def test_supported_indexing_command_does_not_import_phase7_dataset_facade() -> None:
+    imports = _local_imports(
+        APP_ROOT.parent / "scripts" / "operations" / "index_phase7_corpus.py"
+    )
+
+    assert "app.infrastructure.corpus_artifacts" in imports
+    assert "app.phase7" not in imports
+    assert not {
+        dependency
+        for dependency in imports
+        if dependency == "evaluation" or dependency.startswith("evaluation.")
+    }
+
+
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:
     graph = _import_graph()
 
