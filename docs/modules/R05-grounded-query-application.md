@@ -5,11 +5,15 @@
 R05 separates provider-neutral generation contracts, prompt policy, provider infrastructure, evidence
 and citation policies, and query orchestration without changing grounded-answer behavior.
 
-R05A and R05B are implemented. R05A moves structured generation records and the generator port to the domain,
+R05A, R05B, R05C1, and R05C2 are implemented. R05A moves structured generation records and the generator port to the domain,
 moves immutable prompt text and deterministic evidence rendering to the application layer, and keeps
 `app.generation` as a compatibility facade. R05B moves the concrete LangChain implementation to
 infrastructure, gives it the provider-neutral canonical name `LangChainStructuredGenerator`, and
 injects prompt policy from the composition root.
+R05C1 moves deterministic evidence selection, cross-document exact-duplicate handling, and the
+pre-generation evidence gate into one domain policy owner. Existing top-level imports remain valid.
+R05C2 moves referential answer validation and trusted citation construction into a second domain
+policy owner without changing correction feedback or public citation metadata.
 
 R05A does not change prompt text, evidence selection, provider settings, generation retries, citation
 validation, abstention, retrieval, or ranking.
@@ -19,7 +23,7 @@ validation, abstention, retrieval, or ranking.
 ```text
 retrieved candidates
         ↓
-evidence selection and gate
+app.domain.evidence selection and gate
         ↓
 app.application.generation_prompt.format_evidence
         ↓ EvidenceBundle
@@ -76,25 +80,41 @@ and evidence formatter. `LangChainStructuredGenerator` is the canonical concrete
 `LangChainOpenAIGenerator` remains at the old path as a compatibility subclass with the historical
 constructor; it injects the same frozen prompt policy automatically.
 
+`select_evidence_candidates(...)` preserves input rank except when exact content occurs in multiple
+documents. Query-role policy then chooses one representative and retains sanitized duplicate
+provenance. `EvidenceGate.evaluate(...)` returns one of the established pre-generation reasons and
+never performs provider or evaluation work.
+
+`validate_generated_answer(...)` treats model-returned source IDs as untrusted labels, preserves their
+first-occurrence order, and returns `ValidatedGeneration` only after referential checks.
+`build_citations(...)` constructs public metadata exclusively from retrieved candidates in the
+authoritative source map.
+
 ## 5. Step-by-step data flow
 
-1. Query orchestration selects and gates final retrieval candidates.
-2. `format_evidence` assigns `S1`, `S2`, and subsequent labels in existing candidate order.
-3. Trusted candidate metadata forms fixed source headers.
-4. Raw candidate text is wrapped as untrusted document content.
-5. When necessary, the available content budget is distributed deterministically across sources.
-6. `EvidenceBundle` retains the exact label-to-candidate mapping.
-7. The adapter builds messages from frozen system and human templates.
-8. The composition root injects those templates and the correction builder into infrastructure.
-9. Infrastructure lazily constructs one LangChain structured-output model.
-10. The generator returns provider-native structured output mapped to `GeneratedAnswer`.
-11. Query orchestration validates model-returned labels against `EvidenceBundle.source_map`.
-12. Public citations are built only from the authoritative retrieved candidates.
+1. Domain evidence policy validates selector inputs and derives query role.
+2. Exact cross-document duplicates collapse to one deterministic representative before `top_k`.
+3. The evidence gate validates candidate metadata, requested document, finite score, and threshold.
+4. `format_evidence` assigns `S1`, `S2`, and subsequent labels in existing candidate order.
+5. Trusted candidate metadata forms fixed source headers.
+6. Raw candidate text is wrapped as untrusted document content.
+7. When necessary, the available content budget is distributed deterministically across sources.
+8. `EvidenceBundle` retains the exact label-to-candidate mapping.
+9. The adapter builds messages from frozen system and human templates.
+10. The composition root injects those templates and the correction builder into infrastructure.
+11. Infrastructure lazily constructs one LangChain structured-output model.
+12. The generator returns provider-native structured output mapped to `GeneratedAnswer`.
+13. Query orchestration validates model-returned labels against `EvidenceBundle.source_map`.
+14. Public citations are built only from the authoritative retrieved candidates.
 
 ## 6. Responsibilities of changed files
 
 - [`app/domain/generation.py`](../../app/domain/generation.py) owns provider-neutral generation DTOs,
   usage records, evidence bundle contract, and `AnswerGenerator` port.
+- [`app/domain/evidence.py`](../../app/domain/evidence.py) owns selection errors/results, duplicate
+  diagnostics, exact-content selection, metadata validation, and pre-generation gate decisions.
+- [`app/domain/citations.py`](../../app/domain/citations.py) owns referential answer validation,
+  validation-error ordering, source/chunk deduplication, and trusted citation construction.
 - [`app/application/generation_prompt.py`](../../app/application/generation_prompt.py) owns immutable
   prompt templates, correction feedback text, evidence rendering, and truncation policy.
 - [`app/generation.py`](../../app/generation.py) compatibility-exports canonical contracts/policy and
@@ -105,10 +125,13 @@ constructor; it injects the same frozen prompt policy automatically.
   owns lazy SDK imports, provider configuration, structured parsing, normalized usage, and sanitized
   provider error mapping.
 - [`app/bootstrap.py`](../../app/bootstrap.py) composes the canonical adapter with application-owned
-  prompt policy.
+  prompt policy and constructs the canonical domain `EvidenceGate`.
 - [`app/query_service.py`](../../app/query_service.py) consumes the canonical generator port, usage
-  record, and application evidence formatter instead of the mixed facade.
-- [`app/citations.py`](../../app/citations.py) validates the canonical structured answer contract.
+  record, application evidence formatter, and domain evidence policy while preserving old gate exports.
+- [`app/evidence_selection.py`](../../app/evidence_selection.py) is a compatibility facade whose
+  public selection symbols are direct aliases to the domain owner.
+- [`app/citations.py`](../../app/citations.py) is now a compatibility facade whose public symbols are
+  direct aliases to canonical domain citation policy.
 - [`tests/test_generation.py`](../../tests/test_generation.py) protects prompt hashes, exact evidence
   rendering, facade identity, provider kwargs, errors, usage, and lazy construction.
 - [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) enforces the
@@ -128,6 +151,12 @@ constructor; it injects the same frozen prompt policy automatically.
 - `LangChainStructuredGenerator`: canonical OpenAI-compatible LangChain infrastructure adapter for
   both configured providers.
 - `LangChainOpenAIGenerator`: compatibility subclass retaining the old name and constructor.
+- `EvidenceSelection`: final candidate tuple plus sanitized duplicate diagnostics.
+- `EvidenceGate`: deterministic fail-closed policy that runs before generation.
+- `EvidenceGateDecision`: explicit pass/reason result consumed by QueryService.
+- `ValidatedGeneration`: normalized answer and ordered source IDs after referential validation.
+- `validate_generated_answer`: rejects unsupported labels and invalid answer/abstention combinations.
+- `build_citations`: creates public citations only from trusted retrieval metadata.
 
 ## 8. Before-and-after structure
 
@@ -167,6 +196,22 @@ app.bootstrap  ──> application prompt policy
 app.generation  compatibility exports + historical constructor shim
 ```
 
+After R05C1:
+
+```text
+app.domain.evidence  selection + duplicate provenance + evidence gate
+        ↑                    ↑                         ↑
+app.query_service    app.bootstrap      app.evidence_selection facade
+```
+
+After R05C2:
+
+```text
+app.domain.citations  referential validation + trusted citation construction
+        ↑                                      ↑
+app.query_service                     app.citations compatibility facade
+```
+
 ## 9. Design decisions and trade-offs
 
 - DTOs move before the concrete adapter so all later slices can depend on stable contracts.
@@ -183,6 +228,14 @@ app.generation  compatibility exports + historical constructor shim
   to canonical files before producing any new comparable artifact.
 - The established Pydantic schema and `app.models.RetrievalCandidate` remain unchanged; moving all
   records would expand scope without improving this boundary.
+- Selection and gate share one domain owner because both decide which retrieved candidates may enter
+  generation. They remain separate symbols so selection ordering and fail-closed gating stay testable.
+- `EvidenceGate` keeps the configured raw-score comparison exactly as-is. Threshold calibration is a
+  Round 2 decision, not part of this ownership move.
+- Citation validation and construction share one owner because validation establishes which labels
+  are safe while construction maps only those labels to trusted candidate metadata.
+- Error ordering remains intentional: QueryService sends that tuple back as correction feedback on
+  the one allowed retry. Reordering equivalent errors could change provider behavior.
 
 ## 10. Tests and protected behavior
 
@@ -200,6 +253,12 @@ app.generation  compatibility exports + historical constructor shim
 | bootstrap wiring | exact frozen prompt values and correction builder reach infrastructure |
 | architecture graph | query/citation consumers bypass the mixed generation facade |
 | query characterization | evidence, retries, usage, citations, abstention, and response remain stable |
+| evidence facade identity | historical selector imports resolve to canonical domain functions |
+| selector invalid inputs | blank query, invalid `top_k`, and duplicate chunk IDs fail explicitly |
+| gate decision matrix | empty/malformed/cross-document/non-finite/threshold reasons remain exact |
+| citation facade identity | historical imports resolve to canonical domain functions and record |
+| correction errors | validation-error order and deduplicated source-label order remain exact |
+| trusted citation snapshot | chunk/document/file/pages/headings/excerpt come from retrieved candidates |
 
 ## 11. Commands and expected results
 
@@ -222,6 +281,22 @@ R05B characterization and focused validation:
 python -m pytest -q tests/test_generation.py tests/test_bootstrap.py tests/test_query_service.py tests/test_runtime_characterization.py
 python -m ruff check app/infrastructure/generation app/generation.py app/bootstrap.py tests/test_generation.py tests/test_bootstrap.py tests/test_architecture_boundaries.py
 python -m pytest -q tests/test_generation.py tests/test_bootstrap.py tests/test_query_service.py tests/test_runtime_characterization.py tests/test_query_api.py tests/test_architecture_boundaries.py
+```
+
+R05C1 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_evidence_selection.py tests/test_query_service.py tests/test_runtime_characterization.py tests/test_bootstrap.py
+python -m ruff check app/domain/evidence.py app/evidence_selection.py app/query_service.py app/bootstrap.py tests/test_evidence_selection.py tests/test_query_service.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_evidence_selection.py tests/test_query_service.py tests/test_runtime_characterization.py tests/test_bootstrap.py tests/test_query_api.py tests/test_architecture_boundaries.py
+```
+
+R05C2 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_citations.py tests/test_query_service.py tests/test_runtime_characterization.py tests/test_query_api.py
+python -m ruff check app/domain/evidence.py app/domain/citations.py app/evidence_selection.py app/citations.py app/query_service.py app/bootstrap.py tests/test_evidence_selection.py tests/test_citations.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_evidence_selection.py tests/test_citations.py tests/test_query_service.py tests/test_runtime_characterization.py tests/test_bootstrap.py tests/test_query_api.py tests/test_architecture_boundaries.py
 ```
 
 Slice completion:
@@ -257,11 +332,20 @@ The model receives `S1`, but later citation construction obtains document metada
 - An architecture failure means QueryService/Citations imported the transitional facade or an
   application module imported concrete infrastructure.
 - A provider test constructing a real SDK client means lazy dependency injection was lost.
+- A changed evidence representative usually means query-role preference, group rank, or a stable
+  chunk-ID tie-break drifted; do not update the golden during this move.
+- A changed gate reason means candidate validation order or threshold behavior changed.
+- A changed citation error tuple may alter the correction attempt; inspect source-label dedup and
+  validation order before accepting any difference.
+- Citation metadata drift means model output may have become trusted accidentally; all public fields
+  must continue to come from the selected candidate.
 
 ## 14. Current limitations
 
-- Evidence selection, evidence gate, citation validation, and QueryService orchestration remain at
-  top-level compatibility paths; R05C/R05D own their domain/application separation.
+- QueryService orchestration remains at a top-level path; R05D owns its application relocation and
+  final compatibility facade.
+- Evidence selection retains a top-level compatibility facade, and QueryService retains gate exports
+  for scripts. R07 owns removal after script classification.
 - `app.generation` remains a compatibility surface for scripts and tests; R07 owns updating historical
   evaluation imports and deciding when the old adapter class name can be removed.
 - Historical scripts still import `app.generation`; compatibility remains until R07 classifies and
@@ -278,6 +362,12 @@ The model receives `S1`, but later citation construction obtains document metada
 7. Why was the concrete adapter moved only after prompt and DTO characterization?
 8. Why must infrastructure receive prompt policy through composition instead of importing application?
 9. Why is `LangChainStructuredGenerator` more accurate than the historical class name?
+10. Why does exact cross-document dedup occur before applying the final `top_k`?
+11. Which candidate fields make the evidence gate fail closed?
+12. Why is score-threshold calibration excluded from this move?
+13. Why can the model choose only a source label and not citation metadata?
+14. Why must citation-validation error order remain stable across refactoring?
+15. Where does a public citation excerpt come from?
 
 ## 16. Interview summary
 
@@ -289,7 +379,11 @@ valid through direct aliases. Exact prompt hashes and evidence snapshots demonst
 structural rather than an answer-quality change. R05B moves lazy LangChain SDK behavior, structured
 parsing, usage normalization, and sanitized provider failures into infrastructure. Bootstrap now
 wires prompt policy into the provider-neutral canonical adapter, while the historical name remains a
-constructor-compatible shim.
+constructor-compatible shim. R05C1 moves selection, cross-document duplicate provenance, and the
+pre-generation gate into one pure domain policy. QueryService and bootstrap use that canonical owner;
+historical selector and gate imports remain compatible. R05C2 completes the grounding policies by
+moving source-label validation and trusted citation construction into domain. The correction loop
+continues to receive the same ordered errors, while public citation metadata remains retrieval-owned.
 
 ## 17. Validation results and proposed commit
 
@@ -306,15 +400,27 @@ R05B focused generation/bootstrap/API suite        PASS — 75 tests, 1 warning
 R05B full Ruff Python 3.11.15                      PASS
 R05B full pytest Python 3.11.15                    PASS — 381 tests, 1 warning
 R05B Markdown links (10 targets) / diff check      PASS
+R05C1 pre-move characterization                    PASS — 29 tests
+R05C1 focused Ruff                                 PASS
+R05C1 focused evidence/query/API suite             PASS — 63 tests, 1 warning
+R05C1 full Ruff Python 3.11.15                     PASS
+R05C1 full pytest Python 3.11.15                   PASS — 385 tests, 1 warning
+R05C1 Markdown links (12 targets) / diff check     PASS
+R05C2 pre-move characterization                    PASS — 48 tests, 1 warning
+R05C2 focused Ruff                                 PASS
+R05C2 focused grounding/query/API suite            PASS — 75 tests, 1 warning
+R05C2 full Ruff Python 3.11.15                     PASS
+R05C2 full pytest Python 3.11.15                   PASS — 388 tests, 1 warning
+R05C2 Markdown links (13 targets) / diff check     PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: isolate structured generation infrastructure
+refactor: move grounding policies into the domain
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R05A and R05B are implemented and focused validation passes. R05 remains open for
-evidence/citation policies and final QueryService application ownership.
+`IN_PROGRESS` — R05A–R05C2 are implemented and focused validation passes. R05 remains open for final
+QueryService application ownership.

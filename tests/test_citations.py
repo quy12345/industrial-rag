@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+import app.citations as citation_facade
 from app.citations import build_citations, validate_generated_answer
+from app.domain import citations as citation_policy
 from app.errors import CitationValidationError
 from app.generation import GeneratedAnswer
 from app.models import RetrievalCandidate
@@ -31,6 +33,12 @@ def _output(answer="Có.", source_ids=None, insufficient=False):
     )
 
 
+def test_citation_facade_exports_canonical_domain_policy() -> None:
+    assert citation_facade.ValidatedGeneration is citation_policy.ValidatedGeneration
+    assert citation_facade.validate_generated_answer is citation_policy.validate_generated_answer
+    assert citation_facade.build_citations is citation_policy.build_citations
+
+
 def test_valid_single_multiple_and_duplicate_source_ids() -> None:
     source_map = {"S1": _candidate("a"), "S2": _candidate("b")}
     validated = validate_generated_answer(
@@ -44,6 +52,18 @@ def test_valid_single_multiple_and_duplicate_source_ids() -> None:
         excerpt_max_chars=400,
     )
     assert [citation.chunk_id for citation in citations] == ["b", "a"]
+
+
+def test_validation_errors_keep_exact_order_for_correction_feedback() -> None:
+    output = _output(answer=" ", source_ids=["S9", "S9"])
+
+    with pytest.raises(CitationValidationError) as caught:
+        validate_generated_answer(output, source_map={"S1": _candidate()})
+
+    assert caught.value.errors == (
+        "non-abstained answer must not be empty",
+        "unknown source ID: S9",
+    )
 
 
 @pytest.mark.parametrize(
@@ -81,6 +101,26 @@ def test_builder_normalizes_pages_headings_excerpt_and_unicode() -> None:
     assert len(citation.excerpt) == 24
     assert citation.excerpt.endswith("…")
     citation.excerpt.encode("utf-8")
+
+
+def test_builder_has_exact_trusted_citation_serialization() -> None:
+    candidate = _candidate()
+
+    citation = build_citations(
+        ["S1"],
+        source_map={"S1": candidate},
+        requested_document_id="manual-a",
+        excerpt_max_chars=400,
+    )[0]
+
+    assert citation.model_dump() == {
+        "chunk_id": "chunk-a",
+        "document_id": "manual-a",
+        "filename": "manual.pdf",
+        "page_numbers": [1, 3],
+        "headings": ["Safety", "Limits"],
+        "excerpt": candidate.text.strip(),
+    }
 
 
 def test_builder_rejects_cross_document_unknown_and_empty_text() -> None:

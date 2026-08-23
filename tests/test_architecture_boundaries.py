@@ -181,8 +181,20 @@ def test_grounded_query_consumers_use_canonical_generation_contracts_and_prompt_
     assert "app.domain.generation" in graph["app.query_service"]
     assert "app.application.generation_prompt" in graph["app.query_service"]
     assert "app.generation" not in graph["app.query_service"]
-    assert "app.domain.generation" in graph["app.citations"]
-    assert "app.generation" not in graph["app.citations"]
+    assert "app.domain.citations" in graph["app.query_service"]
+    assert "app.citations" not in graph["app.query_service"]
+    assert "app.domain.citations" in graph["app.citations"]
+    assert "app.domain.generation" in graph["app.domain.citations"]
+    assert "app.generation" not in graph["app.domain.citations"]
+
+
+def test_query_runtime_uses_canonical_domain_evidence_policy() -> None:
+    graph = _import_graph()
+
+    assert "app.domain.evidence" in graph["app.query_service"]
+    assert "app.evidence_selection" not in graph["app.query_service"]
+    assert "app.domain.evidence" in graph["app.bootstrap"]
+    assert "app.domain.evidence" in graph["app.evidence_selection"]
 
 
 def test_generation_adapter_is_composed_without_compatibility_or_application_dependencies() -> None:
@@ -226,7 +238,7 @@ def test_runtime_uses_canonical_domain_ranking_policy() -> None:
 
     for module in (
         "app.application.reranking_service",
-        "app.evidence_selection",
+        "app.domain.evidence",
         "app.domain.retrieval_contracts",
     ):
         assert "app.domain.policies.ranking" in graph[module]

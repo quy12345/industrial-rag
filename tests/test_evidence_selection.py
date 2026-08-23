@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from app.evidence_selection import select_evidence_candidates
+import pytest
+
+import app.evidence_selection as evidence_facade
+from app.domain import evidence as evidence_policy
+from app.evidence_selection import EvidenceSelectionError, select_evidence_candidates
 from app.models import RetrievalCandidate
+from app.query_service import EvidenceGate, EvidenceGateDecision
 
 
 def _candidate(
@@ -25,6 +30,18 @@ def _candidate(
         rerank_rank=1,
         metadata={"document_role": role},
     )
+
+
+def test_evidence_compatibility_exports_resolve_to_domain_policy() -> None:
+    assert evidence_facade.EvidenceSelectionError is evidence_policy.EvidenceSelectionError
+    assert evidence_facade.EvidenceDuplicateGroup is evidence_policy.EvidenceDuplicateGroup
+    assert evidence_facade.EvidenceSelection is evidence_policy.EvidenceSelection
+    assert evidence_facade.select_evidence_candidates is evidence_policy.select_evidence_candidates
+    assert evidence_facade.select_evidence_candidates_for_role is (
+        evidence_policy.select_evidence_candidates_for_role
+    )
+    assert EvidenceGate is evidence_policy.EvidenceGate
+    assert EvidenceGateDecision is evidence_policy.EvidenceGateDecision
 
 
 def test_cross_document_exact_duplicate_prefers_query_role_then_fills_top_k() -> None:
@@ -72,3 +89,42 @@ def test_same_document_duplicate_content_is_preserved() -> None:
     selection = select_evidence_candidates("wiring", [first, second], top_k=2)
     assert [candidate.chunk_id for candidate in selection.candidates] == ["first", "second"]
     assert selection.duplicate_groups == ()
+
+
+def test_selection_rejects_invalid_inputs_without_fallback() -> None:
+    candidate = _candidate("first", document_id="installation", role="installation")
+
+    with pytest.raises(EvidenceSelectionError, match="top_k"):
+        select_evidence_candidates("wiring", [candidate], top_k=0)
+    with pytest.raises(EvidenceSelectionError, match="blank"):
+        select_evidence_candidates(" ", [candidate], top_k=1)
+    with pytest.raises(EvidenceSelectionError, match="unique"):
+        select_evidence_candidates("wiring", [candidate, candidate], top_k=2)
+
+
+def test_evidence_gate_returns_exact_metadata_and_threshold_decisions() -> None:
+    candidate = _candidate("first", document_id="installation", role="installation")
+    invalid_page = candidate.model_copy(update={"page_numbers": [0]})
+    invalid_heading = candidate.model_copy(update={"headings": [" "]})
+    non_finite = candidate.model_copy(update={"score": float("nan")})
+
+    gate = EvidenceGate()
+    assert gate.evaluate([candidate], requested_document_id="installation") == (
+        EvidenceGateDecision(True)
+    )
+    assert gate.evaluate([], requested_document_id=None) == EvidenceGateDecision(
+        False, "no_candidates"
+    )
+    for candidates, requested_document_id in (
+        ([candidate], "programming"),
+        ([candidate, candidate], None),
+        ([invalid_page], None),
+        ([invalid_heading], None),
+        ([non_finite], None),
+    ):
+        assert gate.evaluate(candidates, requested_document_id=requested_document_id) == (
+            EvidenceGateDecision(False, "invalid_candidate_metadata")
+        )
+    assert EvidenceGate(score_threshold=1.1).evaluate(
+        [candidate], requested_document_id=None
+    ) == EvidenceGateDecision(False, "configured_score_gate_failed")

@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 import logging
-import math
-from collections.abc import Sequence
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Literal
 
 from app.application.generation_prompt import format_evidence
-from app.citations import build_citations, validate_generated_answer
 from app.config import Settings
+from app.domain.citations import build_citations, validate_generated_answer
+from app.domain.evidence import EvidenceDuplicateGroup as EvidenceDuplicateGroup
+from app.domain.evidence import EvidenceGate as EvidenceGate
+from app.domain.evidence import EvidenceGateDecision as EvidenceGateDecision
+from app.domain.evidence import EvidenceSelectionError, select_evidence_candidates
 from app.domain.generation import AnswerGenerator, TokenUsage
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
-from app.evidence_selection import (
-    EvidenceDuplicateGroup,
-    EvidenceSelectionError,
-    select_evidence_candidates,
-)
 from app.models import QueryResponse, RetrievalCandidate
 from app.request_context import request_id
 from app.retrieval_runtime import QueryRetriever
@@ -37,14 +34,6 @@ AbstentionReason = Literal[
 ABSTENTION_MESSAGE = (
     "Không đủ bằng chứng trong tài liệu / Insufficient evidence in the supplied document."
 )
-
-
-@dataclass(frozen=True)
-class EvidenceGateDecision:
-    """Deterministic pre-generation decision over final retrieved evidence."""
-
-    passed: bool
-    reason: AbstentionReason | None = None
 
 
 @dataclass(frozen=True)
@@ -71,27 +60,6 @@ class QueryExecution:
     evidence_candidates: tuple[RetrievalCandidate, ...] = ()
     evidence_duplicate_groups: tuple[EvidenceDuplicateGroup, ...] = ()
     generation_attempts: int = 0
-
-
-class EvidenceGate:
-    """Reject absent or malformed candidate sets before any document leaves the service."""
-
-    def __init__(self, *, score_threshold: float | None = None) -> None:
-        self.score_threshold = score_threshold
-
-    def evaluate(
-        self,
-        candidates: Sequence[RetrievalCandidate],
-        *,
-        requested_document_id: str | None,
-    ) -> EvidenceGateDecision:
-        if not candidates:
-            return EvidenceGateDecision(False, "no_candidates")
-        if not _valid_candidate_metadata(candidates, requested_document_id=requested_document_id):
-            return EvidenceGateDecision(False, "invalid_candidate_metadata")
-        if self.score_threshold is not None and candidates[0].score < self.score_threshold:
-            return EvidenceGateDecision(False, "configured_score_gate_failed")
-        return EvidenceGateDecision(True)
 
 
 class QueryService:
@@ -340,33 +308,6 @@ class QueryService:
             evidence_duplicate_groups=evidence_duplicate_groups,
             generation_attempts=generation_attempts,
         )
-
-
-def _valid_candidate_metadata(
-    candidates: Sequence[RetrievalCandidate], *, requested_document_id: str | None
-) -> bool:
-    seen: set[str] = set()
-    for candidate in candidates:
-        required_strings = (
-            candidate.chunk_id,
-            candidate.document_id,
-            candidate.filename,
-            candidate.text,
-        )
-        if any(not value.strip() for value in required_strings):
-            return False
-        if candidate.chunk_id in seen or not math.isfinite(candidate.score):
-            return False
-        seen.add(candidate.chunk_id)
-        if requested_document_id is not None and candidate.document_id != requested_document_id:
-            return False
-        if any(not isinstance(page, int) or page <= 0 for page in candidate.page_numbers):
-            return False
-        if any(
-            not isinstance(heading, str) or not heading.strip() for heading in candidate.headings
-        ):
-            return False
-    return True
 
 
 def _combine_usage(current: TokenUsage | None, new: TokenUsage | None) -> TokenUsage | None:
