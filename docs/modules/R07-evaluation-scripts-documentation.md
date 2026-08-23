@@ -17,8 +17,15 @@ R07A2 moves sanitized snapshot validation and deterministic rank-only replay fro
 R07A3 separates offline Phase 7 dataset/qrel contracts into `evaluation.phase7_dataset` and active
 corpus identity/file operations into `app.infrastructure.corpus_artifacts`. `app.phase7` becomes a
 compatibility facade, while the supported indexing command imports corpus artifacts directly.
-The E2E evaluator, remaining CLI classification, archive work, shim removal, and documentation closure
-remain later R07 slices.
+
+R07A4 moves frozen-chunk JSONL parsing and stable chunk-set metadata into the same corpus artifact
+infrastructure. The supported indexing command no longer imports `app.evaluation`. Evaluation keeps a
+thin error-translation wrapper so its public `EvaluationError` contract remains unchanged.
+
+R07B1 classifies the provider-free Phase 7 dataset validation command under `scripts.evaluation` and
+keeps `python -m scripts.validate_phase7_dataset` as a thin compatibility entry point.
+Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
+slices.
 
 ## 2. Position in the system
 
@@ -40,6 +47,11 @@ legacy calibration --> app.phase7_replay facade --> evaluation.replay
 
 offline Phase 7 JSONL --> evaluation.phase7_dataset --> domain documents / retrieval metrics
 supported indexing CLI --> app.infrastructure.corpus_artifacts --> retrieval contract
+                                      |
+                                      +--> frozen DocumentChunk JSONL / stable chunk identity
+
+legacy validation CLI --> scripts.evaluation.validate_phase7_dataset
+                              --> evaluation.phase7_dataset / evaluation.retrieval
 ```
 
 The new top-level package makes ownership visible in the filesystem. It is installed in retrieval,
@@ -57,6 +69,8 @@ application services cannot reach it.
   it contains no duplicate implementation.
 - A **source identity hash** ties an artifact to evaluator source files. Moving a hashed source file
   can invalidate identity even when behavior is unchanged.
+- An **error translation boundary** lets shared infrastructure expose its own error while a legacy
+  evaluator facade preserves the exception category callers already handle.
 
 ## 4. Input, output, and contracts
 
@@ -94,6 +108,11 @@ review-state rules, and exact-content qrel expansion. Corpus artifact functions 
 SHA-256 and atomic UTF-8 JSON/JSONL output. Collection names continue to equal the frozen retrieval
 contract.
 
+`load_frozen_chunks` preserves JSONL record order and returns canonical domain `DocumentChunk`
+instances. Infrastructure raises `CorpusArtifactError`; `evaluation.retrieval.load_frozen_chunks`
+translates it to `EvaluationError` with the same message. `chunk_set_metadata` still returns sorted
+document IDs and the SHA-256 of newline-joined sorted chunk IDs; it never hashes manual text.
+
 ## 5. Step-by-step data flow
 
 1. `load_evaluation_cases` reads UTF-8 JSONL in file order.
@@ -123,25 +142,36 @@ Phase 7 dataset/corpus flow is now explicit:
 4. Validators compare qrels with frozen domain chunks and compute canonical summaries/hashes.
 5. Existing scripts may still enter through `app.phase7`; each export is the exact canonical object.
 
+Shared frozen-corpus flow:
+
+1. Read UTF-8 JSONL from the explicit caller-supplied path.
+2. Reject unreadable, empty, blank, malformed, or duplicate-ID records in the existing order.
+3. Return records in file order as domain `DocumentChunk` objects.
+4. Derive stable metadata from sorted IDs without reading or hashing chunk text.
+5. Indexing handles the infrastructure `ValueError`; evaluation translates it to `EvaluationError`.
+
 ## 6. Responsibilities of changed files
 
 | File | R07 responsibility |
 | --- | --- |
 | [`evaluation/__init__.py`](../../evaluation/__init__.py) | Marks the offline evaluation package. |
-| [`evaluation/retrieval.py`](../../evaluation/retrieval.py) | Canonical retrieval evaluation schemas, validation, scoring, and aggregation. |
+| [`evaluation/retrieval.py`](../../evaluation/retrieval.py) | Retrieval evaluation schemas/scoring plus a legacy error-translation wrapper for frozen chunks. |
 | [`evaluation/replay.py`](../../evaluation/replay.py) | Canonical sanitized snapshot validation and deterministic rank-only replay. |
 | [`evaluation/phase7_dataset.py`](../../evaluation/phase7_dataset.py) | Canonical Phase 7 schemas, dataset validation, hashes, and qrel closure. |
 | [`app/evaluation.py`](../../app/evaluation.py) | Temporary import-compatible re-export facade. |
 | [`app/phase7_replay.py`](../../app/phase7_replay.py) | Temporary import-compatible replay facade. |
 | [`app/phase7.py`](../../app/phase7.py) | Temporary facade over dataset and corpus artifact owners. |
-| [`app/infrastructure/corpus_artifacts.py`](../../app/infrastructure/corpus_artifacts.py) | Active corpus constants plus streamed hash and atomic local file operations. |
-| [`scripts/operations/index_phase7_corpus.py`](../../scripts/operations/index_phase7_corpus.py) | Uses corpus artifacts without importing the Phase 7 dataset facade. |
+| [`app/infrastructure/corpus_artifacts.py`](../../app/infrastructure/corpus_artifacts.py) | Active corpus constants, frozen-chunk parsing/identity, streamed hash, and atomic local file operations. |
+| [`scripts/operations/index_phase7_corpus.py`](../../scripts/operations/index_phase7_corpus.py) | Uses corpus artifacts without importing either evaluation compatibility facade. |
+| [`scripts/evaluation/validate_phase7_dataset.py`](../../scripts/evaluation/validate_phase7_dataset.py) | Canonical provider-free dataset validation adapter. |
+| [`scripts/validate_phase7_dataset.py`](../../scripts/validate_phase7_dataset.py) | Thin compatibility entry point preserving the documented command. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
 | [`tests/test_evaluate.py`](../../tests/test_evaluate.py) | Exercises the canonical module and verifies facade identity. |
 | [`tests/test_phase7_replay.py`](../../tests/test_phase7_replay.py) | Protects replay validation/ranking and facade identity. |
 | [`tests/test_phase7.py`](../../tests/test_phase7.py) | Exercises canonical dataset contracts and both facade ownership branches. |
 | [`tests/test_phase7_index_cli.py`](../../tests/test_phase7_index_cli.py) | Protects supported indexing defaults through canonical corpus constants. |
+| [`tests/test_phase7_evaluation_cli.py`](../../tests/test_phase7_evaluation_cli.py) | Protects validation CLI defaults, orchestration, output, errors, and shim identity. |
 | [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) | Includes `evaluation` in the local import graph and forbids production reachability. |
 | This document | Records the implemented boundary and evidence for the whole R07 module. |
 
@@ -169,6 +199,9 @@ Phase 7 dataset/corpus flow is now explicit:
   exact-normalized qrel closure.
 - `file_sha256`: streamed source identity without loading a manual into memory.
 - `write_json_atomic` / `write_jsonl_atomic`: replace-on-success local artifact writes.
+- `CorpusArtifactError`: infrastructure error for invalid local frozen-corpus artifacts.
+- `load_frozen_chunks`: strict ordered JSONL-to-domain-record conversion.
+- `chunk_set_metadata`: stable corpus identity shared by indexing and evaluation.
 
 ## 8. Before-and-after structure
 
@@ -232,6 +265,21 @@ remain explicit frozen constants. File operations stay in infrastructure because
 filesystem side effects; the deterministic dataset module remains side-effect free except explicit
 dataset reads.
 
+The frozen-chunk loader cannot keep `EvaluationError` as its canonical infrastructure error without
+reversing the dependency direction. `CorpusArtifactError` therefore owns infrastructure failures,
+while the evaluation wrapper catches it and raises the same legacy type/message. `chunk_set_metadata`
+needs no wrapper and is re-exported as the exact canonical function object.
+
+`app.evaluation_e2e` remains at its historical path in Round 1. Current E2E, retrieval-closure,
+runtime-readiness, and calibration-readiness commands hash that exact file. Moving it or replacing it
+with a facade would change frozen run identity and require artifact regeneration. Production roots
+cannot reach it, so keeping this pinned compatibility owner preserves behavior without contaminating
+runtime dependencies. A future relocation requires a versioned identity transition, not a file move.
+
+R07B1 starts CLI classification with the smallest current command that is read-only with respect to
+corpus/Qdrant/provider state and is not source-hashed. The old module remains executable and exports
+the exact canonical `main`; parser extraction only creates a test seam and does not change options.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -263,6 +311,14 @@ Phase 7 dataset tests protect schema/default/error behavior, review rules, qrel 
 hashes, exact-content closure, source-manifest validation, and facade identity. Indexing CLI tests
 protect collection defaults and import direction. Architecture tests prove dataset code depends on
 canonical domain/retrieval interfaces while corpus infrastructure cannot depend on evaluation.
+
+Frozen-artifact characterization protects record order, exact metadata hash, unreadable/empty/blank/
+invalid/duplicate messages, canonical infrastructure errors, and evaluation error translation. The
+indexing import guard now explicitly rejects both `app.phase7` and `app.evaluation`.
+
+Dataset-validation CLI tests protect all four default paths, helper call order, report output, success
+exit code, argparse error mapping, and old/new entry-point identity. Static tests reject compatibility
+facade imports in the canonical CLI and implementation code in the old shim.
 
 ## 11. Commands and expected results
 
@@ -297,6 +353,21 @@ python -m pytest -q tests/test_phase7.py tests/test_phase7_index_cli.py \
 88 passed
 ```
 
+R07A4 pre-move characterization added to the existing evaluator suite and executed against the old
+implementation:
+
+```text
+python -m pytest -q tests/test_evaluate.py
+15 passed
+```
+
+R07B1 pre-move CLI characterization:
+
+```text
+python -m scripts.validate_phase7_dataset --help
+exit 0; four existing options and description preserved
+```
+
 ## 12. Small usage example
 
 ```python
@@ -329,10 +400,12 @@ The caller owns paths and retrieval execution. Importing the module performs no 
 - `app.evaluation` remains until its consumers are migrated or explicitly retained.
 - `app.phase7_replay` remains as a facade until the calibration CLI is classified.
 - `app.phase7` remains as a facade until evaluator CLI consumers are classified.
-- `app.evaluation_e2e` and evaluator CLIs are not isolated yet.
-- The supported indexing command still obtains frozen-chunk parsing/metadata through
-  `app.evaluation`; a later script-boundary slice owns moving those shared artifact helpers.
+- `app.evaluation_e2e` is deliberately pinned to preserve source identity; relocation is deferred
+  until a versioned artifact-identity transition is explicitly approved.
+- Most evaluator, calibration, readiness, freeze, and migration CLIs are not classified yet.
 - Evaluation and production packages are still present in the same installed image.
+- Frozen chunks and manifests remain explicit operational/reproducibility artifacts; R07A4 does not
+  make the API read them per request and does not authorize deleting them.
 - Historical defaults in `EvaluationCase` are preserved as behavior; changing them is not part of this
   structural slice.
 - No evaluation metric, threshold, dataset, artifact, or benchmark result is regenerated.
@@ -346,14 +419,21 @@ The caller owns paths and retrieval execution. Importing the module performs no 
 5. Which test detects a future production-to-evaluation dependency?
 6. Why does sanitized replay deliberately reconstruct candidates with empty text?
 7. Why do collection constants and atomic file writes not belong in the dataset module?
+8. Why does evaluation translate `CorpusArtifactError` instead of infrastructure importing
+   `EvaluationError`?
+9. Why is preserving a source-hashed compatibility file safer than replacing it with a facade?
 
 ## 16. Interview summary
 
-R07A1–R07A3 turn evaluation ownership into an enforceable architectural boundary without changing the
+R07A1–R07A4 turn evaluation ownership into an enforceable architectural boundary without changing the
 retrieval benchmark contract. Retrieval metrics, sanitized replay, and Phase 7 dataset contracts now
 live in a top-level offline package and depend inward on public domain contracts. Active corpus
-identity and file side effects have a distinct infrastructure owner. Identity-preserving facades,
+identity, frozen-chunk parsing, and file side effects have a distinct infrastructure owner, so
+supported indexing no longer imports evaluation. Identity-preserving facades, error translation,
 golden tests, and static reachability checks keep existing consumers stable during migration.
+
+R07B1 applies the same boundary to inbound evaluation adapters: the canonical command is visibly
+classified, while the documented legacy invocation remains stable and contains no business logic.
 
 ## 17. Validation results and proposed commit
 
@@ -408,13 +488,52 @@ R07A3 validation:
 | Local Markdown links | PASS — all links in this module document resolve |
 | `git diff --check` | PASS |
 
-Proposed R07A3 commit after user review:
+R07A3 was committed as `87a0ce1 refactor: separate phase7 dataset and corpus artifacts`.
+
+R07A4 validation:
+
+| Check | Result |
+| --- | --- |
+| Pre-move frozen-artifact characterization | PASS — `15 passed` |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused offline pytest | PASS — `60 passed` |
+| Infrastructure/evaluation error translation | PASS |
+| Exact chunk-set hash and record order | PASS |
+| Supported indexing import guard | PASS |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `408 passed, 1 warning` |
+| `docker compose config --quiet` | PASS |
+| Local Markdown links | PASS — all links in this module document resolve |
+| `git diff --check` | PASS |
+
+Proposed R07A4 commit after user review:
 
 ```text
-refactor: separate phase7 dataset and corpus artifacts
+refactor: share frozen corpus artifact utilities
+```
+
+R07B1 validation:
+
+| Check | Result |
+| --- | --- |
+| Legacy pre-move `--help` | PASS — exit `0` |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused offline pytest | PASS — `29 passed` |
+| Legacy/canonical `main` and parser identity | PASS |
+| Legacy and canonical `--help` | PASS — identical output, exit `0` |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `412 passed, 1 warning` |
+| Local Markdown links | PASS — all links in this module document resolve |
+| `git diff --check` | PASS |
+
+Proposed R07B1 commit after user review:
+
+```text
+refactor: classify phase7 dataset validation CLI
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R07A1 and R07A2 are complete and committed. R07A3 is implemented and validated; user
-review remains. Later R07 slices remain outside this slice.
+`IN_PROGRESS` — R07A1–R07A3 are complete and committed. R07A4 remains validated and uncommitted by
+user request. R07B1 is implemented and validated; user review remains. Later R07 slices remain outside
+this slice.

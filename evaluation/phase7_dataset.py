@@ -26,7 +26,8 @@ from pydantic import (
 
 from app.content_identity import evidence_content_fingerprint
 from app.domain.documents import DocumentChunk
-from evaluation.retrieval import chunk_set_metadata, phrase_matches
+from app.infrastructure.corpus_artifacts import chunk_set_metadata
+from evaluation.retrieval import phrase_matches
 
 DatasetKind = Literal["calibration", "test"]
 QuestionLanguage = Literal["vi", "en"]

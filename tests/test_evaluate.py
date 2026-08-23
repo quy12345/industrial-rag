@@ -9,15 +9,18 @@ from types import SimpleNamespace
 import pytest
 
 import app.evaluation as compatibility_evaluation
+from app.infrastructure import corpus_artifacts
 from app.models import DocumentChunk
 from evaluation import retrieval as retrieval_evaluation
 from evaluation.retrieval import (
     EvaluationCase,
     EvaluationError,
     aggregate_rows,
+    chunk_set_metadata,
     direct_evidence_rank,
     evaluate_cases,
     load_evaluation_cases,
+    load_frozen_chunks,
     percentile_nearest_rank,
     validate_cases_against_chunks,
 )
@@ -98,6 +101,7 @@ def test_app_evaluation_facade_exports_canonical_retrieval_utilities() -> None:
     assert set(compatibility_evaluation.__all__) == set(exported_symbols)
     for symbol in exported_symbols:
         assert getattr(compatibility_evaluation, symbol) is getattr(retrieval_evaluation, symbol)
+    assert retrieval_evaluation.chunk_set_metadata is corpus_artifacts.chunk_set_metadata
 
 
 def test_dataset_loader_rejects_missing_qrels_duplicate_ids_and_bad_json(tmp_path: Path) -> None:
@@ -130,6 +134,52 @@ def test_dataset_loader_rejects_missing_qrels_duplicate_ids_and_bad_json(tmp_pat
     )
     with pytest.raises(EvaluationError, match="Duplicate evaluation ID"):
         load_evaluation_cases(dataset)
+
+
+def test_frozen_chunk_loader_and_metadata_preserve_order_and_identity(tmp_path: Path) -> None:
+    frozen = tmp_path / "chunks.jsonl"
+    chunks = [_chunk("b", document_id="manual-b"), _chunk("a", document_id="manual-a")]
+    frozen.write_text(
+        "\n".join(chunk.model_dump_json() for chunk in chunks) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_frozen_chunks(frozen)
+
+    assert [chunk.chunk_id for chunk in loaded] == ["b", "a"]
+    assert corpus_artifacts.load_frozen_chunks(frozen) == loaded
+    assert chunk_set_metadata(loaded) == {
+        "chunk_count": 2,
+        "document_ids": ["manual-a", "manual-b"],
+        "chunk_ids_sha256": "7e18f737311b2dc3b2f269dd78396b0351f14fb66efa879f768cb23181883c78",
+    }
+
+
+def test_frozen_chunk_loader_preserves_failure_messages(tmp_path: Path) -> None:
+    frozen = tmp_path / "chunks.jsonl"
+
+    with pytest.raises(EvaluationError, match="Unable to read frozen chunk set"):
+        load_frozen_chunks(frozen)
+
+    frozen.write_text("", encoding="utf-8")
+    with pytest.raises(EvaluationError, match="Frozen chunk set is empty"):
+        load_frozen_chunks(frozen)
+
+    frozen.write_text("\n", encoding="utf-8")
+    with pytest.raises(EvaluationError, match="Blank frozen chunk on line 1"):
+        load_frozen_chunks(frozen)
+
+    frozen.write_text("{not-json}\n", encoding="utf-8")
+    with pytest.raises(EvaluationError, match="Invalid frozen chunk on line 1"):
+        load_frozen_chunks(frozen)
+
+    duplicate = _chunk().model_dump_json()
+    frozen.write_text(f"{duplicate}\n{duplicate}\n", encoding="utf-8")
+    with pytest.raises(EvaluationError, match="Duplicate chunk ID on line 2") as caught:
+        load_frozen_chunks(frozen)
+    assert isinstance(caught.value.__cause__, corpus_artifacts.CorpusArtifactError)
+    with pytest.raises(corpus_artifacts.CorpusArtifactError, match="Duplicate chunk ID on line 2"):
+        corpus_artifacts.load_frozen_chunks(frozen)
 
 
 def test_schema_rejects_empty_qrels_and_unsupported_language_or_category() -> None:

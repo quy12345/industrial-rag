@@ -365,6 +365,7 @@ def test_retrieval_evaluation_is_owned_outside_production_package() -> None:
 
     assert "evaluation.retrieval" in graph["app.evaluation"]
     assert "app.domain.documents" in graph["evaluation.retrieval"]
+    assert "app.infrastructure.corpus_artifacts" in graph["evaluation.retrieval"]
     assert "app.models" not in graph["evaluation.retrieval"]
     assert "app.evaluation" not in graph["evaluation.retrieval"]
 
@@ -387,10 +388,12 @@ def test_phase7_dataset_and_corpus_artifact_ownership_are_separate() -> None:
     assert "app.infrastructure.corpus_artifacts" in graph["app.phase7"]
     assert "evaluation.retrieval" in graph["evaluation.phase7_dataset"]
     assert "app.domain.documents" in graph["evaluation.phase7_dataset"]
+    assert "app.infrastructure.corpus_artifacts" in graph["evaluation.phase7_dataset"]
     assert "app.evaluation" not in graph["evaluation.phase7_dataset"]
     assert "app.models" not in graph["evaluation.phase7_dataset"]
     assert "app.phase7" not in graph["evaluation.phase7_dataset"]
     assert "app.domain.retrieval_contracts" in graph["app.infrastructure.corpus_artifacts"]
+    assert "app.domain.documents" in graph["app.infrastructure.corpus_artifacts"]
     assert not {
         dependency
         for dependency in graph["app.infrastructure.corpus_artifacts"]
@@ -404,12 +407,38 @@ def test_supported_indexing_command_does_not_import_phase7_dataset_facade() -> N
     )
 
     assert "app.infrastructure.corpus_artifacts" in imports
+    assert "app.evaluation" not in imports
     assert "app.phase7" not in imports
     assert not {
         dependency
         for dependency in imports
         if dependency == "evaluation" or dependency.startswith("evaluation.")
     }
+
+
+def test_dataset_validation_cli_uses_canonical_evaluation_interfaces() -> None:
+    canonical_path = (
+        APP_ROOT.parent / "scripts" / "evaluation" / "validate_phase7_dataset.py"
+    )
+    imports = _local_imports(canonical_path)
+
+    assert "app.infrastructure.corpus_artifacts" in imports
+    assert "evaluation.phase7_dataset" in imports
+    assert "evaluation.retrieval" in imports
+    assert "app.evaluation" not in imports
+    assert "app.phase7" not in imports
+
+    compatibility_path = APP_ROOT.parent / "scripts" / "validate_phase7_dataset.py"
+    tree = ast.parse(
+        compatibility_path.read_text(encoding="utf-8"),
+        filename=str(compatibility_path),
+    )
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert imported_modules == {"scripts.evaluation.validate_phase7_dataset"}
 
 
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:

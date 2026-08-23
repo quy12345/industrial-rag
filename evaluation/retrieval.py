@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import unicodedata
@@ -15,6 +14,9 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.domain.documents import DocumentChunk
+from app.infrastructure.corpus_artifacts import CorpusArtifactError
+from app.infrastructure.corpus_artifacts import chunk_set_metadata as chunk_set_metadata
+from app.infrastructure.corpus_artifacts import load_frozen_chunks as _load_frozen_chunks
 
 EvaluationLanguage = Literal["vi", "en"]
 DocumentLanguage = Literal["vi", "en"]
@@ -140,30 +142,12 @@ def load_evaluation_cases(path: Path) -> list[EvaluationCase]:
 
 
 def load_frozen_chunks(path: Path) -> list[DocumentChunk]:
-    """Load a frozen JSONL chunk set used to validate qrels and baseline identity."""
+    """Load frozen chunks while preserving the evaluation error contract."""
 
-    chunks: list[DocumentChunk] = []
-    seen_ids: set[str] = set()
     try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        raise EvaluationError(f"Unable to read frozen chunk set {path}: {exc}") from exc
-
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
-            raise EvaluationError(f"Blank frozen chunk on line {line_number}.")
-        try:
-            chunk = DocumentChunk.model_validate_json(line)
-        except ValidationError as exc:
-            raise EvaluationError(f"Invalid frozen chunk on line {line_number}: {exc}") from exc
-        if chunk.chunk_id in seen_ids:
-            raise EvaluationError(f"Duplicate chunk ID on line {line_number}: {chunk.chunk_id}")
-        seen_ids.add(chunk.chunk_id)
-        chunks.append(chunk)
-
-    if not chunks:
-        raise EvaluationError(f"Frozen chunk set is empty: {path}")
-    return chunks
+        return _load_frozen_chunks(path)
+    except CorpusArtifactError as exc:
+        raise EvaluationError(str(exc)) from exc
 
 
 def validate_cases_against_chunks(
@@ -201,19 +185,6 @@ def validate_cases_against_chunks(
                 f"Evaluation case {case.id} expected pages do not match its qrels: "
                 f"{case.expected_pages}"
             )
-
-
-def chunk_set_metadata(chunks: Iterable[DocumentChunk]) -> dict[str, Any]:
-    """Return a stable identity for a frozen chunk set without hashing chunk text."""
-
-    chunk_list = list(chunks)
-    chunk_ids = sorted(chunk.chunk_id for chunk in chunk_list)
-    document_ids = sorted({chunk.document_id for chunk in chunk_list})
-    return {
-        "chunk_count": len(chunk_list),
-        "document_ids": document_ids,
-        "chunk_ids_sha256": hashlib.sha256("\n".join(chunk_ids).encode("utf-8")).hexdigest(),
-    }
 
 
 def phrase_matches(text: str, expected_phrase: str) -> bool:
