@@ -9,6 +9,7 @@ APP_ROOT = Path(__file__).parents[1] / "app"
 
 PRODUCTION_RUNTIME_ROOTS = {
     "app.application.indexing_service",
+    "app.application.query_service",
     "app.application.reranking_service",
     "app.bootstrap",
     "app.main",
@@ -177,12 +178,14 @@ def test_application_services_have_no_adapter_or_evaluation_dependency() -> None
 
 def test_grounded_query_consumers_use_canonical_generation_contracts_and_prompt_policy() -> None:
     graph = _import_graph()
+    service = graph["app.application.query_service"]
 
-    assert "app.domain.generation" in graph["app.query_service"]
-    assert "app.application.generation_prompt" in graph["app.query_service"]
-    assert "app.generation" not in graph["app.query_service"]
-    assert "app.domain.citations" in graph["app.query_service"]
-    assert "app.citations" not in graph["app.query_service"]
+    assert "app.domain.generation" in service
+    assert "app.application.generation_prompt" in service
+    assert "app.generation" not in service
+    assert "app.domain.citations" in service
+    assert "app.citations" not in service
+    assert "app.application.query_service" in graph["app.query_service"]
     assert "app.domain.citations" in graph["app.citations"]
     assert "app.domain.generation" in graph["app.domain.citations"]
     assert "app.generation" not in graph["app.domain.citations"]
@@ -191,10 +194,22 @@ def test_grounded_query_consumers_use_canonical_generation_contracts_and_prompt_
 def test_query_runtime_uses_canonical_domain_evidence_policy() -> None:
     graph = _import_graph()
 
-    assert "app.domain.evidence" in graph["app.query_service"]
-    assert "app.evidence_selection" not in graph["app.query_service"]
+    assert "app.domain.evidence" in graph["app.application.query_service"]
+    assert "app.evidence_selection" not in graph["app.application.query_service"]
     assert "app.domain.evidence" in graph["app.bootstrap"]
     assert "app.domain.evidence" in graph["app.evidence_selection"]
+
+
+def test_query_service_depends_on_domain_retrieval_port_not_runtime_adapter() -> None:
+    graph = _import_graph()
+
+    service = graph["app.application.query_service"]
+    assert "app.domain.retrieval" in service
+    assert "app.retrieval_runtime" not in service
+    assert "app.config" not in service
+    assert "app.domain.retrieval" in graph["app.retrieval_runtime"]
+    assert "app.application.query_service" in graph["app.bootstrap"]
+    assert "app.query_service" not in graph["app.bootstrap"]
 
 
 def test_generation_adapter_is_composed_without_compatibility_or_application_dependencies() -> None:

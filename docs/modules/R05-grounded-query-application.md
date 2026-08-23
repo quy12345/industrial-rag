@@ -5,7 +5,7 @@
 R05 separates provider-neutral generation contracts, prompt policy, provider infrastructure, evidence
 and citation policies, and query orchestration without changing grounded-answer behavior.
 
-R05A, R05B, R05C1, and R05C2 are implemented. R05A moves structured generation records and the generator port to the domain,
+R05A through R05D are implemented. R05A moves structured generation records and the generator port to the domain,
 moves immutable prompt text and deterministic evidence rendering to the application layer, and keeps
 `app.generation` as a compatibility facade. R05B moves the concrete LangChain implementation to
 infrastructure, gives it the provider-neutral canonical name `LangChainStructuredGenerator`, and
@@ -14,8 +14,10 @@ R05C1 moves deterministic evidence selection, cross-document exact-duplicate han
 pre-generation evidence gate into one domain policy owner. Existing top-level imports remain valid.
 R05C2 moves referential answer validation and trusted citation construction into a second domain
 policy owner without changing correction feedback or public citation metadata.
+R05D makes `app.application.query_service` the canonical orchestration owner, moves its retrieval
+port/result to the domain, and retains the old top-level paths as identity-preserving facades.
 
-R05A does not change prompt text, evidence selection, provider settings, generation retries, citation
+R05 does not change prompt text, evidence selection, provider settings, generation retries, citation
 validation, abstention, retrieval, or ranking.
 
 ## 2. Position in the system
@@ -36,6 +38,10 @@ QueryResponse
 
 The prompt policy consumes only already-selected candidates. The generation port exposes no
 LangChain, OpenAI, Gemini, FastAPI, or Qdrant type.
+
+`app.application.query_service.QueryService` is the application use case. It depends on the domain
+`QueryRetriever` and `AnswerGenerator` ports plus a two-field `QuerySettings` protocol; bootstrap is
+the only production owner that supplies concrete settings and adapters.
 
 ```text
 app.bootstrap
@@ -90,6 +96,11 @@ first-occurrence order, and returns `ValidatedGeneration` only after referential
 `build_citations(...)` constructs public metadata exclusively from retrieved candidates in the
 authoritative source map.
 
+`QueryService.execute(...)` accepts `question`, optional `document_id`, and `top_k`, then returns a
+`QueryExecution`. The result retains the public `QueryResponse`, sanitized timings, optional token
+usage, and candidate boundaries used by evaluation. The historical `app.query_service` import path
+returns the same class and record objects, not wrappers or copies.
+
 ## 5. Step-by-step data flow
 
 1. Domain evidence policy validates selector inputs and derives query role.
@@ -104,8 +115,10 @@ authoritative source map.
 10. The composition root injects those templates and the correction builder into infrastructure.
 11. Infrastructure lazily constructs one LangChain structured-output model.
 12. The generator returns provider-native structured output mapped to `GeneratedAnswer`.
-13. Query orchestration validates model-returned labels against `EvidenceBundle.source_map`.
-14. Public citations are built only from the authoritative retrieved candidates.
+13. The application service validates model-returned labels against `EvidenceBundle.source_map`.
+14. Invalid structured output or citations receive exactly one retry with the same evidence.
+15. Public citations are built only from the authoritative retrieved candidates.
+16. Bootstrap injects concrete retrieval, evidence gate, generator, and canonical settings once.
 
 ## 6. Responsibilities of changed files
 
@@ -115,8 +128,12 @@ authoritative source map.
   diagnostics, exact-content selection, metadata validation, and pre-generation gate decisions.
 - [`app/domain/citations.py`](../../app/domain/citations.py) owns referential answer validation,
   validation-error ordering, source/chunk deduplication, and trusted citation construction.
+- [`app/domain/retrieval.py`](../../app/domain/retrieval.py) owns the provider-neutral
+  `QueryRetriever` port and `QueryRetrievalResult` record consumed by the query use case.
 - [`app/application/generation_prompt.py`](../../app/application/generation_prompt.py) owns immutable
   prompt templates, correction feedback text, evidence rendering, and truncation policy.
+- [`app/application/query_service.py`](../../app/application/query_service.py) owns the full grounded
+  query use case, correction loop, abstention construction, usage aggregation, timings, and safe log.
 - [`app/generation.py`](../../app/generation.py) compatibility-exports canonical contracts/policy and
   preserves the historical adapter constructor through a small compatibility subclass.
 - [`app/infrastructure/generation/__init__.py`](../../app/infrastructure/generation/__init__.py)
@@ -124,10 +141,12 @@ authoritative source map.
 - [`app/infrastructure/generation/langchain_structured.py`](../../app/infrastructure/generation/langchain_structured.py)
   owns lazy SDK imports, provider configuration, structured parsing, normalized usage, and sanitized
   provider error mapping.
-- [`app/bootstrap.py`](../../app/bootstrap.py) composes the canonical adapter with application-owned
-  prompt policy and constructs the canonical domain `EvidenceGate`.
-- [`app/query_service.py`](../../app/query_service.py) consumes the canonical generator port, usage
-  record, application evidence formatter, and domain evidence policy while preserving old gate exports.
+- [`app/bootstrap.py`](../../app/bootstrap.py) composes the canonical application service with the
+  retrieval adapter, generation adapter, prompt policy, settings, and domain evidence gate.
+- [`app/query_service.py`](../../app/query_service.py) is an identity-preserving compatibility facade
+  for historical runtime, test, and evaluation imports.
+- [`app/retrieval_runtime.py`](../../app/retrieval_runtime.py) implements and compatibility-exports
+  the domain retrieval port/result while retaining the frozen Phase 7 composition behavior.
 - [`app/evidence_selection.py`](../../app/evidence_selection.py) is a compatibility facade whose
   public selection symbols are direct aliases to the domain owner.
 - [`app/citations.py`](../../app/citations.py) is now a compatibility facade whose public symbols are
@@ -136,6 +155,8 @@ authoritative source map.
   rendering, facade identity, provider kwargs, errors, usage, and lazy construction.
 - [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) enforces the
   canonical imports and prevents application modules from importing infrastructure or evaluation.
+- [`tests/test_query_service.py`](../../tests/test_query_service.py) protects orchestration behavior
+  and verifies that the old facade resolves to the canonical service and gate objects.
 
 ## 7. Important symbols and why they exist
 
@@ -157,6 +178,11 @@ authoritative source map.
 - `ValidatedGeneration`: normalized answer and ordered source IDs after referential validation.
 - `validate_generated_answer`: rejects unsupported labels and invalid answer/abstention combinations.
 - `build_citations`: creates public citations only from trusted retrieval metadata.
+- `QueryRetriever`: domain port that hides the concrete retrieval runtime from application code.
+- `QueryRetrievalResult`: ordered final/pool candidates and established stage latency boundary.
+- `QuerySettings`: minimal structural configuration needed by the query use case.
+- `QueryExecution`: query response plus sanitized diagnostics and evaluation candidate boundaries.
+- `QueryService`: canonical application orchestrator for one grounded query.
 
 ## 8. Before-and-after structure
 
@@ -212,6 +238,23 @@ app.domain.citations  referential validation + trusted citation construction
 app.query_service                     app.citations compatibility facade
 ```
 
+After R05D:
+
+```text
+FastAPI / scripts / historical evaluation
+        | old imports remain valid through app.query_service facade
+        v
+app.application.query_service.QueryService
+        |                              |
+        v                              v
+domain policies and ports       QuerySettings protocol
+        ^                              ^
+        |                              |
+retrieval/generation adapters      app.config.Settings
+        ^______________________________^
+                     app.bootstrap
+```
+
 ## 9. Design decisions and trade-offs
 
 - DTOs move before the concrete adapter so all later slices can depend on stable contracts.
@@ -236,6 +279,14 @@ app.query_service                     app.citations compatibility facade
   are safe while construction maps only those labels to trusted candidate metadata.
 - Error ordering remains intentional: QueryService sends that tuple back as correction feedback on
   the one allowed retry. Reordering equivalent errors could change provider behavior.
+- The retrieval result and port move to domain because the application owns the capability it needs;
+  the concrete lazy/union/sparse implementations remain in `app.retrieval_runtime`.
+- `QuerySettings` lists only two consumed values, preventing the application service from depending
+  on the concrete Pydantic settings owner while preserving duck-typed compatibility.
+- The logger retains the established `app.query_service` category after relocation so operational
+  filters and the privacy characterization do not change.
+- API modules keep their historical facade imports in R05. R06 owns making inbound adapters thinner,
+  while R07 owns evaluation/script classification and compatibility removal decisions.
 
 ## 10. Tests and protected behavior
 
@@ -259,6 +310,9 @@ app.query_service                     app.citations compatibility facade
 | citation facade identity | historical imports resolve to canonical domain functions and record |
 | correction errors | validation-error order and deduplicated source-label order remain exact |
 | trusted citation snapshot | chunk/document/file/pages/headings/excerpt come from retrieved candidates |
+| query facade identity | historical service and gate imports are the canonical objects |
+| application boundary | query orchestration cannot import concrete settings or retrieval runtime |
+| orchestration golden | ordering, retry count, same evidence, usage, abstention, timings, and errors |
 
 ## 11. Commands and expected results
 
@@ -299,6 +353,14 @@ python -m ruff check app/domain/evidence.py app/domain/citations.py app/evidence
 python -m pytest -q tests/test_evidence_selection.py tests/test_citations.py tests/test_query_service.py tests/test_runtime_characterization.py tests/test_bootstrap.py tests/test_query_api.py tests/test_architecture_boundaries.py
 ```
 
+R05D characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_query_service.py tests/test_runtime_characterization.py tests/test_query_api.py tests/test_bootstrap.py tests/test_architecture_boundaries.py
+python -m ruff check app/application/query_service.py app/domain/retrieval.py app/query_service.py app/retrieval_runtime.py app/bootstrap.py tests/test_query_service.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_query_service.py tests/test_runtime_characterization.py tests/test_query_api.py tests/test_bootstrap.py tests/test_retrieval_runtime.py tests/test_architecture_boundaries.py
+```
+
 Slice completion:
 
 ```text
@@ -313,14 +375,20 @@ query Qdrant, or execute held-out evaluation.
 ## 12. Small usage example
 
 ```python
-from app.application.generation_prompt import format_evidence
+from app.application.query_service import QueryService
+from app.domain.evidence import EvidenceGate
 
-bundle = format_evidence(selected_candidates, max_chars=12_000)
-assert bundle.allowed_source_ids[0] == "S1"
+service = QueryService(
+    retriever=fake_retriever,
+    evidence_gate=EvidenceGate(score_threshold=None),
+    generator=fake_generator,
+    settings=settings,
+)
+execution = service.execute(question="What voltage is required?", document_id=None, top_k=5)
 ```
 
-The model receives `S1`, but later citation construction obtains document metadata only from
-`bundle.source_map["S1"]`.
+Production bootstrap supplies real adapters; unit tests use fakes implementing the same domain ports.
+The compatibility import `from app.query_service import QueryService` resolves to this exact class.
 
 ## 13. Common failures and debugging
 
@@ -342,8 +410,8 @@ The model receives `S1`, but later citation construction obtains document metada
 
 ## 14. Current limitations
 
-- QueryService orchestration remains at a top-level path; R05D owns its application relocation and
-  final compatibility facade.
+- API modules still import the query-service compatibility facade. R06 owns canonical inbound-adapter
+  imports and further adapter thinning.
 - Evidence selection retains a top-level compatibility facade, and QueryService retains gate exports
   for scripts. R07 owns removal after script classification.
 - `app.generation` remains a compatibility surface for scripts and tests; R07 owns updating historical
@@ -368,6 +436,9 @@ The model receives `S1`, but later citation construction obtains document metada
 13. Why can the model choose only a source label and not citation metadata?
 14. Why must citation-validation error order remain stable across refactoring?
 15. Where does a public citation excerpt come from?
+16. Why is `QueryRetriever` owned by domain rather than the concrete retrieval runtime?
+17. Which two settings may the application query service read?
+18. Why does the moved service deliberately keep the `app.query_service` logging category?
 
 ## 16. Interview summary
 
@@ -384,6 +455,10 @@ pre-generation gate into one pure domain policy. QueryService and bootstrap use 
 historical selector and gate imports remain compatible. R05C2 completes the grounding policies by
 moving source-label validation and trusted citation construction into domain. The correction loop
 continues to receive the same ordered errors, while public citation metadata remains retrieval-owned.
+R05D completes the boundary by making QueryService an application use case depending only on domain
+ports and a minimal settings protocol. Bootstrap supplies concrete adapters; the old query and
+retrieval imports remain identity-preserving facades, so API, scripts, evaluation, and tests continue
+to run while R06 and R07 clean their respective edges.
 
 ## 17. Validation results and proposed commit
 
@@ -412,15 +487,21 @@ R05C2 focused grounding/query/API suite            PASS — 75 tests, 1 warning
 R05C2 full Ruff Python 3.11.15                     PASS
 R05C2 full pytest Python 3.11.15                   PASS — 388 tests, 1 warning
 R05C2 Markdown links (13 targets) / diff check     PASS
+R05D pre-move characterization                     PASS — 57 tests, 1 warning
+R05D focused Ruff                                  PASS
+R05D focused query/runtime/API suite                PASS — 69 tests, 1 warning
+R05D full Ruff Python 3.11.15                       PASS
+R05D full pytest Python 3.11.15                     PASS — 390 tests, 1 warning
+R05D Markdown links (17 targets) / diff check       PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: move grounding policies into the domain
+refactor: establish grounded query application service
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R05A–R05C2 are implemented and focused validation passes. R05 remains open for final
-QueryService application ownership.
+`COMPLETE` — R05A–R05D are implemented and validated. Query orchestration now has canonical
+application ownership while historical imports remain compatible for R06 and R07 cleanup.

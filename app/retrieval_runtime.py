@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass
 from threading import Lock
 from time import perf_counter
-from typing import Any, Protocol
+from typing import Any
 
 from app import config as runtime_config
 from app.application.reranking_service import RerankPipeline
@@ -17,6 +16,8 @@ from app.domain.policies.query_analysis import (
     augment_vietnamese_technical_query,
 )
 from app.domain.reranking import RerankingError
+from app.domain.retrieval import QueryRetrievalResult as QueryRetrievalResult
+from app.domain.retrieval import QueryRetriever as QueryRetriever
 from app.errors import RerankerUnavailableError, RetrievalUnavailableError
 from app.infrastructure.models.reranker import FastEmbedCrossEncoder
 from app.infrastructure.qdrant.dense import dense_search
@@ -25,7 +26,6 @@ from app.infrastructure.qdrant.hybrid import (
     sparse_search,
     validate_hybrid_collection,
 )
-from app.models import RetrievalCandidate
 from app.retrieval import (
     RetrievalError,
     create_embedding_model,
@@ -42,23 +42,6 @@ FrozenRetrievalContract = retrieval_contracts.FrozenRetrievalContract
 PHASE7_RETRIEVAL_CONTRACT = retrieval_contracts.PHASE7_RETRIEVAL_CONTRACT
 resolve_retrieval_runtime = runtime_config.resolve_retrieval_runtime
 _validate_settings = runtime_config.validate_retrieval_settings
-
-
-@dataclass(frozen=True)
-class QueryRetrievalResult:
-    """Final ordered candidates plus independently measured stage latency."""
-
-    candidates: list[RetrievalCandidate]
-    retrieval_ms: float
-    rerank_ms: float
-    candidate_pool: list[RetrievalCandidate] | None = None
-
-
-class QueryRetriever(Protocol):
-    """Injectable retrieval boundary used by QueryService."""
-
-    def retrieve(self, question: str, *, document_id: str | None) -> QueryRetrievalResult: ...
-
 
 class UnionRerankRetriever:
     """Accuracy-first dense/sparse union followed by cross-encoder reranking."""

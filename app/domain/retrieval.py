@@ -3,9 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.models import RetrievalCandidate, RetrievedChunk
+
+
+@dataclass(frozen=True)
+class QueryRetrievalResult:
+    """Final ordered candidates plus independently measured stage latency."""
+
+    candidates: list[RetrievalCandidate]
+    retrieval_ms: float
+    rerank_ms: float
+    candidate_pool: list[RetrievalCandidate] | None = None
+
+
+class QueryRetriever(Protocol):
+    """Port supplying retrieved candidates to the grounded-query use case."""
+
+    def retrieve(self, question: str, *, document_id: str | None) -> QueryRetrievalResult: ...
 
 
 class DenseSearcher(Protocol):
