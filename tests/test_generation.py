@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
 
+import app.generation as generation_facade
+from app.application import generation_prompt
 from app.config import Settings
+from app.domain import generation as generation_contracts
 from app.errors import (
     GenerationValidationError,
     LLMNotConfiguredError,
@@ -99,6 +103,17 @@ def _bundle():
     return format_evidence([_candidate("a")], max_chars=4_000)
 
 
+def test_generation_facade_exports_canonical_contracts_and_prompt_policy() -> None:
+    assert generation_facade.GeneratedAnswer is generation_contracts.GeneratedAnswer
+    assert generation_facade.TokenUsage is generation_contracts.TokenUsage
+    assert generation_facade.EvidenceBundle is generation_contracts.EvidenceBundle
+    assert generation_facade.GenerationResult is generation_contracts.GenerationResult
+    assert generation_facade.AnswerGenerator is generation_contracts.AnswerGenerator
+    assert generation_facade.SYSTEM_PROMPT is generation_prompt.SYSTEM_PROMPT
+    assert generation_facade.HUMAN_PROMPT is generation_prompt.HUMAN_PROMPT
+    assert generation_facade.format_evidence is generation_prompt.format_evidence
+
+
 def test_evidence_labels_mapping_and_format_are_deterministic() -> None:
     candidates = [_candidate("a", pages=[3, 1]), _candidate("b")]
     first = format_evidence(candidates, max_chars=4_000)
@@ -111,6 +126,53 @@ def test_evidence_labels_mapping_and_format_are_deterministic() -> None:
     assert "document_title: n/a" in first.text
     assert "document_role: n/a" in first.text
     assert "<untrusted_document>" in first.text
+
+
+def test_single_evidence_block_has_exact_frozen_rendering() -> None:
+    bundle = format_evidence([_candidate("a", pages=[3, 1])], max_chars=4_000)
+
+    assert bundle.text == (
+        "--- SOURCE S1 ---\n"
+        "chunk_id: a\n"
+        "document_id: manual-a\n"
+        "filename: manual.pdf\n"
+        "document_title: n/a\n"
+        "document_role: n/a\n"
+        "pages: 1, 3\n"
+        "heading: Power > Limits\n"
+        "content:\n"
+        "<untrusted_document>\n"
+        "Technical evidence a: 24 VDC.\n"
+        "</untrusted_document>\n"
+        "--- END SOURCE ---"
+    )
+
+
+def test_prompt_templates_have_frozen_bytes() -> None:
+    captured: list[list[tuple[str, str]]] = []
+    prompt = object()
+    adapter = LangChainOpenAIGenerator(
+        Settings(_env_file=None),
+        prompt_factory=lambda messages: captured.append(messages) or prompt,
+    )
+
+    assert adapter._get_prompt() is prompt
+    assert captured == [
+        [
+            ("system", SYSTEM_PROMPT),
+            (
+                "human",
+                "Question:\n{question}\n\nAllowed source IDs: {allowed_source_ids}"
+                "{correction}\n\nSupplied evidence:\n{evidence}",
+            ),
+        ]
+    ]
+    assert hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest() == (
+        "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"
+    )
+    assert hashlib.sha256(captured[0][1][1].encode("utf-8")).hexdigest() == (
+        "b4b6ca4b7c96e5151bb318827016019fd321b779119db7eff9075f8b50c026d0"
+    )
 
 
 def test_evidence_includes_trusted_document_title_and_role() -> None:

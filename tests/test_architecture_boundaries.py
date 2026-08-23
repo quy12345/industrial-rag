@@ -160,7 +160,10 @@ def test_hybrid_facade_does_not_import_private_dense_facade_helpers() -> None:
 
 def test_application_services_have_no_adapter_or_evaluation_dependency() -> None:
     graph = _import_graph()
-    for module in ("app.application.indexing_service", "app.application.reranking_service"):
+    application_modules = {
+        module for module in graph if module.startswith("app.application.")
+    }
+    for module in application_modules:
         dependencies = graph[module]
         assert not {
             dependency
@@ -170,6 +173,16 @@ def test_application_services_have_no_adapter_or_evaluation_dependency() -> None
             or dependency == "app.infrastructure"
             or dependency.startswith("app.infrastructure.")
         }
+
+
+def test_grounded_query_consumers_use_canonical_generation_contracts_and_prompt_policy() -> None:
+    graph = _import_graph()
+
+    assert "app.domain.generation" in graph["app.query_service"]
+    assert "app.application.generation_prompt" in graph["app.query_service"]
+    assert "app.generation" not in graph["app.query_service"]
+    assert "app.domain.generation" in graph["app.citations"]
+    assert "app.generation" not in graph["app.citations"]
 
 
 def test_reranking_service_uses_domain_candidate_assembly_not_evaluation_audit() -> None:

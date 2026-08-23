@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from app.domain.generation import GeneratedAnswer
 from app.errors import CitationValidationError
-from app.generation import GeneratedAnswer
 from app.models import Citation, RetrievalCandidate
 
 

@@ -9,18 +9,15 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Literal
 
+from app.application.generation_prompt import format_evidence
 from app.citations import build_citations, validate_generated_answer
 from app.config import Settings
+from app.domain.generation import AnswerGenerator, TokenUsage
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
 from app.evidence_selection import (
     EvidenceDuplicateGroup,
     EvidenceSelectionError,
     select_evidence_candidates,
-)
-from app.generation import (
-    AnswerGenerator,
-    TokenUsage,
-    format_evidence,
 )
 from app.models import QueryResponse, RetrievalCandidate
 from app.request_context import request_id
