@@ -12,15 +12,14 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from app.evaluation import load_frozen_chunks
-from app.phase7 import (
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_jsonl_atomic
+from evaluation.phase7_dataset import (
     Phase7DatasetItem,
     Phase7Error,
     build_exact_content_equivalence,
     expand_exact_equivalent_qrels,
     read_phase7_dataset,
     validate_phase7_datasets,
-    write_jsonl_atomic,
 )
 
 REVIEW_NOTE = (

@@ -22,11 +22,6 @@ from evaluation.phase7_dataset import (
     validate_phase7_datasets,
     validate_source_records,
 )
-from scripts.apply_phase7_answer_facts import (
-    QREL_CORRECTIONS,
-    REFERENCE_MODE_QREL,
-    REVIEWED_ANSWER_FACTS,
-)
 
 
 def _chunk(identifier: str, document_id: str, text: str, page: int) -> DocumentChunk:
@@ -323,21 +318,3 @@ def test_source_manifest_contract_requires_unique_installation_and_programming()
     validate_source_records([installation, programming])
     with pytest.raises(Phase7Error, match="duplicate filenames"):
         validate_source_records([installation, installation])
-
-
-def test_source_reviewed_answer_fact_mapping_is_complete_and_strict() -> None:
-    assert len(REVIEWED_ANSWER_FACTS) == 42
-    assert set(QREL_CORRECTIONS) == {
-        "phase7_calibration_011",
-        "phase7_calibration_012",
-    }
-    assert all(
-        correction["relevant_chunk_ids"] == [REFERENCE_MODE_QREL]
-        and correction["expected_pages"] == [45]
-        and correction["expected_phrases"] == ["actual reference value"]
-        for correction in QREL_CORRECTIONS.values()
-    )
-    for facts in REVIEWED_ANSWER_FACTS.values():
-        assert facts
-        assert len({fact["id"] for fact in facts}) == len(facts)
-        assert all(fact["aliases"] for fact in facts)

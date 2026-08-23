@@ -37,6 +37,8 @@ frozen calibration-v3 identity remains untouched; only the obsolete construction
 the supported top-level script surface.
 R07C3 archives the completed calibration-v3 approval/freeze command. This removes a top-level command
 that can overwrite the active dataset and manifest while preserving its implementation as provenance.
+R07C4 archives the earlier answer-fact source-review migration. Its mappings remain available for
+provenance, but the command that can rewrite both frozen dataset splits is no longer supported.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -186,6 +188,7 @@ Shared frozen-corpus flow:
 | [`scripts/archive/phase7/migrate_phase7_dataset_v2.py`](../../scripts/archive/phase7/migrate_phase7_dataset_v2.py) | Unsupported historical dataset-v2 migration retained for provenance. |
 | [`scripts/archive/phase7/draft_phase7_calibration_fact_types.py`](../../scripts/archive/phase7/draft_phase7_calibration_fact_types.py) | Unsupported historical typed-fact calibration-v3 draft generator. |
 | [`scripts/archive/phase7/freeze_phase7_calibration_v3.py`](../../scripts/archive/phase7/freeze_phase7_calibration_v3.py) | Unsupported historical calibration-v3 approval/freeze command. |
+| [`scripts/archive/phase7/apply_phase7_answer_facts.py`](../../scripts/archive/phase7/apply_phase7_answer_facts.py) | Unsupported historical answer-fact source-review migration. |
 | [`scripts/archive/phase7/README.md`](../../scripts/archive/phase7/README.md) | Archive policy, completion evidence, and no-rerun warning. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
@@ -326,6 +329,12 @@ ground-truth-mutated drafts. The active manifest records the frozen dataset and 
 source hash for this command. Leaving a writer for the active dataset and manifest at top level would
 misrepresent a completed approval ceremony as routine operation.
 
+The answer-fact migration is also archived without a shim. Its pre-move characterization verified the
+42-row mapping and narrow calibration 011/012 correction structure. Dataset approval/freeze happened
+after this migration, and no current runtime, evaluator, artifact identity, or supported documentation
+imports the command. The historical constants stay in the archived source; they are no longer a live
+test contract.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -380,6 +389,10 @@ contract that would imply ongoing support.
 The calibration-freeze archive boundary additionally proves that its historical source uses canonical
 domain, infrastructure, and evaluation owners rather than compatibility facades. Its synthetic
 approval tests are retained as recorded pre-move characterization, not an ongoing supported contract.
+
+The answer-fact archive boundary proves the completed migration has no old top-level path and depends
+directly on canonical corpus-artifact and dataset owners. The mapping-integrity test was executed before
+the move and then removed because archive provenance is intentionally unsupported.
 
 ## 11. Commands and expected results
 
@@ -459,6 +472,15 @@ pytest -q tests/test_freeze_phase7_calibration_v3.py
 2 passed
 python -m scripts.freeze_phase7_calibration_v3 --help
 exit 0; six historical options recorded before removal
+```
+
+R07C4 pre-archive characterization:
+
+```text
+pytest -q tests/test_phase7.py::test_source_reviewed_answer_fact_mapping_is_complete_and_strict
+1 passed
+python -m scripts.apply_phase7_answer_facts --help
+exit 0; historical `--calibration`, `--test`, and `--chunks` options recorded before removal
 ```
 
 ## 12. Small usage example
@@ -735,7 +757,37 @@ Proposed R07C3 commit after user review:
 chore: archive completed phase7 calibration freeze
 ```
 
+R07C3 was committed as `c31fb56 chore: archive completed phase7 calibration freeze`.
+
+R07C4 validation:
+
+| Check | Result |
+| --- | --- |
+| Existing pre-archive mapping test | PASS — `1 passed` |
+| Legacy pre-archive `--help` | PASS — exit `0`; three options recorded |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture/dataset pytest | PASS — `43 passed` |
+| Archived command `--help` | PASS — exit `0`; three-option contract preserved |
+| Removed top-level command | PASS — `scripts.apply_phase7_answer_facts` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `416 passed, 1 warning` |
+| Current-command reference search | PASS — no supported docs/code/tests reference the old path |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Frozen-data/artifact scope | PASS — no changes under `data/eval/`, `data/raw/`, or `artifacts/` |
+| `git diff --check` | PASS |
+
+The test count is unchanged because one historical mapping test was replaced by one archive-boundary
+test. The warning remains the existing Starlette `TestClient`/`httpx` deprecation warning. R07C4 does
+not change dependencies.
+
+Proposed R07C4 commit after user review:
+
+```text
+chore: archive completed phase7 answer-fact migration
+```
+
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07C2 are complete and committed through `b582c87`. R07C3 is implemented,
+`IN_PROGRESS` — R07A1–R07C3 are complete and committed through `c31fb56`. R07C4 is implemented,
 validated, and awaiting user review. Later R07 slices remain outside this slice.

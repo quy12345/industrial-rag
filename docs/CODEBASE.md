@@ -139,8 +139,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   approval, added answer facts, and expanded qrels only across same-document exact-content duplicates.
 - `scripts/archive/phase7/draft_phase7_calibration_fact_types.py`: unsupported completed generator for
   the review-required typed-fact calibration-v3 draft.
-- `scripts/apply_phase7_answer_facts.py`: explicit source-review mapping for 42 answerable rows plus
-  the documented calibration 011/012 qrel correction; it reads no retrieval/provider output.
+- `scripts/archive/phase7/apply_phase7_answer_facts.py`: unsupported completed source-review migration
+  for 42 answerable rows and the documented calibration 011/012 qrel correction.
 
 ## Dense-index contract
 
