@@ -30,8 +30,8 @@ from app.evaluation import (
     direct_evidence_rank,
     percentile_nearest_rank,
 )
-from app.hybrid_retrieval import sparse_search
 from app.infrastructure.qdrant.dense import dense_search
+from app.infrastructure.qdrant.hybrid import sparse_search
 from app.models import RetrievalCandidate, RetrievedChunk
 
 RerankStrategy = Literal["sparse", "hybrid", "union"]

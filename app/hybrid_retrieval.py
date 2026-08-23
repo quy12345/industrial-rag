@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any
 
-from pydantic import ValidationError
 from qdrant_client import QdrantClient
 
 import app.domain.policies.fusion as fusion_policy
 import app.infrastructure.qdrant.dense as dense_infrastructure
+import app.infrastructure.qdrant.hybrid as hybrid_infrastructure
 from app.errors import RetrievalError
-from app.infrastructure.qdrant import hybrid as hybrid_infrastructure
 from app.infrastructure.qdrant import manifests as index_manifests
-from app.models import RetrievalCandidate, RetrievedChunk
+from app.models import RetrievalCandidate
 
 HYBRID_INDEX_MANIFEST_PATH = index_manifests.HYBRID_INDEX_MANIFEST_PATH
 HYBRID_SCHEMA_VERSION = index_manifests.HYBRID_SCHEMA_VERSION
@@ -29,60 +27,11 @@ _document_filter = dense_infrastructure.document_filter
 _to_sparse_vector = hybrid_infrastructure.to_sparse_vector
 _runtime_versions = index_manifests.runtime_versions
 dense_search = dense_infrastructure.dense_search
+sparse_search = hybrid_infrastructure.sparse_search
+_candidate_from_dense = hybrid_infrastructure._candidate_from_dense
+_candidate_from_payload = hybrid_infrastructure._candidate_from_payload
+_assign_component_ranks = hybrid_infrastructure._assign_component_ranks
 fuse_rrf = fusion_policy.fuse_rrf
-
-
-def sparse_search(
-    client: QdrantClient,
-    question: str,
-    *,
-    collection_name: str,
-    sparse_vector_name: str,
-    sparse_embedding_model: Any,
-    limit: int,
-    document_id: str | None = None,
-) -> list[RetrievalCandidate]:
-    """Return sparse BM25 candidates with one-based deterministic ranks."""
-
-    normalized_question = question.strip()
-    if not normalized_question:
-        raise RetrievalError("Sparse search question must not be empty.")
-    if limit <= 0:
-        raise RetrievalError("Sparse search limit must be greater than 0.")
-    try:
-        raw_vector = next(iter(sparse_embedding_model.query_embed(normalized_question)))
-        query_vector = _to_sparse_vector(raw_vector)
-    except StopIteration as exc:
-        raise RetrievalError("Sparse embedding model returned no query vector.") from exc
-    except RetrievalError:
-        raise
-    except Exception as exc:
-        raise RetrievalError(f"Failed to embed sparse search question: {exc}") from exc
-
-    try:
-        response = client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            using=sparse_vector_name,
-            query_filter=_document_filter(document_id) if document_id else None,
-            limit=limit,
-            with_payload=True,
-            with_vectors=False,
-        )
-    except Exception as exc:
-        raise RetrievalError(
-            f"Sparse search failed in collection {collection_name}: {exc}"
-        ) from exc
-
-    candidates = []
-    for point in response.points:
-        try:
-            candidates.append(
-                _candidate_from_payload(point.payload, sparse_score=float(point.score))
-            )
-        except (KeyError, TypeError, ValidationError) as exc:
-            raise RetrievalError(f"Invalid payload for Qdrant point {point.id}: {exc}") from exc
-    return _assign_component_ranks(candidates, component="sparse")
 
 
 def hybrid_search(
@@ -126,52 +75,3 @@ def hybrid_search(
         document_id=document_id,
     )
     return fuse_rrf(dense_candidates, sparse_candidates, rrf_k=rrf_k, final_limit=final_limit)
-
-
-def _candidate_from_dense(result: RetrievedChunk) -> RetrievalCandidate:
-    return RetrievalCandidate(
-        chunk_id=result.chunk_id,
-        document_id=result.document_id,
-        filename=result.filename,
-        text=result.text,
-        page_numbers=result.page_numbers,
-        headings=result.headings,
-        content_type=result.content_type,
-        score=result.score,
-        dense_score=result.score,
-    )
-
-
-def _candidate_from_payload(payload: Any, *, sparse_score: float) -> RetrievalCandidate:
-    if not isinstance(payload, dict):
-        raise TypeError("payload must be a JSON object")
-    metadata = {key: payload[key] for key in ("source_path", "character_count") if key in payload}
-    return RetrievalCandidate(
-        chunk_id=payload["chunk_id"],
-        document_id=payload["document_id"],
-        filename=payload["filename"],
-        text=payload["text"],
-        page_numbers=payload["page_numbers"],
-        headings=payload["headings"],
-        content_type=payload["content_type"],
-        metadata=metadata,
-        score=sparse_score,
-        sparse_score=sparse_score,
-    )
-
-
-def _assign_component_ranks(
-    candidates: Sequence[RetrievalCandidate], *, component: str
-) -> list[RetrievalCandidate]:
-    if component not in {"dense", "sparse"}:
-        raise ValueError(f"Unknown retrieval component: {component}")
-    score_field = f"{component}_score"
-    rank_field = f"{component}_rank"
-    ordered = sorted(
-        candidates,
-        key=lambda candidate: (-(getattr(candidate, score_field) or 0.0), candidate.chunk_id),
-    )
-    return [
-        candidate.model_copy(update={rank_field: rank})
-        for rank, candidate in enumerate(ordered, start=1)
-    ]

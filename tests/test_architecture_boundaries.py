@@ -209,3 +209,12 @@ def test_runtime_uses_canonical_dense_search_adapter() -> None:
     assert "app.infrastructure.qdrant.dense" in graph["app.hybrid_retrieval"]
     assert "app.retrieval" not in graph["app.reranking"]
     assert "app.retrieval" not in graph["app.hybrid_retrieval"]
+
+
+def test_runtime_uses_canonical_sparse_search_adapter() -> None:
+    graph = _import_graph()
+
+    for module in ("app.reranking", "app.retrieval_runtime", "app.hybrid_retrieval"):
+        assert "app.infrastructure.qdrant.hybrid" in graph[module]
+    assert "app.hybrid_retrieval" not in graph["app.reranking"]
+    assert "app.hybrid_retrieval" not in graph["app.retrieval_runtime"]

@@ -5,14 +5,14 @@
 R04 separates framework-neutral retrieval policies from evaluation helpers, Qdrant search, and model
 adapters without changing ranking behavior. This document is shared by all R04 slices.
 
-R04A, all R04B slices, and R04C1 are implemented. R04A moves dense-result conversion and dense/sparse
+R04A, all R04B slices, and all R04C slices are implemented. R04A moves dense-result conversion and dense/sparse
 candidate union into the domain, retains `app.candidate_audit` as a compatibility facade for these public
 imports, and removes the production reranking path's dependency on that evaluation-oriented module.
 R04B1 moves unweighted reciprocal-rank fusion (RRF) out of the Qdrant-facing hybrid facade. R04B2a
 moves deterministic Vietnamese technical query expansion into domain policy. R04B2b moves query-role,
 list-completeness, weighted-RRF, reserve, and post-rerank policies into the same domain policy layer.
-R04C1 moves dense Qdrant search into its infrastructure owner. Sparse search remains for R04C2;
-R04D–R04E remain pending.
+R04C1 moves dense Qdrant search into its infrastructure owner. R04C2 does the same for sparse search,
+payload mapping, and component rank assignment. R04D–R04E remain pending.
 
 ## 2. Position in the system
 
@@ -36,9 +36,11 @@ question ──> app.domain.policies.query_analysis ──> sparse query augment
 query + ranked candidates ──> app.domain.policies.ranking ──> bounded ranked candidates
 
 question + dense model ──> app.infrastructure.qdrant.dense ──> Qdrant ──> RetrievedChunk
+
+question + sparse model ──> app.infrastructure.qdrant.hybrid ──> Qdrant ──> ranked candidates
 ```
 
-R04A–R04C1 change ownership and dependency direction only. Validation does not query live Qdrant,
+R04A–R04C change ownership and dependency direction only. Validation does not query live Qdrant,
 initialize a model, call a provider, execute a benchmark, or modify the frozen Phase 7 profile.
 
 ## 3. Relevant background concepts
@@ -89,6 +91,11 @@ named-vector selection, optional document filter and score threshold, payload/ve
 order, citation metadata mapping, and exact `RetrievalError` normalization. `app.retrieval` and
 `app.hybrid_retrieval` retain compatibility aliases to the canonical adapter function.
 
+`sparse_search(...)` preserves trimmed-question validation, one BM25 query embedding, sparse-vector
+validation, named-vector/filter request fields, metadata allowlisting, score conversion, and
+deterministic descending-score/`chunk_id` ranks. Its exception types and messages remain unchanged.
+`app.hybrid_retrieval.sparse_search` remains the identical canonical function object.
+
 ## 5. Step-by-step data flow
 
 1. Dense search returns `RetrievedChunk` records with citation metadata and a raw dense score.
@@ -117,6 +124,9 @@ order, citation metadata mapping, and exact `RetrievalError` normalization. `app
 24. Dense search validates input and converts exactly one query embedding to plain floats.
 25. The adapter sends the established named-vector/filter/threshold request to Qdrant.
 26. Returned payloads are validated and mapped in Qdrant response order to `RetrievedChunk`.
+27. Sparse search validates input and converts one BM25 result to a Qdrant sparse vector.
+28. Qdrant payloads map to candidates with source-path/character-count metadata when present.
+29. Candidates sort by descending sparse score, then `chunk_id`, before one-based rank assignment.
 
 ## 6. Responsibilities of changed files
 
@@ -132,10 +142,12 @@ order, citation metadata mapping, and exact `RetrievalError` normalization. `app
   inference, weighted RRF, coverage reserves, list fallbacks, and post-rerank rank fusion.
 - [`app/infrastructure/qdrant/dense.py`](../../app/infrastructure/qdrant/dense.py) now owns dense search
   and payload mapping in addition to established dense embedding/indexing infrastructure.
+- [`app/infrastructure/qdrant/hybrid.py`](../../app/infrastructure/qdrant/hybrid.py) now owns sparse
+  search, sparse payload mapping, and component rank assignment beside BM25/hybrid infrastructure.
 - [`app/candidate_audit.py`](../../app/candidate_audit.py) owns qrel/evaluation audit behavior and
   temporarily re-exports the two moved functions for compatibility.
 - [`app/hybrid_retrieval.py`](../../app/hybrid_retrieval.py) retains sparse/hybrid Qdrant coordination
-  and exposes canonical dense-search and RRF functions through compatibility aliases.
+  for legacy `hybrid_search` and exposes canonical dense/sparse search and RRF compatibility aliases.
 - [`app/retrieval.py`](../../app/retrieval.py) is now a pure compatibility facade over dense Qdrant
   infrastructure and manifests.
 - [`app/reranking.py`](../../app/reranking.py) consumes candidate assembly from the domain instead of
@@ -174,6 +186,7 @@ order, citation metadata mapping, and exact `RetrievalError` normalization. `app
 - `apply_role_aware_rank_fusion`: rank-only post-rerank prior that preserves cross-encoder scores.
 - `apply_*_list_completeness_*`: bounded runtime and sanitized-metadata replay of list ordering.
 - `dense_search`: canonical dense Qdrant query adapter with fail-closed payload/error mapping.
+- `sparse_search`: canonical BM25/Qdrant query adapter with deterministic component ranks.
 - `candidate_assembly` in `app.candidate_audit`: explicit facade reference that makes temporary
   compatibility ownership visible.
 - `KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS`: executable debt inventory; after R04A it records only the
@@ -181,7 +194,7 @@ order, citation metadata mapping, and exact `RetrievalError` normalization. `app
 
 ## 8. Before-and-after structure
 
-Before R04A–R04C1:
+Before R04A–R04C:
 
 ```text
 app.candidate_audit   runtime candidate assembly + evaluation audit
@@ -195,9 +208,11 @@ app.query_expansion   query policy implementation and historical source-identity
 app.phase7_optimization  role/list/fusion implementation and historical phase-named owner
 
 app.retrieval  dense Qdrant search implementation + indexing compatibility exports
+
+app.hybrid_retrieval  sparse Qdrant search implementation + hybrid coordinator
 ```
 
-After R04A–R04C1:
+After R04A–R04C:
 
 ```text
 app.domain.retrieval  canonical candidate assembly
@@ -219,6 +234,10 @@ runtime/domain consumers + app.phase7_optimization compatibility facade
 app.infrastructure.qdrant.dense  canonical dense index + search adapter
         ↑
 runtime consumers + app.retrieval/app.hybrid_retrieval compatibility facades
+
+app.infrastructure.qdrant.hybrid  canonical sparse/hybrid index + search adapter
+        ↑
+runtime consumers + app.hybrid_retrieval compatibility facade/coordinator
 ```
 
 ## 9. Design decisions and trade-offs
@@ -242,6 +261,8 @@ runtime consumers + app.retrieval/app.hybrid_retrieval compatibility facades
   contracts would add no dependency benefit and would obscure behavior preservation.
 - Dense search stays beside dense indexing because both adapt the same Qdrant vector/payload schema
   and embedding boundary. No separate abstraction is introduced for a single concrete backend.
+- Sparse search follows the same ownership rule. `hybrid_search` stays in the facade because it is a
+  legacy cross-adapter coordinator; production runtime uses explicit dense/sparse injected operations.
 - The facade remains evaluation-oriented and therefore may import `app.evaluation`; the architecture
   guard now proves it is unreachable from `app.main` through the reranking edge.
 - The remaining direct import from `app.reranking` to `app.evaluation` is documented debt for R04D/E,
@@ -272,6 +293,10 @@ runtime consumers + app.retrieval/app.hybrid_retrieval compatibility facades
 | dense in-memory tests | response order, scores, citation payload, filters, and invalid payload errors |
 | dense facade identity | historical imports resolve to the canonical infrastructure adapter |
 | dense architecture graph | reranking/hybrid runtime bypass `app.retrieval` for dense search |
+| exact sparse query snapshot | sparse vector, named vector, filter, limit, and payload/vector flags |
+| sparse in-memory tests | metadata allowlist, document filter, score/rank ordering, and errors |
+| sparse facade identity | historical import resolves to the canonical hybrid infrastructure adapter |
+| sparse architecture graph | reranking/runtime bypass `app.hybrid_retrieval` for sparse search |
 
 The exact dense snapshot was added before the implementation move and passed against the old owner.
 
@@ -322,6 +347,14 @@ python -m ruff check app/infrastructure/qdrant/dense.py app/retrieval.py app/hyb
 python -m pytest -q tests/test_retrieval.py tests/test_hybrid_retrieval.py tests/test_reranking.py tests/test_retrieval_runtime.py tests/test_query_service.py tests/test_architecture_boundaries.py
 ```
 
+R04C2 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_hybrid_retrieval.py tests/test_reranking.py tests/test_retrieval_runtime.py
+python -m ruff check app/infrastructure/qdrant/hybrid.py app/hybrid_retrieval.py app/reranking.py app/retrieval_runtime.py tests/test_hybrid_retrieval.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_hybrid_retrieval.py tests/test_reranking.py tests/test_retrieval_runtime.py tests/test_query_service.py tests/test_architecture_boundaries.py
+```
+
 Slice-completion validation:
 
 ```text
@@ -330,7 +363,7 @@ python -m pytest -q
 git diff --check
 ```
 
-Unit tests must run offline with fake models and in-memory stores. No R04A–R04C1 command requires
+Unit tests must run offline with fake models and in-memory stores. No R04A–R04C command requires
 source PDFs, model downloads, a provider, live Qdrant, or held-out benchmark payloads.
 
 ## 12. Small usage example
@@ -377,10 +410,13 @@ Historical `app.phase7_optimization` imports remain compatible in the same way.
   reserve, tie-break, or metadata contract drifted; do not tune the expected result during R04.
 - A dense query snapshot failure means vector conversion, named-vector selection, filter, threshold,
   or payload/vector flags changed; do not update the expected call during an adapter move.
+- A sparse snapshot or rank failure means vector conversion, named-vector/filter fields, metadata,
+  score/`chunk_id` tie-break, or one-based ranking drifted; do not update the golden during R04C.
 
 ## 14. Current limitations
 
-- Sparse search remains in the hybrid compatibility module until R04C2.
+- Legacy `hybrid_search` remains in the compatibility facade; active production runtime composes the
+  canonical dense and sparse adapter functions directly.
 - Cross-encoder construction and reranking orchestration remain combined until R04D.
 - `app.reranking` still directly imports evaluation types/helpers; R04E cannot enable the final
   production-to-evaluation prohibition until those runtime/evaluator responsibilities are separated.
@@ -400,6 +436,7 @@ Historical `app.phase7_optimization` imports remain compatible in the same way.
 8. Why must historical artifact hashes remain unchanged after moving query policy code?
 9. Why does post-rerank role fusion preserve `rerank_score` and write a separate rank-derived score?
 10. Why does dense search belong in Qdrant infrastructure rather than the retrieval domain?
+11. Why is raw sparse score preserved as provenance while rank is assigned deterministically?
 
 ## 16. Interview summary
 
@@ -412,11 +449,12 @@ with query-only role/list analysis, weighted fusion, reserves, and bounded post-
 record snapshots, lexical and ranking goldens, and static
 import-graph tests demonstrate improved dependency direction without changing scores, ranks,
 provenance, candidate ordering, limits, or error behavior. R04C1 moves dense search behind the Qdrant
-adapter while preserving exact request and response mapping contracts.
+adapter while preserving exact request and response mapping contracts. R04C2 completes the Qdrant
+search boundary for sparse BM25 queries and removes production imports through the hybrid facade.
 
 ## 17. Validation results and proposed commit
 
-Current R04A–R04C1 validation:
+Current R04A–R04C validation:
 
 ```text
 Pre-refactor candidate/reranking characterization  PASS — 34 tests
@@ -444,16 +482,21 @@ R04C1 focused dense/runtime/architecture suite     PASS — 108 tests
 R04C1 full Ruff                                    PASS
 R04C1 full pytest Python 3.11.15                   PASS — 367 tests, 1 warning
 R04C1 Markdown links (19 targets) / diff check     PASS
+Pre-refactor sparse-search characterization        PASS — 52 tests
+R04C2 focused sparse/runtime/architecture suite    PASS — 83 tests
+R04C2 full Ruff                                    PASS
+R04C2 full pytest Python 3.11.15                   PASS — 369 tests, 1 warning
+R04C2 Markdown links (20 targets) / diff check     PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: isolate dense search infrastructure
+refactor: isolate sparse search infrastructure
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R04A, R04B, and R04C1 are implemented and focused checks pass. R04 remains open for
-the sparse-search adapter, the reranking adapter, and the final
+`IN_PROGRESS` — R04A–R04C are implemented and focused checks pass. R04 remains open for the
+reranking adapter and the final
 production/evaluation boundary slices.

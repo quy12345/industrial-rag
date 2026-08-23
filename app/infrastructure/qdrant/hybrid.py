@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
 from app.domain.documents import DocumentChunk
@@ -14,9 +15,11 @@ from app.infrastructure.qdrant.dense import (
     build_embedding_text,
     build_payload,
     build_point_id,
+    document_filter,
     scroll_document_point_ids,
     to_float_vector,
 )
+from app.models import RetrievalCandidate, RetrievedChunk
 
 
 def create_sparse_embedding_model(
@@ -84,6 +87,108 @@ def compute_bm25_average_length(
     if average <= 0:
         raise RetrievalError("BM25 average length must be greater than zero.")
     return average
+
+
+def sparse_search(
+    client: QdrantClient,
+    question: str,
+    *,
+    collection_name: str,
+    sparse_vector_name: str,
+    sparse_embedding_model: Any,
+    limit: int,
+    document_id: str | None = None,
+) -> list[RetrievalCandidate]:
+    """Return sparse BM25 candidates with one-based deterministic ranks."""
+
+    normalized_question = question.strip()
+    if not normalized_question:
+        raise RetrievalError("Sparse search question must not be empty.")
+    if limit <= 0:
+        raise RetrievalError("Sparse search limit must be greater than 0.")
+    try:
+        raw_vector = next(iter(sparse_embedding_model.query_embed(normalized_question)))
+        query_vector = to_sparse_vector(raw_vector)
+    except StopIteration as exc:
+        raise RetrievalError("Sparse embedding model returned no query vector.") from exc
+    except RetrievalError:
+        raise
+    except Exception as exc:
+        raise RetrievalError(f"Failed to embed sparse search question: {exc}") from exc
+
+    try:
+        response = client.query_points(
+            collection_name=collection_name,
+            query=query_vector,
+            using=sparse_vector_name,
+            query_filter=document_filter(document_id) if document_id else None,
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as exc:
+        raise RetrievalError(
+            f"Sparse search failed in collection {collection_name}: {exc}"
+        ) from exc
+
+    candidates = []
+    for point in response.points:
+        try:
+            candidates.append(
+                _candidate_from_payload(point.payload, sparse_score=float(point.score))
+            )
+        except (KeyError, TypeError, ValidationError) as exc:
+            raise RetrievalError(f"Invalid payload for Qdrant point {point.id}: {exc}") from exc
+    return _assign_component_ranks(candidates, component="sparse")
+
+
+def _candidate_from_dense(result: RetrievedChunk) -> RetrievalCandidate:
+    return RetrievalCandidate(
+        chunk_id=result.chunk_id,
+        document_id=result.document_id,
+        filename=result.filename,
+        text=result.text,
+        page_numbers=result.page_numbers,
+        headings=result.headings,
+        content_type=result.content_type,
+        score=result.score,
+        dense_score=result.score,
+    )
+
+
+def _candidate_from_payload(payload: Any, *, sparse_score: float) -> RetrievalCandidate:
+    if not isinstance(payload, dict):
+        raise TypeError("payload must be a JSON object")
+    metadata = {key: payload[key] for key in ("source_path", "character_count") if key in payload}
+    return RetrievalCandidate(
+        chunk_id=payload["chunk_id"],
+        document_id=payload["document_id"],
+        filename=payload["filename"],
+        text=payload["text"],
+        page_numbers=payload["page_numbers"],
+        headings=payload["headings"],
+        content_type=payload["content_type"],
+        metadata=metadata,
+        score=sparse_score,
+        sparse_score=sparse_score,
+    )
+
+
+def _assign_component_ranks(
+    candidates: Sequence[RetrievalCandidate], *, component: str
+) -> list[RetrievalCandidate]:
+    if component not in {"dense", "sparse"}:
+        raise ValueError(f"Unknown retrieval component: {component}")
+    score_field = f"{component}_score"
+    rank_field = f"{component}_rank"
+    ordered = sorted(
+        candidates,
+        key=lambda candidate: (-(getattr(candidate, score_field) or 0.0), candidate.chunk_id),
+    )
+    return [
+        candidate.model_copy(update={rank_field: rank})
+        for rank, candidate in enumerate(ordered, start=1)
+    ]
 
 
 def ensure_hybrid_collection(

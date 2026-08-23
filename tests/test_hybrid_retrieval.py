@@ -43,6 +43,7 @@ def test_hybrid_facade_exports_canonical_infrastructure_symbols() -> None:
         hybrid_infrastructure.compute_bm25_average_length
     )
     assert hybrid_facade.ensure_hybrid_collection is hybrid_infrastructure.ensure_hybrid_collection
+    assert hybrid_facade.sparse_search is hybrid_infrastructure.sparse_search
     assert hybrid_facade.index_hybrid_chunks is hybrid_infrastructure.index_hybrid_chunks
     assert hybrid_facade.write_hybrid_index_manifest is (
         index_manifests.write_hybrid_index_manifest
@@ -342,6 +343,45 @@ def test_sparse_search_filters_documents_and_preserves_metadata() -> None:
             sparse_embedding_model=sparse_model,
             limit=5,
         )
+
+
+def test_sparse_search_sends_exact_named_vector_query_contract() -> None:
+    captured: dict[str, object] = {}
+    sparse_model = FakeSparseModel()
+
+    class RecordingClient:
+        def query_points(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(points=[])
+
+    results = sparse_search(
+        RecordingClient(),  # type: ignore[arg-type]
+        " sensor ",
+        collection_name=V2,
+        sparse_vector_name=SPARSE,
+        sparse_embedding_model=sparse_model,
+        limit=7,
+        document_id="manual-a",
+    )
+
+    assert results == []
+    assert sparse_model.query_calls == ["sensor"]
+    assert captured == {
+        "collection_name": V2,
+        "query": models.SparseVector(indices=[1], values=[1.0]),
+        "using": SPARSE,
+        "query_filter": models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="document_id",
+                    match=models.MatchValue(value="manual-a"),
+                )
+            ]
+        ),
+        "limit": 7,
+        "with_payload": True,
+        "with_vectors": False,
+    }
 
 
 def test_rrf_formula_duplicate_collapse_ties_and_empty_components() -> None:

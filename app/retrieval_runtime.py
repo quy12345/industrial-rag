@@ -16,7 +16,7 @@ from app.domain.policies.query_analysis import (
     augment_vietnamese_technical_query,
 )
 from app.errors import RerankerUnavailableError, RetrievalUnavailableError
-from app.hybrid_retrieval import (
+from app.infrastructure.qdrant.hybrid import (
     create_sparse_embedding_model,
     sparse_search,
     validate_hybrid_collection,
