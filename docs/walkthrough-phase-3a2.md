@@ -1,5 +1,8 @@
 # Phase 3A.2 walkthrough
 
+> **Historical / superseded:** this guide documents the retired Phase 6 single-manual contract.
+> Its collections and evidence are preserved, but its commands are not part of the active runtime.
+
 This guide reproduces the dense-baseline and Docker-stabilization checks without deleting the
 Qdrant volume or using a broad Docker prune command.
 

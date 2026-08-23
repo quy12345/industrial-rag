@@ -1,6 +1,6 @@
 # Phase 7.4.1--7.5 walkthrough: contamination closure and CPU reranking
 
-> Historical checkpoint: the 2026-08-11 calibration closure supersedes the readiness conclusion in
+> **Historical / superseded:** the 2026-08-11 calibration closure supersedes the readiness conclusion in
 > this file. Retrieval/CPU measurements below remain valid historical evidence, but the current
 > overall status is `PARTIAL` and held-out is `BLOCKED_GOVERNANCE`. See
 > `walkthrough-phase-7-calibration-closure.md`.

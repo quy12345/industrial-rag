@@ -30,6 +30,21 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 
 ## Main modules
 
+Round 1 established these canonical owners while retaining a few explicit compatibility/source-pin
+anchors:
+
+```text
+app/api                 inbound HTTP adapters
+app/application         use-case orchestration and application contracts
+app/domain              framework-free records, ports, and policies
+app/infrastructure      Qdrant, model, provider, and corpus adapters
+evaluation              offline datasets, replay, audits, and metrics
+scripts/operations      supported operational CLI implementations
+scripts/evaluation      supported evaluation CLI implementations
+scripts/archive         unsupported historical provenance
+ui                      HTTP-only Streamlit adapter
+```
+
 - `app/config.py`: Pydantic settings for retrieval, reranking, evidence/generation limits, selected
   OpenAI or Gemini provider, and the only supported `phase7` retrieval profile. Python and Compose
   use the same active collections; `phase6` is rejected.
@@ -41,12 +56,13 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   stable UUIDv5 point IDs, safe re-indexing, and index-manifest validation.
 - `app/hybrid_retrieval.py`: FastEmbed BM25 configuration and exact avg-length calculation, v2
   schema/manifest validation, safe dual-vector indexing, sparse search, and deterministic RRF.
-- `app/evaluation.py`: dependency-free typed qrels, frozen-chunk validation, direct-evidence ranks,
-  retrieval metrics, group metrics, and latency percentiles.
+- `app/evaluation.py`: compatibility/source-identity anchor over canonical offline retrieval
+  evaluation. New evaluation code imports `evaluation.retrieval` directly.
 - `app/content_identity.py`: dependency-free NFKC/case/whitespace identity for exact equivalence;
   it is deliberately not semantic similarity.
-- `app/phase7.py`: offline schema, validation, hashing, exact-content qrel closure, and review state
-  for the separate two-manual corpus; it never calls Qdrant or a provider.
+- `app/phase7.py`: compatibility/source-identity anchor. Canonical two-manual dataset schemas,
+  validation, hashing, qrel closure, and review state live in `evaluation/phase7_dataset.py`; active
+  corpus file identity lives in `app/infrastructure/corpus_artifacts.py`.
 - `app/evaluation_e2e.py`: offline scoring of a completed query execution: qrel-only ranks,
   citation outcomes, abstention confusion matrix, typed deterministic answer facts, strict-phrase
   and token-overlap diagnostics, bounded lexical inflection for text facts, span-aware negation,
@@ -262,3 +278,8 @@ canonical Python 3.11 run passes `308 tests` with the same one third-party warni
 R00 validation passes `323 tests` with the same warning on both the host Python 3.13.5 environment
 and the existing ingestion image's target Python 3.11.15. The Python 3.11 run is offline: source and
 pytest packages are mounted read-only, with network and plugin autoload disabled.
+
+Round 1's last code checkpoint passes `384 tests` on Python 3.11 with the same known third-party
+warning. The count changed as private tests for unsupported CLIs were replaced by consolidated
+archive and architecture guards; test count itself is not a contract. Current acceptance depends on
+behavior coverage, full-suite PASS, source pins, and unchanged frozen data/artifacts.

@@ -197,7 +197,7 @@ Hướng này đúng ở phía evaluator → application. Tuy nhiên `app.rerank
 | `app/ingestion.py`: `ingest_document`, `build_document_id`, `build_chunk_id`, `write_chunks_jsonl` | File → stable chunks/JSONL | filesystem; lazy Docling; atomic write | `tests/test_ingestion.py` | Tách pure identity/policies khỏi Docling và file adapter; giữ thuật toán nguyên vẹn |
 | `app/retrieval.py`: `index_chunks`, `dense_search`, manifests | Dense embedding, Qdrant schema/index/search và manifest | FastEmbed, Qdrant, filesystem; index mutation | `tests/test_retrieval.py` | `SPLIT` infrastructure client/index/search khỏi stable mapping/contract |
 | `app/hybrid_retrieval.py`: sparse/index/search, `fuse_rrf`, manifests | BM25 sparse + hybrid collection + pure RRF | FastEmbed/Qdrant/filesystem; import private helpers từ `retrieval.py` | `tests/test_hybrid_retrieval.py` | `SPLIT`; RRF là policy, Qdrant/FastEmbed là adapters; private cross-module imports cần bỏ |
-| `app/candidate_audit.py` | Candidate conversion/union và evaluation audit | import `app.evaluation` | `tests/test_candidate_audit.py` | `SPLIT/MOVE`: runtime candidate assembly ra domain/application; audit metrics ra evaluation |
+| Former module `app.candidate_audit` | Candidate conversion/union và evaluation audit | import `app.evaluation` | `tests/test_candidate_audit.py` | `SPLIT/MOVE`: runtime candidate assembly ra domain/application; audit metrics ra evaluation |
 | `app/phase7_optimization.py`, `app/query_expansion.py` | Frozen deterministic query-only ranking policies | pure Python + `RetrievalCandidate`; không I/O | Phase 7 optimization/expansion tests | `KEEP` behavior; `RENAME/MOVE` để bỏ tên phase lịch sử sau khi có golden tests |
 | `app/reranking.py`: `RerankPipeline`, `FastEmbedCrossEncoder`, `execute_rerank`, evaluator helpers | Candidate pool, dedup, Jina adapter, ranking policy và evaluation trong 725 dòng | lazy FastEmbed; imports Qdrant retrieval và evaluation | `tests/test_reranking.py` | `SPLIT` runtime policy/port/adapter/evaluator; đây là coupling ưu tiên cao |
 | `app/evidence_selection.py` | Exact cross-document selection và provenance | pure policy; query-role inference | `tests/test_evidence_selection.py` | `KEEP/MOVE` vào domain policy; không đổi semantics |
@@ -207,7 +207,7 @@ Hướng này đúng ở phía evaluator → application. Tuy nhiên `app.rerank
 | `app/retrieval_runtime.py`: contracts, profiles, adapters, validation, builders | Frozen contracts, profile resolution, lazy runtime, concrete composition, Qdrant validation | config + retrieval/hybrid/reranking adapters | `tests/test_retrieval_runtime.py` | `SPLIT`: immutable contracts/policy, application port, infra construction/validation |
 | `app/main.py`, `app/api/query.py`, `app/api/auth.py` | FastAPI app, routes, middleware, auth/error mapping, readiness | FastAPI; main tạo global settings/app và trực tiếp Qdrant composition | API/health tests | Query route khá mỏng; app factory/readiness còn concrete và khó composition-test |
 | `ui/*` | HTTP client, config, presentation/session state | Streamlit/httpx; network từ server-side UI | Streamlit client/app tests | Đúng HTTP boundary; `UISettings` là nguồn env riêng và UI phụ thuộc broad `app.models` |
-| `app/evaluation.py`, `app/evaluation_e2e.py`, `app/phase7.py`, `app/phase7_replay.py` | Dataset/qrels/metrics/scoring/replay | application public records; filesystem dataset reads | nhiều deterministic evaluator tests | `MOVE` ra top-level `evaluation/`; production không được import lại |
+| `app/evaluation.py`, `app/evaluation_e2e.py`, `app/phase7.py`, former `app.phase7_replay` | Dataset/qrels/metrics/scoring/replay | application public records; filesystem dataset reads | nhiều deterministic evaluator tests | `MOVE` ra top-level `evaluation/`; production không được import lại |
 | `scripts/ingest_preview.py`, index/search/query CLIs | Inbound operational/manual adapters | filesystem, Qdrant, model/provider tùy lệnh | partial CLI parser/error tests | Giữ CLI mỏng; search CLIs hiện import evaluation chỉ để validate frozen chunks |
 | Phase 7 calibration/readiness/migration scripts | Research/evaluation orchestration và sanitized artifacts | nhiều script import private functions từ script khác | nhiều script-level tests | Phân nhóm `evaluation`/`archive`; tránh biến `scripts` thành reusable library ngầm |
 | `app/config.py`, `.env.example`, Compose, `ui/config.py`, frozen constants | Runtime/environment/profile/UI configuration | env/.env; cached settings | settings cases nằm rải trong retrieval/generation/UI tests | Ownership phân mảnh; defaults `phase6`/Compose `phase7` dễ hiểu sai |
@@ -360,7 +360,7 @@ public docs/schema, dừng module và tách bug fix riêng.
 
 ### TD-01 — Production import evaluation
 
-`app/reranking.py` import metrics/schemas từ `app.evaluation`; `app/candidate_audit.py` import
+`app/reranking.py` import metrics/schemas từ `app.evaluation`; former `app.candidate_audit` import
 `EvaluationCase`; `app.retrieval_runtime.py` import `RerankPipeline`; query runtime vì thế kéo
 evaluation transitively. Đây là vi phạm trực tiếp mục tiêu production ✕→ evaluation.
 
@@ -402,7 +402,8 @@ rename phải có compatibility shim và removal slice.
 
 ### TD-07 — Documentation không còn một current source of truth
 
-- README liên kết `docs/project-deep-dive.md`, nhưng file không tồn tại.
+- README từng liên kết một deep-dive không tồn tại; R07 đã thay bằng
+  `docs/PROJECT_JOURNEY.md` thực tế.
 - `docs/CODEBASE.md` và `docs/walkthrough-phase-7-5.md` ghi post-rerank offset 20; source frozen
   `PHASE7_CALIBRATION_FUSION_PROFILE` là offset 40.
 - `docs/walkthrough-phase-7-corpus.md` còn ghi held-out chưa chạy/unseen, trong khi README và closure
@@ -442,7 +443,7 @@ reproducibility. Audit hiện chưa chứng minh an toàn cho file nào, nên kh
 | MOVE | Stable operational/evaluation CLI vào `scripts/operations`/`scripts/evaluation` | Làm rõ execution class | module invocation path break | CLI parser/exit contract tests + temporary shims nếu cần |
 | SPLIT | `app/models.py` | HTTP DTO, chunk và candidate khác ownership | public import break | schema/model serialization snapshots |
 | SPLIT | `app/retrieval.py`, `app/hybrid_retrieval.py` | Pure policy, SDK, search/index, manifests đang trộn | Qdrant payload/index drift | existing retrieval/hybrid suite + adapter contracts |
-| SPLIT | `app/reranking.py`, `app/candidate_audit.py` | Runtime/evaluation coupling trực tiếp | ranking/evaluation drift | rerank goldens + import guard |
+| SPLIT | `app/reranking.py`, former `app.candidate_audit` | Runtime/evaluation coupling trực tiếp | ranking/evaluation drift | rerank goldens + import guard |
 | SPLIT | `app/generation.py` | Port/DTO/formatter/provider adapter | prompt/provider kwargs drift | generation suite/hash characterization |
 | SPLIT | `app/retrieval_runtime.py` | Contract, port, adapter, validation, factory trộn nhau | profile/collection validation drift | frozen runtime and composition tests |
 | MERGE | Runtime candidate conversion/union từ `candidate_audit` với candidate assembly package | Một implementation dùng chung, không phụ thuộc evaluator | đổi rank/provenance | candidate audit + rerank pool goldens |

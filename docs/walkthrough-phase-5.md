@@ -1,5 +1,8 @@
 # Phase 5 walkthrough — multilingual cross-encoder reranking
 
+> **Historical / superseded:** this benchmark belongs to the retired Phase 6 corpus. Its metrics
+> remain historical evidence and are not claims about the active two-manual runtime.
+
 Phase 5 reranks three frozen Phase 4 candidate pools without changing chunks, qrels, embedding/BM25
 settings, RRF, Qdrant schemas, or either 99-point collection. Implementation and real benchmark are
 complete. Ranking quality passed, but measured CPU latency did not; the phase is therefore

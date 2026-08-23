@@ -4,12 +4,15 @@
 > portfolio hiện hành. `Settings` từ chối `phase6`; Phase 6 tools nằm trong
 > `scripts/archive/phase6/`. Hai legacy Qdrant collections, destructive-write guards và Git history
 > vẫn được bảo toàn. Các đoạn được ghi rõ là pre-R00 snapshot chỉ còn giá trị audit lịch sử.
+>
+> **Round 1 complete — 2026-08-24:** R01–R07 đã được triển khai và validate theo từng module.
+> Audit bên dưới được giữ làm bằng chứng “before”; code và tài liệu module là trạng thái “after”.
 
 ## Trạng thái
 
-Tài liệu này là cổng vào của audit và kế hoạch Vòng 1. Audit gốc ngày 2026-08-20 là read-only;
-R00 sau đó thực hiện baseline transition đã duyệt. R01–R07 vẫn là roadmap refactor giữ behavior của
-active Phase 7 runtime.
+Tài liệu này là cổng vào của audit, kiến trúc đích và completion record Vòng 1. Audit gốc ngày
+2026-08-20 là read-only; R00 sau đó thực hiện baseline transition đã duyệt; R01–R07 đã hoàn tất
+refactor giữ behavior của active Phase 7 runtime.
 
 ## Mục tiêu
 
@@ -96,16 +99,15 @@ Lượt này không xác nhận lại chúng vì không chạy benchmark hay tes
 
 ## Kết luận ngắn
 
-Pipeline có behavior và test coverage tốt hơn cấu trúc package hiện tại thể hiện. Vấn đề chính không
-phải thiếu thuật toán mà là ownership: production import evaluation qua reranking, module lớn trộn
-policy với SDK, composition nằm rải rác, config có nhiều nguồn trình bày, và scripts/docs mang nặng
-lịch sử Phase 5–7. Kế hoạch bảy module sẽ khóa baseline trước, tách boundaries theo vertical slices,
-sau đó mới archive/polish tài liệu. Không module nào được phép thay đổi thuật toán hoặc frozen data.
+Round 1 đã tạo modular ownership rõ hơn, composition root canonical, production/evaluation boundary,
+thin inbound adapters và script lifecycle có kiểm soát. Characterization tests giữ frozen runtime và
+public behavior trong khi code được di chuyển theo vertical slices. Historical workflows được archive
+thay vì xóa; README hiện tập trung vào active two-manual runtime. Không có thuật toán hoặc frozen data
+nào được thay đổi để đạt kết quả này.
 
-## Quyết định cần người dùng duyệt
+## Trạng thái sau closure
 
-- duyệt target package tree và nguyên tắc giữ `app` làm top-level package trong Vòng 1;
-- duyệt bảy module và thứ tự R01 → R07;
-- duyệt cách phân loại script lịch sử là `ARCHIVE`, không `DROP`;
-- giữ Phase 6 collections/archive evidence nhưng chỉ Phase 7 là runtime contract;
-- bắt đầu R01 chỉ sau khi người dùng review R00 và gửi yêu cầu riêng.
+- R00–R07: `COMPLETE`.
+- Phase 7 là active runtime; Phase 6 chỉ là historical archive.
+- Eight top-level scripts là supported command surface; completed one-offs nằm trong archive.
+- Round 2 chưa được bắt đầu và cần scope/approval riêng.

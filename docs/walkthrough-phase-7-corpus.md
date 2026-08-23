@@ -1,10 +1,15 @@
 # Phase 7 corpus walkthrough — ATV320 source audit and freeze
 
-Status: **corpus and dataset v2 frozen; calibration v2 ready; held-out benchmark not run.**
+> **Historical / superseded:** this records the corpus-freeze checkpoint. The later explicitly
+> approved held-out-v2 one-shot run is complete, and repository exposure means it is regression-only
+> evidence rather than an unseen benchmark.
+
+Status at this checkpoint: **corpus and dataset v2 frozen; calibration v2 ready.**
 
 **Current checkpoint:** the corpus is frozen. Dataset-v1 calibration exposed an answer-scoring
 contract problem; dataset v2 has now been source-reviewed, approved and hash-locked before another
-calibration. Held-out outputs remain unseen.
+calibration. The held-out state described at this checkpoint was superseded later; current governance
+is summarized in the repository README.
 
 Phase 7 replaces neither frozen development collection. It uses two separate Schneider Electric
 ATV320 manuals and separate collections:

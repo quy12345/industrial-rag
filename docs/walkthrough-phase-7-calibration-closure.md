@@ -1,5 +1,9 @@
 # Phase 7 calibration closure walkthrough
 
+> **Historical checkpoint:** this document preserves measured calibration and governance evidence.
+> Completed construction/readiness commands are archived; held-out v2 is exposed regression-only
+> evidence and must not be used for tuning.
+
 ## Outcome
 
 The 2026-08-11 closure began as `PARTIAL`. It improves evaluator correctness, seals calibration from
@@ -22,7 +26,7 @@ held-out run, re-index, image build, or prune was performed.
 
 ## Replacement held-out v2
 
-The historic split remains blocked forever as an unseen benchmark. A separate
+The historic split remains permanently disqualified from use as an unseen benchmark. A separate
 45-row replacement draft (30 answerable, 15 unanswerable) now lives under the
 Git-ignored local directory `data/eval/phase7/private-heldout-v2/`. Its qrels
 and expected phrases validated against the frozen 2,753-chunk corpus. It was subsequently frozen and
@@ -201,15 +205,16 @@ checks; it was not treated as canonical, deleted, or recreated.
 Buildx history showed the latest ingestion build as `Completed`; no active build job remained. The
 resident `com.docker.build` process is Docker Desktop's background service, not an active build.
 
-## What must happen next
+## Actions recorded at this historical checkpoint
 
-1. Review and commit the closure implementation; Codex does not commit automatically.
+1. Review and commit the closure implementation; this was subsequently completed.
 2. Treat 005 as closed for the current evaluator/provider path: 3/3 fixed-evidence attempts passed;
    do not reinterpret the unavailable historical v4 output.
 3. Technical calibration is closed: all provider-free and three-run stability gates pass. Do not
    rerun it merely to seek a better metric.
-4. Resolve governance with a new access-controlled final set or explicitly stop calling the existing
-   held-out set unseen. Until then, held-out execution remains blocked regardless of technical pass.
+4. Resolve governance with a new access-controlled final set or explicitly downgrade the existing
+   set. The later approved held-out-v2 one-shot run completed this historical workflow; repository
+   exposure now makes v2 regression-only evidence and prevents further tuning on it.
 
 After approval, use distinct checkpoints and outputs; never reuse a completed checkpoint as another
 independent run:

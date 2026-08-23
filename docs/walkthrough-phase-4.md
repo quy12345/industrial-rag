@@ -1,5 +1,8 @@
 # Phase 4 walkthrough — Dense + BM25 sparse + client-side RRF
 
+> **Historical / superseded:** this guide documents the retired Phase 6 single-manual contract.
+> Use it as engineering provenance, not as a current runbook.
+
 Phase 4 adds a second, independent retrieval collection. It never migrates, recreates, or deletes
 the Phase 3A.2 dense collection `industrial_manual_chunks`.
 

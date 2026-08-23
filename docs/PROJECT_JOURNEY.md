@@ -22,7 +22,8 @@ supports it, avoid inventing unsupported sources, and be reproducible when a doc
 | 4.1 | `9718926` | Audited candidate pools instead of assuming hybrid was best. |
 | 5 | `07c074b` | Compared three Jina reranking pools with strict model-output validation. |
 | 6 | `e3b3704` | Added query API, evidence gate, structured generation, citation validation, abstention, and Gemini/OpenAI routing. |
-| 7 | `8267c4b` + working tree | Adds a real industrial corpus, calibration closure, sealed held-out evaluation, and portfolio-grade hardening. |
+| 7 | `8267c4b` and later commits | Added a real industrial corpus, calibration closure, exposed regression evaluation, and runtime hardening. |
+| Round 1 | R00–R07 module history | Preserved behavior while establishing modular ownership, thin adapters, evaluation isolation, and an explicit script lifecycle. |
 
 ## Phase 7 checkpoint
 
@@ -34,8 +35,9 @@ The first 20-row calibration exposed two evaluation lessons before the 45-row he
 English evidence phrases cannot score Vietnamese generated answers, and one logical evidence block
 can have multiple exact duplicate chunk IDs. Dataset v2 therefore separates reviewed answer facts
 from qrel-validation phrases and expands only exact-content equivalents. All 42 answerable rows were
-then source-reviewed, all 65 records approved, and the final v2 hashes frozen. The held-out outputs
-remain unseen.
+then source-reviewed, all 65 records approved, and the final v2 hashes frozen. A later explicitly
+approved one-shot held-out-v2 run produced a sanitized historical result. Repository exposure means
+that split is now regression evidence, not an unseen benchmark and never a tuning input.
 
 Dataset-v2 calibration improved direct retrieval over v1 but exposed two separate problems. Strict
 contiguous phrase scoring marked calibration 002/008 wrong despite complete answer-fact token
@@ -49,8 +51,22 @@ expanded sparse@40, augments only query terms through a fixed bilingual technica
 weighted rank-only RRF `k=40`, dense@5/sparse@24 coverage reserves, and a soft query-role prior within
 the same 30-candidate budget. Canonical Python 3.11 calibration reaches candidate recall 12/12,
 Hit@5 11/12, MRR@5 0.875 and zero wrong-document top-1 results. It remains `PARTIAL`: calibration 010
-is rank 6 and wrong-document candidates still occupy 0.267 of final top-5 slots. The fresh provider
-E2E run requires explicit data-egress approval; held-out remains sealed.
+is rank 6 and wrong-document candidates still occupy 0.267 of final top-5 slots. Any fresh provider
+E2E run requires explicit data-egress approval. The completed held-out-v2 workflow is archived and
+is not a supported rerunnable command.
+
+## Round 1 portfolio cleanup
+
+R00 retired `manual.pdf` and the Phase 6 corpus from the active product surface without deleting its
+collections or historical tools. R01–R07 then added characterization coverage, consolidated runtime
+configuration/composition, clarified ingestion/indexing and retrieval/reranking boundaries, isolated
+grounded query orchestration, thinned FastAPI/CLI/Streamlit adapters, and moved offline evaluation to
+its canonical package.
+
+Completed research and calibration workflows were archived rather than deleted. Eight supported
+top-level commands remain, mostly as thin compatibility shims. Two source-hashed E2E files stay in
+place as explicit provenance exceptions. The cleanup did not tune algorithms, modify frozen data,
+re-index Qdrant, call a provider, or claim new benchmark results.
 
 ## What changed in the architecture
 
@@ -93,7 +109,7 @@ schema/evidence/citation contract.
 - Dependency split matters operationally: the API image has retrieval+LLM dependencies but no Docling;
   ingestion is on-demand and heavy.
 - A citation ID can be valid yet not semantically support every claim. Phase 6 guarantees the first;
-  Phase 7 evaluates the second on a held-out set.
+  Phase 7 measured the second, while the exposed split remains regression-only evidence.
 
 ## Known limits and next decision points
 
@@ -101,4 +117,5 @@ The 30-query Vietnamese research-paper corpus is development/regression evidence
 is CC-BY-NC-4.0 and slow on CPU, so it is suitable for the current non-commercial demo but unresolved
 for commercial deployment. OCR, multi-page-table continuity, calibrated abstention, semantic citation
 coverage, authentication/rate limiting, provider privacy approval, and a representative industrial
-corpus remain open work. Phase 7 must report a separate ATV320 held-out result without tuning on it.
+corpus remain open work. Any future benchmark must use a newly governed dataset and must stay outside
+the Round 1 structural-refactoring history.

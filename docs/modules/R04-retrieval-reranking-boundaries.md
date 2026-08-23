@@ -182,7 +182,7 @@ subclass retaining the same concrete defaults, argument names, and call behavior
 - [`app/application/reranking_service.py`](../../app/application/reranking_service.py) owns candidate
   preparation, stage timing, deterministic rerank validation/order, and runtime pipeline coordination
   through injected domain ports rather than Qdrant imports.
-- [`app/candidate_audit.py`](../../app/candidate_audit.py) owns qrel/evaluation audit behavior and
+- [`evaluation/candidate_audit.py`](../../evaluation/candidate_audit.py) now owns qrel/evaluation audit behavior after R07; during R04 the behavior remained under the former app facade and
   temporarily re-exports the two moved functions for compatibility.
 - [`app/hybrid_retrieval.py`](../../app/hybrid_retrieval.py) retains sparse/hybrid Qdrant coordination
   for legacy `hybrid_search` and exposes canonical dense/sparse search and RRF compatibility aliases.

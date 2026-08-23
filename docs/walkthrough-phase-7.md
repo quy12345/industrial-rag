@@ -1,5 +1,8 @@
 # Phase 7 walkthrough: isolated corpus, E2E evaluation, and hardening
 
+> **Historical overview:** this preserves the Phase 7 implementation sequence and measurements.
+> Current runtime and supported commands are documented in the repository README.
+
 ## What Phase 7 changes
 
 Phase 7 is intentionally separate from the earlier 99-chunk development corpus.
@@ -124,8 +127,10 @@ The initial v2 artifact remains
 
 ## Dataset-v2 calibration diagnostics
 
-The diagnostics run completed all 20 calibration rows. It still fails the strict
-answer-fact gate, so held-out remains sealed.
+At this historical checkpoint, the diagnostics run completed all 20 calibration rows and still
+failed the strict answer-fact gate, so the then-current held-out workflow remained sealed. That
+governance state was superseded by the later approved held-out-v2 one-shot run described in the
+calibration-closure walkthrough.
 
 | Calibration-v2 metric | Result | Interpretation |
 |---|---:|---|

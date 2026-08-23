@@ -1,5 +1,9 @@
 # Industrial Technical Manual RAG — Project Plan
 
+> **Historical / superseded plan:** this document preserves the Phase 1–7 implementation record and
+> its original acceptance language. Current runtime instructions live in the repository README;
+> Round 1 cleanup status lives in `docs/portfolio-cleanup/`.
+
 > Phase 6 implementation and correctness snapshot — 2026-08-06
 >
 > Phase 1 through Phase 6 are implemented. The frozen retrieval-development set has 30 manually
@@ -220,7 +224,8 @@ Tạo dense vector cho từng chunk, index vào Qdrant và cung cấp ranked den
 - Named vector `dense`, cosine distance.
 - Deterministic UUIDv5 point ID từ `chunk_id` và fixed namespace.
 - Citation-ready payload.
-- CLI `scripts/index_document.py` và `scripts/search_dense.py`.
+- Historical CLI `scripts/archive/phase6/index_document.py` và
+  `scripts/archive/phase6/search_dense.py`.
 - Optional server-side `document_id` filter.
 - Empty question và invalid limit bị từ chối.
 - In-memory Qdrant tests với fake deterministic embedding model.
@@ -397,7 +402,7 @@ Luồng dự kiến:
 ```powershell
 docker compose up -d qdrant api
 docker compose --profile tools run --rm ingestion `
-  python scripts/index_document.py data/raw/manual.pdf --page-batch-size 4
+  python -m scripts.archive.phase6.index_document data/raw/manual.pdf --page-batch-size 4
 ```
 
 ### Acceptance gate
@@ -549,8 +554,10 @@ outside top 5 for `dense_005`, `dense_019`, `dense_021`, and `dense_029`, while 
 evidence absent from sparse for `dense_008` and `dense_020`. Cross-lingual union coverage is 0.933
 versus 1.000 monolingual; missing `dense_014` is cross-lingual and `dense_017` is monolingual.
 
-`scripts/audit_candidate_pools.py` writes `artifacts/metrics/candidate-pool-audit.json` and
-`scripts/generate_phase5_readiness.py` writes `artifacts/metrics/phase-5-readiness.json`. Both are
+`scripts/archive/phase6/audit_candidate_pools.py` writes
+`artifacts/metrics/candidate-pool-audit.json` and
+`scripts/archive/phase6/generate_phase5_readiness.py` writes
+`artifacts/metrics/phase-5-readiness.json`. Both are
 ignored runtime artifacts. The readiness status remains `ready_with_documented_deviation`: aggregate
 Phase 4 gates pass, but the bilingual critical top-5 gate remains 1/3 and Phase 5 must prove any
 reranker improvement on the unchanged development set.

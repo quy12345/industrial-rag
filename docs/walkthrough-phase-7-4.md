@@ -1,5 +1,8 @@
 # Phase 7.4 walkthrough — calibration retrieval closure
 
+> **Historical / superseded:** Phase 7.4.1–7.5 and the later calibration closure supersede this
+> intermediate decision. Metrics below are retained without reinterpretation.
+
 ## Outcome
 
 This document records the Phase 7.4 intermediate checkpoint. Phase 7.4.1--7.5 subsequently closes

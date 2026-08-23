@@ -1,5 +1,8 @@
 # Phase 6 walkthrough — Query API, grounded generation, citations and abstention
 
+> **Historical / superseded:** this records the original single-manual application handoff. The
+> active product uses the Phase 7 two-manual contract and the refactored modular boundaries.
+
 ## Outcome and status
 
 Phase 6 was implemented on branch `feat/phase-6-query-api` from Phase 5 commit `07c074b`. The

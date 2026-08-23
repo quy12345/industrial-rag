@@ -3,6 +3,21 @@
 > **R00 prerequisite completed — 2026-08-22:** roadmap R01–R07 áp dụng cho active Phase 7-only
 > baseline. Phase 6 collections được bảo toàn nhưng tools đã archive và profile bị production
 > configuration từ chối. Không module nào được khôi phục compatibility branch này.
+>
+> **Implementation complete — 2026-08-24:** cả bảy module đã hoàn tất. Các module plan bên dưới
+> được giữ để giải thích sequencing; completion được chứng minh trong `docs/modules/`.
+
+## 0. Completion record
+
+| Module | Outcome | Status |
+| --- | --- | --- |
+| R01 | Baseline and characterization coverage | `COMPLETE` |
+| R02 | Canonical configuration and composition root | `COMPLETE` |
+| R03 | Ingestion and indexing boundaries | `COMPLETE` |
+| R04 | Retrieval and reranking boundaries | `COMPLETE` |
+| R05 | Grounded generation, citations, and query application | `COMPLETE` |
+| R06 | Thin FastAPI, CLI, and Streamlit adapters | `COMPLETE` |
+| R07 | Evaluation isolation, script archive, and documentation closure | `COMPLETE` |
 
 ## 1. Nguyên tắc thực thi
 
@@ -11,7 +26,7 @@ một vertical slice của module đó, rồi dừng ở `WAITING_FOR_USER_REVIE
 
 Một **vertical slice** là thay đổi end-to-end nhỏ, có test và compatibility boundary riêng. Nó giúp
 module lớn không vượt khoảng tám file có nội dung đáng kể trong một lượt, nhưng mọi slice của cùng
-module cập nhật chung một file `docs/modules/Rxx-*.md`.
+module cập nhật chung một tài liệu trong `docs/modules/`.
 
 Quy tắc áp dụng cho mọi module:
 
@@ -127,8 +142,8 @@ inbound adapters sau khi application interface ổn định. R07 chuyển evalua
    `scripts/ingest_preview.py`, `scripts/index_phase7_corpus.py`; legacy indexing CLIs hiện ở
    `scripts/archive/phase6/` và không thuộc supported target.
 5. **Đích:** `app/domain/documents.py`; `app/infrastructure/ingestion/docling.py`;
-   `app/infrastructure/qdrant/{client,dense,hybrid,manifests}.py`; optional thin
-   `app/application/ingestion_service.py`/`indexing_service.py`; old modules là facade tạm.
+   `app/infrastructure/qdrant/client.py`, `dense.py`, `hybrid.py`, `manifests.py`; thin
+   `app/application/indexing_service.py`; old modules là facade tạm.
 6. **Thứ tự/slices:** R03A identity/chunk records + Docling adapter; R03B dense embedding/Qdrant
    indexing/manifests; R03C sparse/hybrid indexing/manifests và bỏ private cross-module imports;
    R03D chuyển supported ingestion/index CLI composition nếu cần. Không chạy index.
@@ -161,10 +176,12 @@ inbound adapters sau khi application interface ổn định. R07 chuyển evalua
 3. **Vấn đề hiện tại:** `app/reranking.py` 725 dòng chứa runtime lẫn evaluator; `candidate_audit`
    chứa helpers runtime lẫn qrel audit; `retrieval_runtime` biết concrete adapters; phase-named policy
    khó giải thích; production query transitively import `app.evaluation`.
-4. **Files/symbols hiện tại:** `app/candidate_audit.py`, `app/reranking.py:RerankPipeline/execute_rerank`,
+4. **Files/symbols tại thời điểm audit:** candidate audit (nay ở
+   `evaluation/candidate_audit.py`), `app/reranking.py:RerankPipeline/execute_rerank`,
    `app/retrieval_runtime.py`, `app/phase7_optimization.py`, `app/query_expansion.py`, dense/sparse
    search functions và evaluator functions cuối reranking module.
-5. **Đích:** `app/domain/retrieval.py`, `app/domain/policies/{fusion,query_analysis}.py`, domain ports;
+5. **Đích:** `app/domain/retrieval.py`, `app/domain/policies/fusion.py`,
+   `app/domain/policies/query_analysis.py`, domain ports;
    `app/infrastructure/qdrant` search adapters; `app/infrastructure/models/reranker.py`; application
    retrieval adapter/orchestrator; evaluator helpers tạm sang `evaluation/` hoặc compatibility module.
 6. **Thứ tự/slices:** R04A tách candidate conversion/union khỏi audit; R04B move pure RRF/query/role
@@ -275,7 +292,8 @@ inbound adapters sau khi application interface ổn định. R07 chuyển evalua
    helpers; historical one-offs lẫn operational commands; README có broken/stale links và
    walkthroughs mâu thuẫn active profile/held-out status.
 4. **Files/symbols hiện tại:** `app/evaluation.py`, `app/evaluation_e2e.py`, evaluator part
-   `app/phase7.py`, `app/phase7_replay.py`, Phase 7 evaluation/calibration/readiness/migration scripts,
+   `app/phase7.py`, replay (nay ở `evaluation/replay.py`), Phase 7
+   evaluation/calibration/readiness/migration scripts,
    README, `docs/CODEBASE.md`, `docs/PROJECT_JOURNEY.md`, `docs/plan.md`, walkthroughs và user-modified
    `AGENTS.md`.
 5. **Đích:** top-level `evaluation/*`; `scripts/evaluation/*`; `scripts/archive/phase7/*` kèm archive
@@ -417,12 +435,11 @@ Danh sách này là backlog, không phải implementation của Vòng 1:
 Nếu một mục trên được phát hiện trong audit/refactor, chỉ ghi limitation/backlog và tiếp tục module nếu
 không ảnh hưởng behavior. Nếu nó là điều kiện bắt buộc để hoàn tất module, dừng và xin mở scope.
 
-## 9. Quyết định cần duyệt trước implementation
+## 9. Decisions recorded by implementation
 
-1. Giữ top-level `app` và áp dụng package tree trong target architecture.
-2. Chấp nhận thứ tự bảy module R01 → R07 và cách chia slices.
-3. Giữ Phase 7 là active local/Compose contract; bảo toàn Phase 6 collections/archive evidence.
-4. Dùng compatibility facade có removal target thay cho move hàng loạt.
-5. Archive, không drop, nhóm Phase 7 one-off scripts sau reference audit ở R07.
-6. `AGENTS.md` đã được R00 cập nhật cho incremental refactoring và Phase 7-only baseline.
-7. Bắt đầu bằng R01 chỉ khi người dùng gửi yêu cầu implementation riêng.
+1. Top-level `app` remains the modular-monolith package.
+2. R01–R07 were implemented in dependency order through reviewable vertical slices.
+3. Phase 7 remains the active local/Compose contract; Phase 6 collections/evidence are preserved.
+4. Compatibility facades remain only where public/source identity justifies them.
+5. Completed Phase 7 one-offs are archived, not dropped.
+6. Round 1 closes without algorithm tuning, re-indexing, provider calls, or benchmark changes.

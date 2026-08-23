@@ -1,5 +1,8 @@
 # Phase 4.1 walkthrough — closure and Phase 5 readiness
 
+> **Historical / superseded:** this guide documents the retired Phase 6 single-manual contract.
+> Use it as engineering provenance, not as a current runbook.
+
 Phase 4.1 freezes the Phase 4 handoff. It does not add a reranker, change qrels, re-chunk the manual,
 change embedding models, create a Qdrant v3 schema, or recreate either existing collection.
 

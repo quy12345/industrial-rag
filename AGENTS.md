@@ -6,7 +6,7 @@
 This repository is an existing, verified Industrial Technical Manual RAG
 prototype. It already runs end-to-end and has tests and benchmark artifacts.
 
-The current goal is incremental, behavior-preserving refactoring for:
+Round 1 incremental, behavior-preserving refactoring is complete. Its outcomes are:
 
 - clearer module responsibilities;
 - cleaner dependency boundaries;
@@ -22,8 +22,9 @@ evaluation data during a behavior-preserving refactor.
 The user approved `R00 — Phase 7-only baseline` on 2026-08-21. R00 retired
 `data/raw/manual.pdf` and the Phase 6 corpus from the active product surface.
 The repository implementation completed this narrowly scoped transition on
-2026-08-22; R01 must still wait for explicit user review. R00 does not authorize retrieval tuning, Phase 7 data
-changes, re-indexing or deletion of legacy Qdrant collections.
+2026-08-22. R01–R07 subsequently completed Round 1 on 2026-08-24. This completion does not authorize
+retrieval tuning, Phase 7 data changes, re-indexing, deletion of legacy Qdrant collections, or an
+automatic start of Round 2.
 
 ## 2. Working language
 
@@ -42,19 +43,20 @@ changes, re-indexing or deletion of legacy Qdrant collections.
   python -m pytest -q
   ```
 
-* `app/` currently contains ingestion, indexing, retrieval, hybrid/RRF,
-  generation and evaluation code.
-* `scripts/` contains explicit operational and integration CLIs.
+* `app/` contains the production modular monolith: API/application/domain/infrastructure layers plus
+  documented compatibility/source-identity anchors.
+* `evaluation/` owns offline evaluation schemas, replay and metrics.
+* `scripts/` contains thin supported adapters and explicit historical archives; read
+  `scripts/README.md` before using integration commands.
 * `tests/` must remain offline and use fake models or in-memory Qdrant.
 
-The current directory structure describes the baseline, not necessarily the
-final architecture. Files may only be moved according to an approved
-refactoring module.
+The current directory structure is the completed Round 1 architecture. Further structural moves
+require a separately approved module or Round 2 plan.
 
-The pre-R00 Round 1 audit and proposed architecture are indexed in
+The pre-R00 Round 1 audit, target architecture and completion record are indexed in
 `docs/portfolio-cleanup/00-index.md`. The implementation sequence is proposed
-in `docs/portfolio-cleanup/03-round-1-roadmap.md`. Their R00 delta sections are
-the current baseline; pre-R00 observations remain as historical audit evidence.
+and recorded in `docs/portfolio-cleanup/03-round-1-roadmap.md`. Pre-R00 observations remain as
+historical audit evidence rather than descriptions of current ownership.
 
 ## 4. Frozen baseline
 
@@ -130,10 +132,10 @@ valid artifact was produced.
 
 ## 5. Round 1 scope
 
-Round 1 is portfolio cleanup.
+Round 1 portfolio cleanup is complete.
 
-R00 is a completed prerequisite transition and is not part of the
-behavior-preserving R01–R07 sequence. Start R01 only after explicit user review.
+R00 is the completed prerequisite transition and R01–R07 are the completed behavior-preserving
+sequence. Do not reopen a completed module or begin Round 2 without explicit user approval.
 
 Allowed work:
 
