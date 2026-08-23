@@ -15,18 +15,20 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.evaluation import load_frozen_chunks
-from app.phase7 import (
+from app.infrastructure.corpus_artifacts import (
+    file_sha256,
+    write_json_atomic,
+    write_jsonl_atomic,
+)
+from evaluation.phase7_dataset import (
     Phase7DatasetItem,
     Phase7Error,
     build_exact_content_equivalence,
     dataset_sha256,
     expand_exact_equivalent_qrels,
-    file_sha256,
     validate_phase7_datasets,
-    write_json_atomic,
-    write_jsonl_atomic,
 )
+from evaluation.retrieval import load_frozen_chunks
 
 MIGRATION_NOTE = (
     "Phase 7 dataset v2 draft: exact-normalized duplicate qrel closure applied; "

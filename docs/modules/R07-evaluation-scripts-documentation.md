@@ -28,6 +28,10 @@ keeps `python -m scripts.validate_phase7_dataset` as a thin compatibility entry 
 R07B2 classifies the redistribution-safe local PDF metadata audit under `scripts.operations`. It
 remains a supported reproducibility command because the current corpus walkthrough references it and
 its output documents source identity/parsing preconditions without storing substantial manual text.
+
+R07C1 starts evidence-based archival with the completed dataset-v2 migration. The source remains
+available under `scripts.archive.phase7`, but its old top-level command is intentionally unsupported
+because rerunning it would mutate frozen dataset files.
 Remaining CLI classification, archive work, shim removal, and documentation closure remain later R07
 slices.
 
@@ -174,6 +178,8 @@ Shared frozen-corpus flow:
 | [`scripts/validate_phase7_dataset.py`](../../scripts/validate_phase7_dataset.py) | Thin compatibility entry point preserving the documented command. |
 | [`scripts/operations/audit_phase7_corpus.py`](../../scripts/operations/audit_phase7_corpus.py) | Canonical local corpus metadata/text-layer audit adapter. |
 | [`scripts/audit_phase7_corpus.py`](../../scripts/audit_phase7_corpus.py) | Thin compatibility entry point preserving the walkthrough command. |
+| [`scripts/archive/phase7/migrate_phase7_dataset_v2.py`](../../scripts/archive/phase7/migrate_phase7_dataset_v2.py) | Unsupported historical dataset-v2 migration retained for provenance. |
+| [`scripts/archive/phase7/README.md`](../../scripts/archive/phase7/README.md) | Archive policy, completion evidence, and no-rerun warning. |
 | [`pyproject.toml`](../../pyproject.toml) | Includes `evaluation*` in package discovery and Ruff first-party imports. |
 | [`Dockerfile`](../../Dockerfile) | Copies the canonical package into the shared retrieval runtime image. |
 | [`tests/test_evaluate.py`](../../tests/test_evaluate.py) | Exercises the canonical module and verifies facade identity. |
@@ -295,6 +301,12 @@ preconditions and emits metadata, but computes no retrieval or answer quality me
 rather than archived because the active Phase 7 corpus runbook still uses it. Tests substitute a fake
 PDF adapter and tiny placeholder files; no vendor manual content is opened or copied.
 
+The dataset-v2 migration is archived without a compatibility shim. Its report exists locally and the
+current walkthrough records dataset v2 as source-reviewed, approved, and frozen. No current code or
+test imports the script, and no identity builder hashes it. Keeping the former command executable would
+suggest that mutating frozen calibration/test files is supported; retaining the source under an
+explicit archive preserves provenance without that ambiguity.
+
 ## 10. Tests and protected behavior
 
 [`tests/test_evaluate.py`](../../tests/test_evaluate.py) protects:
@@ -337,6 +349,10 @@ facade imports in the canonical CLI and implementation code in the old shim.
 
 Corpus-audit CLI tests protect the two frozen source descriptors, parser defaults, streamed hashes,
 page/text-layer metadata, document cleanup, sanitized output, missing-file errors, and shim identity.
+
+The archive boundary test proves the old migration path is absent, the historical source exists under
+`scripts.archive.phase7`, and the archived module uses canonical corpus/evaluation owners rather than
+keeping compatibility facades alive.
 
 ## 11. Commands and expected results
 
@@ -393,6 +409,13 @@ python -m scripts.audit_phase7_corpus --help
 exit 0; existing `--raw-dir` and `--output` options preserved
 ```
 
+R07C1 pre-archive characterization:
+
+```text
+python -m scripts.migrate_phase7_dataset_v2 --help
+exit 0; historical four-option contract recorded before removal
+```
+
 ## 12. Small usage example
 
 ```python
@@ -430,6 +453,7 @@ The caller owns paths and retrieval execution. Importing the module performs no 
 - Most evaluator, calibration, readiness, freeze, and migration CLIs are not classified yet.
 - The corpus audit remains optional and requires the ingestion image's existing PDF dependency when
   run against local manuals; unit validation uses a fake and downloads nothing.
+- `scripts.archive.phase7` is unsupported: archived tools are provenance, not current commands.
 - Evaluation and production packages are still present in the same installed image.
 - Frozen chunks and manifests remain explicit operational/reproducibility artifacts; R07A4 does not
   make the API read them per request and does not authorize deleting them.
@@ -580,7 +604,34 @@ Proposed R07B2 commit after user review:
 refactor: classify phase7 corpus audit command
 ```
 
+R07B2 was committed as `09a3352 refactor: classify phase7 corpus audit command`.
+
+R07C1 validation:
+
+| Check | Result |
+| --- | --- |
+| Legacy pre-archive `--help` | PASS — exit `0`; four options recorded |
+| Focused Ruff | PASS — `All checks passed!` |
+| Focused architecture pytest | PASS — `28 passed` |
+| Archived command `--help` | PASS — exit `0`; four-option contract preserved |
+| Removed top-level command | PASS — `scripts.migrate_phase7_dataset_v2` is unavailable as intended |
+| Full Ruff | PASS — `All checks passed!` |
+| Full offline pytest | PASS — `417 passed, 1 warning` |
+| Local Markdown links | PASS — all links in the changed documentation resolve |
+| Pinned evaluator source | PASS — blob `b8be722d43bc34c8bec00dfc2574d0a6341ab738` unchanged |
+| Artifact/raw-data scope | PASS — no changes under `artifacts/` or `data/raw/` |
+| `git diff --check` | PASS |
+
+The warning remains the existing Starlette `TestClient`/`httpx` deprecation warning. R07C1 does not
+change dependencies.
+
+Proposed R07C1 commit after user review:
+
+```text
+chore: archive completed phase7 dataset migration
+```
+
 ## 18. Status
 
-`IN_PROGRESS` — R07A1–R07B1 are complete and committed through `b9458bc`. R07B2 is implemented and
-validated; user review remains. Later R07 slices remain outside this slice.
+`IN_PROGRESS` — R07A1–R07B2 are complete and committed through `09a3352`. R07C1 is implemented,
+validated, and awaiting user review. Later R07 slices remain outside this slice.

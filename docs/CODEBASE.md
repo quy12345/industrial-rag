@@ -135,8 +135,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
   typed-fact review boundary and provider-approval boundary.
 - `scripts/rescore_phase7_calibration_facts.py`: derives deterministic text-fact decisions from the
   prior sanitized v2 diagnostics when raw provider answers are unavailable.
-- `scripts/migrate_phase7_dataset_v2.py`: offline migration that revokes approval, adds answer facts,
-  and expands qrels only across same-document exact-content duplicates.
+- `scripts/archive/phase7/migrate_phase7_dataset_v2.py`: unsupported completed migration that revoked
+  approval, added answer facts, and expanded qrels only across same-document exact-content duplicates.
 - `scripts/apply_phase7_answer_facts.py`: explicit source-review mapping for 42 answerable rows plus
   the documented calibration 011/012 qrel correction; it reads no retrieval/provider output.
 
