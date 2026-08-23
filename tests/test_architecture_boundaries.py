@@ -369,6 +369,17 @@ def test_retrieval_evaluation_is_owned_outside_production_package() -> None:
     assert "app.evaluation" not in graph["evaluation.retrieval"]
 
 
+def test_sanitized_replay_is_owned_outside_production_package() -> None:
+    graph = _import_graph()
+
+    assert "evaluation.replay" in graph["app.phase7_replay"]
+    assert "app.domain.retrieval" in graph["evaluation.replay"]
+    assert "app.domain.policies.ranking" in graph["evaluation.replay"]
+    assert "app.models" not in graph["evaluation.replay"]
+    assert "app.phase7_optimization" not in graph["evaluation.replay"]
+    assert "app.phase7_replay" not in graph["evaluation.replay"]
+
+
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:
     graph = _import_graph()
 
