@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.evaluation import load_frozen_chunks
+from app.infrastructure.corpus_artifacts import load_frozen_chunks
 
 INSTALLATION = "atv320-installation-manual-en-nve41289-09-c181b4d7f11b"
 PROGRAMMING = "atv320-programming-manual-en-nve41295-06-f5e9bb48167a"
