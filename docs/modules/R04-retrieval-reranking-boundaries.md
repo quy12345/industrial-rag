@@ -5,14 +5,16 @@
 R04 separates framework-neutral retrieval policies from evaluation helpers, Qdrant search, and model
 adapters without changing ranking behavior. This document is shared by all R04 slices.
 
-R04A, all R04B slices, and all R04C slices are implemented. R04A moves dense-result conversion and dense/sparse
+R04A, R04B, R04C, R04D1, and R04D2 are implemented. R04A moves dense-result conversion and dense/sparse
 candidate union into the domain, retains `app.candidate_audit` as a compatibility facade for these public
 imports, and removes the production reranking path's dependency on that evaluation-oriented module.
 R04B1 moves unweighted reciprocal-rank fusion (RRF) out of the Qdrant-facing hybrid facade. R04B2a
 moves deterministic Vietnamese technical query expansion into domain policy. R04B2b moves query-role,
 list-completeness, weighted-RRF, reserve, and post-rerank policies into the same domain policy layer.
 R04C1 moves dense Qdrant search into its infrastructure owner. R04C2 does the same for sparse search,
-payload mapping, and component rank assignment. R04D–R04E remain pending.
+payload mapping, and component rank assignment. R04D1 separates the cross-encoder port from the lazy
+FastEmbed adapter. R04D2 moves runtime pipeline orchestration into an application service and removes
+the active runtime graph's final dependency on evaluation. R04E remains pending.
 
 ## 2. Position in the system
 
@@ -24,7 +26,7 @@ sparse RetrievalCandidate list ┘                                  │
                                                    app.domain.policies.fusion
                                                                   │
                                                                   ↓
-                                                       app.reranking (transitional)
+                                            app.application.reranking_service
                                                                   │
                                                                   ↓
                                                       ranked/evidence candidates
@@ -38,9 +40,11 @@ query + ranked candidates ──> app.domain.policies.ranking ──> bounded ra
 question + dense model ──> app.infrastructure.qdrant.dense ──> Qdrant ──> RetrievedChunk
 
 question + sparse model ──> app.infrastructure.qdrant.hybrid ──> Qdrant ──> ranked candidates
+
+candidate documents ──> app.domain.reranking port ──> infrastructure.models.reranker ──> scores
 ```
 
-R04A–R04C change ownership and dependency direction only. Validation does not query live Qdrant,
+R04A–R04D2 change ownership and dependency direction only. Validation does not query live Qdrant,
 initialize a model, call a provider, execute a benchmark, or modify the frozen Phase 7 profile.
 
 ## 3. Relevant background concepts
@@ -96,6 +100,16 @@ validation, named-vector/filter request fields, metadata allowlisting, score con
 deterministic descending-score/`chunk_id` ranks. Its exception types and messages remain unchanged.
 `app.hybrid_retrieval.sparse_search` remains the identical canonical function object.
 
+`CrossEncoder` and `CrossEncoderScore` define the model-neutral scoring contract. The FastEmbed
+adapter preserves lazy one-time construction, exact constructor/rerank arguments, input-index score
+mapping, registry lookup, and `RerankingError` messages/causes. Importing any runtime module does not
+construct or download a model. `app.reranking` remains a compatibility export for all moved symbols.
+
+`RerankPipeline.search(...)` remains the application contract for preparing candidates, reranking the
+full pool, and retaining stage latency. Its canonical owner is now
+`app.application.reranking_service`; the old `app.reranking` exports are identical aliases. The active
+`app.main` dependency graph reaches the canonical service without importing evaluation diagnostics.
+
 ## 5. Step-by-step data flow
 
 1. Dense search returns `RetrievedChunk` records with citation metadata and a raw dense score.
@@ -127,6 +141,11 @@ deterministic descending-score/`chunk_id` ranks. Its exception types and message
 27. Sparse search validates input and converts one BM25 result to a Qdrant sparse vector.
 28. Qdrant payloads map to candidates with source-path/character-count metadata when present.
 29. Candidates sort by descending sparse score, then `chunk_id`, before one-based rank assignment.
+30. Reranking formats candidate documents before invoking the model-neutral `CrossEncoder` port.
+31. The FastEmbed adapter lazily constructs one CPU `TextCrossEncoder` on the first score call.
+32. SDK scores map to their input candidate indexes as floats; validation/order remain in the pipeline.
+33. `retrieval_runtime` composes the canonical application service; evaluator helpers consume its
+    result contract only through the compatibility facade.
 
 ## 6. Responsibilities of changed files
 
@@ -144,20 +163,28 @@ deterministic descending-score/`chunk_id` ranks. Its exception types and message
   and payload mapping in addition to established dense embedding/indexing infrastructure.
 - [`app/infrastructure/qdrant/hybrid.py`](../../app/infrastructure/qdrant/hybrid.py) now owns sparse
   search, sparse payload mapping, and component rank assignment beside BM25/hybrid infrastructure.
+- [`app/domain/reranking.py`](../../app/domain/reranking.py) owns `RerankingError`, the indexed score
+  record, and the cross-encoder protocol without SDK dependencies.
+- [`app/infrastructure/models/reranker.py`](../../app/infrastructure/models/reranker.py) owns lazy
+  FastEmbed construction, scoring adaptation, and local registry inspection.
+- [`app/infrastructure/models/__init__.py`](../../app/infrastructure/models/__init__.py) marks the
+  external-model adapter package without eager imports.
+- [`app/application/reranking_service.py`](../../app/application/reranking_service.py) owns candidate
+  preparation, stage timing, deterministic rerank validation/order, and runtime pipeline coordination.
 - [`app/candidate_audit.py`](../../app/candidate_audit.py) owns qrel/evaluation audit behavior and
   temporarily re-exports the two moved functions for compatibility.
 - [`app/hybrid_retrieval.py`](../../app/hybrid_retrieval.py) retains sparse/hybrid Qdrant coordination
   for legacy `hybrid_search` and exposes canonical dense/sparse search and RRF compatibility aliases.
 - [`app/retrieval.py`](../../app/retrieval.py) is now a pure compatibility facade over dense Qdrant
   infrastructure and manifests.
-- [`app/reranking.py`](../../app/reranking.py) consumes candidate assembly from the domain instead of
-  importing the evaluation-oriented audit module, and consumes RRF directly from its domain owner.
+- [`app/reranking.py`](../../app/reranking.py) is now an evaluation-oriented compatibility facade. It
+  retains evaluator diagnostics and directly aliases the canonical runtime contracts and functions.
 - [`app/query_expansion.py`](../../app/query_expansion.py) remains a compatibility facade with an
   explicit public export list.
 - [`app/phase7_optimization.py`](../../app/phase7_optimization.py) remains an explicit compatibility
   facade for historical scripts, replay code, and imports.
-- [`app/retrieval_runtime.py`](../../app/retrieval_runtime.py) consumes query expansion directly from
-  the canonical domain policy.
+- [`app/retrieval_runtime.py`](../../app/retrieval_runtime.py) composes query policy, the domain
+  reranking port, the infrastructure model adapter, and the canonical reranking application service.
 - [`app/domain/retrieval_contracts.py`](../../app/domain/retrieval_contracts.py) resolves the frozen
   query-expansion and fusion profiles without depending on top-level compatibility facades.
 - [`app/evidence_selection.py`](../../app/evidence_selection.py) consumes query-role inference from
@@ -187,14 +214,19 @@ deterministic descending-score/`chunk_id` ranks. Its exception types and message
 - `apply_*_list_completeness_*`: bounded runtime and sanitized-metadata replay of list ordering.
 - `dense_search`: canonical dense Qdrant query adapter with fail-closed payload/error mapping.
 - `sparse_search`: canonical BM25/Qdrant query adapter with deterministic component ranks.
+- `CrossEncoderScore`: stable candidate-index/float-score record independent of FastEmbed.
+- `CrossEncoder`: injectable scoring port implemented by real and fake adapters.
+- `FastEmbedCrossEncoder`: lazy CPU adapter with one cached SDK model instance.
+- `fastembed_model_metadata`: non-construction registry inspection for legacy diagnostics.
+- `RerankPipeline`: canonical application coordinator for candidate preparation, reranking, and stage
+  timing without evaluation imports.
 - `candidate_assembly` in `app.candidate_audit`: explicit facade reference that makes temporary
   compatibility ownership visible.
-- `KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS`: executable debt inventory; after R04A it records only the
-  remaining direct `app.reranking → app.evaluation` dependency owned by R04.
+- `KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS`: executable production boundary; after R04D2 it is empty.
 
 ## 8. Before-and-after structure
 
-Before R04A–R04C:
+Before R04A–R04D2:
 
 ```text
 app.candidate_audit   runtime candidate assembly + evaluation audit
@@ -210,9 +242,11 @@ app.phase7_optimization  role/list/fusion implementation and historical phase-na
 app.retrieval  dense Qdrant search implementation + indexing compatibility exports
 
 app.hybrid_retrieval  sparse Qdrant search implementation + hybrid coordinator
+
+app.reranking  cross-encoder port + FastEmbed SDK adapter + pipeline + evaluator
 ```
 
-After R04A–R04C:
+After R04A–R04D2:
 
 ```text
 app.domain.retrieval  canonical candidate assembly
@@ -238,6 +272,16 @@ runtime consumers + app.retrieval/app.hybrid_retrieval compatibility facades
 app.infrastructure.qdrant.hybrid  canonical sparse/hybrid index + search adapter
         ↑
 runtime consumers + app.hybrid_retrieval compatibility facade/coordinator
+
+app.domain.reranking  model-neutral score/error/port contracts
+        ↑
+app.infrastructure.models.reranker  lazy FastEmbed adapter
+        ↑
+app.retrieval_runtime composition
+
+app.application.reranking_service  runtime pipeline orchestration
+        ↑                              ↑
+app.retrieval_runtime        app.reranking compatibility/evaluator facade
 ```
 
 ## 9. Design decisions and trade-offs
@@ -263,10 +307,14 @@ runtime consumers + app.hybrid_retrieval compatibility facade/coordinator
   and embedding boundary. No separate abstraction is introduced for a single concrete backend.
 - Sparse search follows the same ownership rule. `hybrid_search` stays in the facade because it is a
   legacy cross-adapter coordinator; production runtime uses explicit dense/sparse injected operations.
-- The facade remains evaluation-oriented and therefore may import `app.evaluation`; the architecture
-  guard now proves it is unreachable from `app.main` through the reranking edge.
-- The remaining direct import from `app.reranking` to `app.evaluation` is documented debt for R04D/E,
-  not hidden or prematurely waived.
+- The port and indexed score live in domain while FastEmbed imports stay in infrastructure. This
+  keeps fake adapters trivial and prevents model construction during module import.
+- Candidate text formatting, output validation, and deterministic tie-breaking remain outside the SDK
+  adapter because they are application/ranking policy rather than FastEmbed behavior.
+- The facade remains evaluation-oriented and may still import `app.evaluation`; the architecture guard
+  proves it is unreachable from `app.main`. R04E owns relocating those diagnostics, not runtime safety.
+- Compatibility uses object aliases rather than wrappers, so public import identity and call behavior
+  remain unchanged while production names the application owner directly.
 
 ## 10. Tests and protected behavior
 
@@ -276,8 +324,9 @@ runtime consumers + app.hybrid_retrieval compatibility facade/coordinator
 | dense ties | descending score followed by stable `chunk_id` order |
 | candidate union | deduplication, dense representative, sparse provenance merge, stable order |
 | facade identity | old audit imports resolve to canonical domain functions |
-| architecture graph | reranking imports domain assembly and not candidate audit |
-| debt inventory | only explicitly owned evaluation imports remain reachable from production |
+| architecture graph | application reranking imports domain assembly and not candidate audit |
+| runtime/evaluation boundary | no evaluation import is reachable from `app.main` |
+| reranking facade identity | legacy runtime exports are the canonical application objects |
 | reranking/query suites | candidate pools, ranking, evidence boundaries, and application consumers stay stable |
 | exact RRF snapshot | duplicate representation, all component/fused fields, and one-based output rank |
 | RRF facade identity | legacy hybrid import resolves to the canonical domain function |
@@ -297,6 +346,10 @@ runtime consumers + app.hybrid_retrieval compatibility facade/coordinator
 | sparse in-memory tests | metadata allowlist, document filter, score/rank ordering, and errors |
 | sparse facade identity | historical import resolves to the canonical hybrid infrastructure adapter |
 | sparse architecture graph | reranking/runtime bypass `app.hybrid_retrieval` for sparse search |
+| exact fake-SDK contract | constructor kwargs, one-instance reuse, rerank arguments, score mapping |
+| adapter registry test | case-insensitive local metadata lookup without model construction |
+| cross-encoder facade identity | legacy score/error/port/adapter imports are canonical objects |
+| model architecture graph | adapter depends on domain port; runtime composes concrete infrastructure |
 
 The exact dense snapshot was added before the implementation move and passed against the old owner.
 
@@ -355,6 +408,22 @@ python -m ruff check app/infrastructure/qdrant/hybrid.py app/hybrid_retrieval.py
 python -m pytest -q tests/test_hybrid_retrieval.py tests/test_reranking.py tests/test_retrieval_runtime.py tests/test_query_service.py tests/test_architecture_boundaries.py
 ```
 
+R04D1 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_reranking.py tests/test_retrieval_runtime.py
+python -m ruff check app/domain/reranking.py app/infrastructure/models app/reranking.py app/retrieval_runtime.py tests/test_reranking.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_reranking.py tests/test_retrieval_runtime.py tests/test_query_service.py tests/test_architecture_boundaries.py
+```
+
+R04D2 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_reranking.py tests/test_retrieval_runtime.py tests/test_query_service.py tests/test_runtime_characterization.py tests/test_architecture_boundaries.py
+python -m ruff check app/application/reranking_service.py app/reranking.py app/retrieval_runtime.py tests/test_reranking.py tests/test_architecture_boundaries.py
+python -m pytest -q tests/test_reranking.py tests/test_retrieval_runtime.py tests/test_query_service.py tests/test_runtime_characterization.py tests/test_architecture_boundaries.py
+```
+
 Slice-completion validation:
 
 ```text
@@ -363,7 +432,7 @@ python -m pytest -q
 git diff --check
 ```
 
-Unit tests must run offline with fake models and in-memory stores. No R04A–R04C command requires
+Unit tests must run offline with fake models and in-memory stores. No R04A–R04D2 command requires
 source PDFs, model downloads, a provider, live Qdrant, or held-out benchmark payloads.
 
 ## 12. Small usage example
@@ -412,14 +481,17 @@ Historical `app.phase7_optimization` imports remain compatible in the same way.
   or payload/vector flags changed; do not update the expected call during an adapter move.
 - A sparse snapshot or rank failure means vector conversion, named-vector/filter fields, metadata,
   score/`chunk_id` tie-break, or one-based ranking drifted; do not update the golden during R04C.
+- If FastEmbed appears in `sys.modules` after a normal runtime import, the adapter lost its lazy SDK
+  boundary. Constructor/rerank call drift must not be accepted during this move.
 
 ## 14. Current limitations
 
 - Legacy `hybrid_search` remains in the compatibility facade; active production runtime composes the
   canonical dense and sparse adapter functions directly.
-- Cross-encoder construction and reranking orchestration remain combined until R04D.
-- `app.reranking` still directly imports evaluation types/helpers; R04E cannot enable the final
-  production-to-evaluation prohibition until those runtime/evaluator responsibilities are separated.
+- `app.reranking` still owns evaluator diagnostics as well as compatibility aliases. R04E owns moving
+  those diagnostics to evaluation so the facade has only transitional compatibility responsibility.
+- The production-to-evaluation prohibition is active and empty at the `app.main` graph after R04D2;
+  R04E must preserve that result while completing evaluator ownership.
 - Compatibility exports in `app.candidate_audit` need an explicit removal owner before Round 1 closes.
 - Future evaluation source identity still names compatibility paths; R07 must switch it to canonical
   implementation paths before any new artifact is treated as comparable current evidence.
@@ -431,12 +503,14 @@ Historical `app.phase7_optimization` imports remain compatible in the same way.
 3. Which sparse fields are merged into that representative?
 4. What are the exact dense and union tie-break rules?
 5. Why does `app.candidate_audit` still export the moved functions?
-6. Which production-to-evaluation import remains after R04A?
+6. How does the import-graph test prove evaluation is unreachable from `app.main` after R04D2?
 7. Why does RRF combine ranks rather than raw dense and sparse scores?
 8. Why must historical artifact hashes remain unchanged after moving query policy code?
 9. Why does post-rerank role fusion preserve `rerank_score` and write a separate rank-derived score?
 10. Why does dense search belong in Qdrant infrastructure rather than the retrieval domain?
 11. Why is raw sparse score preserved as provenance while rank is assigned deterministically?
+12. Why does the FastEmbed adapter return indexed scores instead of ordered candidates?
+13. Why is `RerankPipeline` an application service rather than a model adapter or evaluator?
 
 ## 16. Interview summary
 
@@ -451,10 +525,14 @@ import-graph tests demonstrate improved dependency direction without changing sc
 provenance, candidate ordering, limits, or error behavior. R04C1 moves dense search behind the Qdrant
 adapter while preserving exact request and response mapping contracts. R04C2 completes the Qdrant
 search boundary for sparse BM25 queries and removes production imports through the hybrid facade.
+R04D1 introduces a model-neutral cross-encoder port and confines lazy FastEmbed SDK behavior to an
+infrastructure adapter without moving ranking policy into the SDK boundary. R04D2 moves candidate
+preparation, timing, score validation, and rerank coordination into an application service. Production
+now bypasses the evaluation-oriented facade, while identical aliases preserve historical imports.
 
 ## 17. Validation results and proposed commit
 
-Current R04A–R04C validation:
+Current R04A–R04D2 validation:
 
 ```text
 Pre-refactor candidate/reranking characterization  PASS — 34 tests
@@ -487,16 +565,26 @@ R04C2 focused sparse/runtime/architecture suite    PASS — 83 tests
 R04C2 full Ruff                                    PASS
 R04C2 full pytest Python 3.11.15                   PASS — 369 tests, 1 warning
 R04C2 Markdown links (20 targets) / diff check     PASS
+Pre-refactor cross-encoder characterization        PASS — 40 tests
+R04D1 focused model/runtime/architecture suite     PASS — 73 tests
+R04D1 full Ruff                                    PASS
+R04D1 full pytest Python 3.11.15                   PASS — 372 tests, 1 warning
+R04D1 Markdown links (23 targets) / diff check     PASS
+R04D2 pre-move characterization                    PASS — 75 tests
+R04D2 focused Ruff                                 PASS
+R04D2 focused runtime/architecture suite           PASS — 77 tests
+R04D2 full Ruff Python 3.11.15                     PASS
+R04D2 full pytest Python 3.11.15                   PASS — 374 tests, 1 warning
+R04D2 Markdown links (24 targets) / diff check     PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: isolate sparse search infrastructure
+refactor: isolate reranking contracts and orchestration
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R04A–R04C are implemented and focused checks pass. R04 remains open for the
-reranking adapter and the final
-production/evaluation boundary slices.
+`IN_PROGRESS` — R04A–R04D2 are implemented and focused checks pass. Production no longer reaches
+evaluation through reranking; R04 remains open for the final evaluator-ownership slice.

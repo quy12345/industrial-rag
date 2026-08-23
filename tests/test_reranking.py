@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import math
+import sys
+from types import ModuleType
 
 import pytest
 from pydantic import ValidationError
 
+import app.reranking as reranking
+from app.application import reranking_service
 from app.config import Settings
+from app.domain import reranking as reranking_contracts
 from app.evaluation import EvaluationCase
+from app.infrastructure.models import reranker as reranker_adapter
 from app.models import RetrievalCandidate, RetrievedChunk
 from app.reranking import (
     CANDIDATE_TEXT_FORMAT,
@@ -42,6 +48,22 @@ class FakeCrossEncoder:
 class FailingCrossEncoder:
     def score(self, query, documents, *, batch_size):
         raise RuntimeError("model exploded")
+
+
+def test_compatibility_facade_preserves_runtime_symbol_identity() -> None:
+    runtime_symbols = (
+        "CandidatePool",
+        "RerankExecution",
+        "RerankPipeline",
+        "build_candidate_pool",
+        "build_candidate_text",
+        "deduplicate_candidates_by_content",
+        "execute_rerank",
+        "rerank_candidates",
+    )
+
+    for name in runtime_symbols:
+        assert getattr(reranking, name) is getattr(reranking_service, name)
 
 
 def _candidate(
@@ -107,6 +129,71 @@ def test_settings_and_candidate_model_are_backward_compatible() -> None:
     assert _candidate("a", sparse_rank=1).rerank_score is None
     with pytest.raises(ValidationError):
         Settings(rerank_batch_size=0)
+
+
+def test_reranking_facade_exports_canonical_cross_encoder_contracts() -> None:
+    assert reranking.CrossEncoderScore is reranking_contracts.CrossEncoderScore
+    assert reranking.CrossEncoder is reranking_contracts.CrossEncoder
+    assert reranking.RerankingError is reranking_contracts.RerankingError
+    assert reranking.FastEmbedCrossEncoder is reranker_adapter.FastEmbedCrossEncoder
+    assert reranking.fastembed_model_metadata is reranker_adapter.fastembed_model_metadata
+
+
+def test_fastembed_adapter_is_lazy_reused_and_preserves_sdk_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructor_calls: list[dict[str, object]] = []
+    rerank_calls: list[tuple[str, list[str], int]] = []
+
+    class FakeTextCrossEncoder:
+        def __init__(self, **kwargs) -> None:
+            constructor_calls.append(kwargs)
+
+        @staticmethod
+        def list_supported_models() -> list[dict[str, str]]:
+            return [{"model": "model-a", "license": "apache-2.0"}]
+
+        def rerank(self, query, documents, *, batch_size):
+            rerank_calls.append((query, list(documents), batch_size))
+            return [0.25, -1.5]
+
+    fastembed_module = ModuleType("fastembed")
+    fastembed_module.__path__ = []  # type: ignore[attr-defined]
+    rerank_module = ModuleType("fastembed.rerank")
+    rerank_module.__path__ = []  # type: ignore[attr-defined]
+    cross_encoder_module = ModuleType("fastembed.rerank.cross_encoder")
+    cross_encoder_module.TextCrossEncoder = FakeTextCrossEncoder  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fastembed", fastembed_module)
+    monkeypatch.setitem(sys.modules, "fastembed.rerank", rerank_module)
+    monkeypatch.setitem(sys.modules, "fastembed.rerank.cross_encoder", cross_encoder_module)
+
+    adapter = reranking.FastEmbedCrossEncoder("model-a", cache_dir="cache", threads=3)
+    assert adapter._model is None
+    assert list(adapter.score(" query ", ["first", "second"], batch_size=4)) == [
+        CrossEncoderScore(candidate_index=0, score=0.25),
+        CrossEncoderScore(candidate_index=1, score=-1.5),
+    ]
+    assert list(adapter.score("again", ["first", "second"], batch_size=2)) == [
+        CrossEncoderScore(candidate_index=0, score=0.25),
+        CrossEncoderScore(candidate_index=1, score=-1.5),
+    ]
+    assert constructor_calls == [
+        {
+            "model_name": "model-a",
+            "cache_dir": "cache",
+            "threads": 3,
+            "cuda": False,
+            "lazy_load": True,
+        }
+    ]
+    assert rerank_calls == [
+        (" query ", ["first", "second"], 4),
+        ("again", ["first", "second"], 2),
+    ]
+    assert reranking.fastembed_model_metadata("MODEL-A") == {
+        "model": "model-a",
+        "license": "apache-2.0",
+    }
 
 
 def test_candidate_text_uses_heading_breadcrumb_without_mutating_raw_text() -> None:

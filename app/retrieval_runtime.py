@@ -10,19 +10,21 @@ from time import perf_counter
 from typing import Any, Protocol
 
 from app import config as runtime_config
+from app.application.reranking_service import RerankPipeline
 from app.domain import retrieval_contracts
 from app.domain.policies.query_analysis import (
     QUERY_EXPANSION_PROFILE,
     augment_vietnamese_technical_query,
 )
+from app.domain.reranking import RerankingError
 from app.errors import RerankerUnavailableError, RetrievalUnavailableError
+from app.infrastructure.models.reranker import FastEmbedCrossEncoder
 from app.infrastructure.qdrant.hybrid import (
     create_sparse_embedding_model,
     sparse_search,
     validate_hybrid_collection,
 )
 from app.models import RetrievalCandidate
-from app.reranking import FastEmbedCrossEncoder, RerankingError, RerankPipeline
 from app.retrieval import (
     RetrievalError,
     create_embedding_model,

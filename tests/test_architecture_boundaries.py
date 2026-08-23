@@ -7,11 +7,7 @@ from pathlib import Path
 
 APP_ROOT = Path(__file__).parents[1] / "app"
 
-# These are baseline debt, not approved dependencies. R04 owns their removal when
-# retrieval and reranking responsibilities are separated from evaluation helpers.
-KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS = {
-    ("app.reranking", "app.evaluation"): "R04",
-}
+KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS: set[tuple[str, str]] = set()
 
 DOMAIN_FORBIDDEN_IMPORT_ROOTS = {
     "docling",
@@ -80,7 +76,7 @@ def test_active_runtime_evaluation_imports_match_owned_baseline_debt() -> None:
     }
 
     assert actual == set(KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS)
-    assert set(KNOWN_ACTIVE_RUNTIME_EVALUATION_IMPORTS.values()) == {"R04"}
+    assert actual == set()
 
 
 def test_inbound_adapters_are_not_imported_by_other_application_modules() -> None:
@@ -172,17 +168,19 @@ def test_indexing_application_service_has_no_adapter_or_evaluation_dependency() 
     }
 
 
-def test_reranking_uses_domain_candidate_assembly_not_evaluation_audit() -> None:
+def test_reranking_service_uses_domain_candidate_assembly_not_evaluation_audit() -> None:
     graph = _import_graph()
 
-    assert "app.domain.retrieval" in graph["app.reranking"]
-    assert "app.candidate_audit" not in graph["app.reranking"]
+    service = graph["app.application.reranking_service"]
+    assert "app.domain.retrieval" in service
+    assert "app.candidate_audit" not in service
+    assert "app.evaluation" not in service
 
 
 def test_runtime_uses_canonical_domain_rrf_policy() -> None:
     graph = _import_graph()
 
-    assert "app.domain.policies.fusion" in graph["app.reranking"]
+    assert "app.domain.policies.fusion" in graph["app.application.reranking_service"]
     assert "app.domain.policies.fusion" in graph["app.hybrid_retrieval"]
 
 
@@ -197,7 +195,11 @@ def test_runtime_uses_canonical_domain_query_analysis_policy() -> None:
 def test_runtime_uses_canonical_domain_ranking_policy() -> None:
     graph = _import_graph()
 
-    for module in ("app.reranking", "app.evidence_selection", "app.domain.retrieval_contracts"):
+    for module in (
+        "app.application.reranking_service",
+        "app.evidence_selection",
+        "app.domain.retrieval_contracts",
+    ):
         assert "app.domain.policies.ranking" in graph[module]
         assert "app.phase7_optimization" not in graph[module]
 
@@ -205,16 +207,37 @@ def test_runtime_uses_canonical_domain_ranking_policy() -> None:
 def test_runtime_uses_canonical_dense_search_adapter() -> None:
     graph = _import_graph()
 
-    assert "app.infrastructure.qdrant.dense" in graph["app.reranking"]
+    service = graph["app.application.reranking_service"]
+    assert "app.infrastructure.qdrant.dense" in service
     assert "app.infrastructure.qdrant.dense" in graph["app.hybrid_retrieval"]
-    assert "app.retrieval" not in graph["app.reranking"]
+    assert "app.retrieval" not in service
     assert "app.retrieval" not in graph["app.hybrid_retrieval"]
 
 
 def test_runtime_uses_canonical_sparse_search_adapter() -> None:
     graph = _import_graph()
 
-    for module in ("app.reranking", "app.retrieval_runtime", "app.hybrid_retrieval"):
+    for module in (
+        "app.application.reranking_service",
+        "app.retrieval_runtime",
+        "app.hybrid_retrieval",
+    ):
         assert "app.infrastructure.qdrant.hybrid" in graph[module]
-    assert "app.hybrid_retrieval" not in graph["app.reranking"]
+    assert "app.hybrid_retrieval" not in graph["app.application.reranking_service"]
     assert "app.hybrid_retrieval" not in graph["app.retrieval_runtime"]
+
+
+def test_runtime_composes_canonical_reranking_service_not_evaluation_facade() -> None:
+    graph = _import_graph()
+
+    assert "app.application.reranking_service" in graph["app.retrieval_runtime"]
+    assert "app.reranking" not in graph["app.retrieval_runtime"]
+
+
+def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:
+    graph = _import_graph()
+
+    assert "app.domain.reranking" in graph["app.infrastructure.models.reranker"]
+    assert "app.reranking" not in graph["app.infrastructure.models.reranker"]
+    assert "app.domain.reranking" in graph["app.retrieval_runtime"]
+    assert "app.infrastructure.models.reranker" in graph["app.retrieval_runtime"]
