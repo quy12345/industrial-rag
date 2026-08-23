@@ -10,6 +10,10 @@ R06A is implemented in this slice. It gives FastAPI one explicit dependency seam
 health/readiness route mapping out of the application factory. CLI and Streamlit cleanup remain later
 R06 slices and are not described as completed work.
 
+R06B1 is also implemented. It classifies the two active runtime smoke commands under
+`scripts.operations` while preserving both historical `python -m scripts.<name>` entry points as
+thin compatibility shims. Archived Phase 6 tools remain unsupported and untouched.
+
 ## 2. Position in the system
 
 ```text
@@ -62,6 +66,7 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
 7. Known dependency failures become sanitized HTTP errors; unexpected failures become sanitized 500.
 8. Health is process liveness only; readiness invokes the injected frozen-corpus checker.
 9. Middleware adds the established safe correlation header without logging request bodies or tokens.
+10. Operational smoke shims delegate to canonical Phase 7 command modules without duplicating logic.
 
 ## 6. Responsibilities of changed files
 
@@ -77,6 +82,15 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
   metadata, request IDs, and dependency alias identity.
 - [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) ensures each
   FastAPI module uses the explicit dependency seam rather than compatibility or composition imports.
+- [`scripts/operations/query_smoke.py`](../../scripts/operations/query_smoke.py) owns the supported
+  bounded query smoke, sanitized artifact, scenarios, and explicit Phase 7 guard.
+- [`scripts/operations/validate_query_runtime.py`](../../scripts/operations/validate_query_runtime.py)
+  owns the supported read-only retrieval smoke and its stable parser/output contract.
+- [`scripts/query_smoke.py`](../../scripts/query_smoke.py) and
+  [`scripts/validate_query_runtime.py`](../../scripts/validate_query_runtime.py) are thin historical
+  entry-point shims.
+- [`tests/test_phase7_operational_smoke.py`](../../tests/test_phase7_operational_smoke.py) protects
+  parser defaults, guards, artifact sanitization, exit behavior, and shim identity.
 
 ## 7. Important symbols and why they exist
 
@@ -87,6 +101,8 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
 - `UTF8JSONResponse`: preserves the explicit UTF-8 content type required by legacy clients.
 - `require_query_auth`: fail-closed optional bearer authentication dependency.
 - `query`: thin async HTTP mapping around synchronous `QueryService.execute`.
+- `scripts.operations.query_smoke.main`: supported bounded query smoke orchestration.
+- `scripts.operations.validate_query_runtime.main`: supported read-only retrieval smoke orchestration.
 
 ## 8. Before-and-after structure
 
@@ -114,6 +130,22 @@ app.api.app ──> app.api.dependencies <── app.api.query/auth/health
 app.api.dependencies ──> application service + bootstrap + canonical config
 ```
 
+After R06B1:
+
+```text
+python -m scripts.query_smoke
+        |
+        v
+thin compatibility shim ──> scripts.operations.query_smoke
+
+python -m scripts.validate_query_runtime
+        |
+        v
+thin compatibility shim ──> scripts.operations.validate_query_runtime
+
+scripts.archive.phase6.* remains unsupported
+```
+
 ## 9. Design decisions and trade-offs
 
 - Dependency symbols are direct aliases, so FastAPI override keys retain object identity.
@@ -124,6 +156,10 @@ app.api.dependencies ──> application service + bootstrap + canonical config
 - HTTP DTOs remain in `app.models` during R06A. R06C owns separating stable shared query contracts and
   updating Streamlit imports in one reviewed slice.
 - `app.main:app` remains unchanged because it is the documented Uvicorn and Compose entry point.
+- Canonical commands live under an explicit `operations` package so support status is visible without
+  renaming established invocations. Shims use direct aliases and contain no runtime policy.
+- The bounded query smoke is still an explicit integration command, not a unit-test operation. R06B1
+  validates only its fake/no-key paths and never authorizes a real provider call.
 
 ## 10. Tests and protected behavior
 
@@ -137,6 +173,9 @@ app.api.dependencies ──> application service + bootstrap + canonical config
 | query errors | sanitized 401/422/500/503/504 mappings |
 | dependency identity | overrides still target canonical cached dependencies |
 | architecture graph | FastAPI modules use one dependency seam |
+| CLI facade identity | old command imports resolve to canonical `main` and parser objects |
+| retrieval smoke guard | unsupported profile exits before building a retriever |
+| query smoke no-key path | sanitized artifact is written without constructing the service |
 
 ## 11. Commands and expected results
 
@@ -151,6 +190,18 @@ R06A focused validation:
 ```text
 python -m ruff check app/api tests/test_health.py tests/test_query_api.py tests/test_architecture_boundaries.py
 python -m pytest -q tests/test_health.py tests/test_query_api.py tests/test_runtime_characterization.py tests/test_bootstrap.py tests/test_architecture_boundaries.py
+```
+
+R06B1 characterization and focused validation:
+
+```text
+python -m pytest -q tests/test_phase7_operational_smoke.py tests/test_retrieval_runtime.py tests/test_config_contracts.py
+python -m ruff check scripts/operations scripts/query_smoke.py scripts/validate_query_runtime.py tests/test_phase7_operational_smoke.py
+python -m pytest -q tests/test_phase7_operational_smoke.py tests/test_retrieval_runtime.py tests/test_config_contracts.py
+python -m scripts.query_smoke --help
+python -m scripts.operations.query_smoke --help
+python -m scripts.validate_query_runtime --help
+python -m scripts.operations.validate_query_runtime --help
 ```
 
 Slice completion:
@@ -178,6 +229,13 @@ test_app = create_app(
 
 The same factory serves production defaults when those arguments are omitted.
 
+Supported runtime smoke invocations remain:
+
+```text
+python -m scripts.validate_query_runtime --help
+python -m scripts.query_smoke --help
+```
+
 ## 13. Common failures and debugging
 
 - A missing dependency override usually means an alias was wrapped or recreated; verify object identity
@@ -186,11 +244,14 @@ The same factory serves production defaults when those arguments are omitted.
 - Readiness constructing a model during app creation means laziness was lost in bootstrap composition.
 - A raw exception message in an HTTP response violates sanitization; inspect the route error mapper.
 - A changed request-ID header means middleware validation or response attachment order drifted.
+- A shim identity failure means operational logic was copied or wrapped instead of directly exported.
+- A smoke test constructing a retriever/provider on a rejected or no-key path violates fail-closed
+  ordering; inspect the profile/key guard before changing an expected result.
 
 ## 14. Current limitations
 
-- Operational CLIs still mix entry-point parsing and reusable operations; R06B will classify and thin
-  supported commands without changing old module invocations.
+- Phase 7 ingestion/indexing commands retain their established top-level paths. Their logic was
+  already bounded in R03; any packaging-only classification must be a separate R06B slice.
 - Public HTTP DTOs still share `app.models` with internal retrieval records; R06C owns contract split.
 - Streamlit still imports `QueryResponse` from broad application models; R06C will preserve its
   HTTP-only client while narrowing imports.
@@ -205,6 +266,8 @@ The same factory serves production defaults when those arguments are omitted.
 5. Which data may an unexpected-error log contain?
 6. Why is the health router constructed per app instance?
 7. Which R06 slice owns the shared query DTO move?
+8. Why are the old smoke module paths retained after classification?
+9. Which paths are allowed to perform a real provider or model smoke?
 
 ## 16. Interview summary
 
@@ -213,6 +276,9 @@ dependency module connects routes to canonical settings, application services, a
 factory owns only construction, router mounting, overrides, and request correlation; health/readiness
 mapping lives in its own route module. Direct aliases preserve dependency override identity, while
 offline API characterization proves paths, schemas, statuses, headers, errors, and laziness stay stable.
+R06B1 separately makes support status explicit for the two active runtime smoke commands. Canonical
+implementations live under `scripts.operations`; historical module invocations remain direct shims,
+and characterization proves guards, defaults, sanitized artifacts, and exit behavior stay unchanged.
 
 ## 17. Validation results and proposed commit
 
@@ -224,15 +290,23 @@ R06A full Ruff Python 3.11.15     PASS
 R06A full pytest Python 3.11.15   PASS — 392 tests, 1 warning
 R06A Compose config               PASS
 R06A Markdown links (8) / diff check PASS
+R06B1 pre-move characterization  PASS — 25 tests
+R06B1 focused Ruff               PASS
+R06B1 focused operational suite  PASS — 26 tests
+R06B1 old/new help contracts     PASS — 4 commands
+R06B1 full Ruff Python 3.11.15   PASS
+R06B1 full pytest Python 3.11.15 PASS — 393 tests, 1 warning
+R06B1 Compose config             PASS
+R06B1 Markdown links (13) / diff check PASS
 ```
 
 Proposed commit after user review:
 
 ```text
-refactor: thin FastAPI adapters
+refactor: classify supported runtime smoke commands
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R06A is implemented and validated. R06 remains open for operational CLI and shared
-HTTP/Streamlit contract slices.
+`IN_PROGRESS` — R06A and R06B1 are implemented and validated. Phase 6 CLIs remain archived and
+unsupported. Shared HTTP/Streamlit contract work remains open.

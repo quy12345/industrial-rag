@@ -7,7 +7,20 @@ from types import SimpleNamespace
 
 from app.config import Settings
 from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT
-from scripts import query_smoke, validate_query_runtime
+from scripts import query_smoke as compatibility_query_smoke
+from scripts import validate_query_runtime as compatibility_validate_query_runtime
+from scripts.operations import query_smoke, validate_query_runtime
+
+
+def test_historical_smoke_modules_preserve_supported_entry_point_identity() -> None:
+    assert compatibility_query_smoke.main is query_smoke.main
+    assert compatibility_query_smoke._build_parser is query_smoke._build_parser
+    assert compatibility_query_smoke.SCENARIOS is query_smoke.SCENARIOS
+    assert compatibility_validate_query_runtime.main is validate_query_runtime.main
+    assert (
+        compatibility_validate_query_runtime._build_parser
+        is validate_query_runtime._build_parser
+    )
 
 
 def test_retrieval_smoke_defaults_and_builds_the_resolved_phase7_contract(
