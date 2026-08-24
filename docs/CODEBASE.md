@@ -154,8 +154,7 @@ abstention. There is no silent provider or retrieval fallback.
 
 ## Supported commands
 
-The five operational commands use canonical module paths. Three evaluation shims remain only until
-R13B:
+All eight commands use canonical module paths:
 
 ```text
 scripts.operations.audit_phase7_corpus
@@ -163,9 +162,9 @@ scripts.operations.index_phase7_corpus
 scripts.operations.ingest_preview
 scripts.operations.query_smoke
 scripts.operations.validate_query_runtime
-scripts.validate_phase7_dataset
-scripts.evaluate_phase7_retrieval_closure
-scripts.evaluate_phase7_e2e
+scripts.evaluation.validate_phase7_dataset
+scripts.evaluation.evaluate_phase7_retrieval_closure
+scripts.evaluation.evaluate_phase7_e2e
 ```
 
 Read [`scripts/README.md`](../scripts/README.md) before any integration command. Archived scripts are

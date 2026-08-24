@@ -8,15 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-import scripts.validate_phase7_dataset as compatibility_cli
 from evaluation.phase7_dataset import Phase7Error
 from scripts.evaluation import validate_phase7_dataset as validation_cli
 
 
-def test_dataset_validation_shim_and_parser_preserve_cli_contract() -> None:
-    assert compatibility_cli.main is validation_cli.main
-    assert compatibility_cli._build_parser is validation_cli._build_parser
-
+def test_dataset_validation_parser_preserves_cli_contract() -> None:
     args = validation_cli._build_parser().parse_args([])
 
     assert args.calibration == Path("data/eval/phase7/calibration.jsonl")

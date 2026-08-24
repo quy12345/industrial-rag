@@ -503,10 +503,7 @@ def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
         dependency for dependency in cli_imports if dependency in REMOVED_COMPATIBILITY_MODULES
     }
 
-    supported_shim = APP_ROOT.parent / "scripts" / "evaluate_phase7_e2e.py"
-    assert _imported_modules(supported_shim) == {
-        "scripts.evaluation.evaluate_phase7_e2e"
-    }
+    assert not (APP_ROOT.parent / "scripts" / "evaluate_phase7_e2e.py").exists()
 
 
 def test_candidate_audit_is_owned_outside_production_package() -> None:
@@ -576,17 +573,7 @@ def test_dataset_validation_cli_uses_canonical_evaluation_interfaces() -> None:
     assert "app.evaluation" not in imports
     assert "app.phase7" not in imports
 
-    compatibility_path = APP_ROOT.parent / "scripts" / "validate_phase7_dataset.py"
-    tree = ast.parse(
-        compatibility_path.read_text(encoding="utf-8"),
-        filename=str(compatibility_path),
-    )
-    imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    }
-    assert imported_modules == {"scripts.evaluation.validate_phase7_dataset"}
+    assert not (APP_ROOT.parent / "scripts" / "validate_phase7_dataset.py").exists()
 
 
 def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
@@ -610,20 +597,14 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
     assert "app.reranking" not in imports
     assert "app.retrieval_runtime" not in imports
 
-    compatibility_path = APP_ROOT.parent / "scripts" / "evaluate_phase7_retrieval_closure.py"
-    assert _imported_modules(compatibility_path) == {
-        "scripts.evaluation.evaluate_phase7_retrieval_closure"
-    }
+    assert not (
+        APP_ROOT.parent / "scripts" / "evaluate_phase7_retrieval_closure.py"
+    ).exists()
 
 
 def test_supported_script_surface_is_explicit_and_has_no_private_cross_imports() -> None:
     scripts_root = APP_ROOT.parent / "scripts"
-    remaining_evaluation_shims = {
-        "evaluate_phase7_e2e.py",
-        "evaluate_phase7_retrieval_closure.py",
-        "validate_phase7_dataset.py",
-    }
-    assert {path.name for path in scripts_root.glob("*.py")} == remaining_evaluation_shims
+    assert {path.name for path in scripts_root.glob("*.py")} == set()
 
     for package in (scripts_root / "operations", scripts_root / "evaluation"):
         for path in package.glob("*.py"):

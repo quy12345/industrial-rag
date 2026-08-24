@@ -66,9 +66,9 @@ its canonical package.
 Completed research and calibration workflows were archived rather than deleted. A later
 simplification pass versioned E2E provenance, moved scoring to its canonical evaluation owner, and
 removed the obsolete root `app.*` facade layer; Git history retains the original source anchors.
-R13A later removed the five operational command shims; three evaluation shims remain for R13B. The
-cleanup did not tune algorithms, modify frozen data, re-index Qdrant, call a provider, or claim new
-benchmark results.
+R13 then removed all eight command shims, leaving `scripts.operations` and `scripts.evaluation` as
+the only supported command owners. The cleanup did not tune algorithms, modify frozen data, re-index
+Qdrant, call a provider, or claim new benchmark results.
 
 ## What changed in the architecture
 

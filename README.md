@@ -60,7 +60,7 @@ retrieve -> rerank -> select evidence -> evidence gate
          -> generate -> validate source IDs -> build trusted citations
 ```
 
-- `app/api/`, top-level CLI modules, and `ui/` are inbound adapters.
+- `app/api/`, `scripts.operations`/`scripts.evaluation`, and `ui/` are inbound adapters.
 - `app/application/` coordinates use cases.
 - `app/domain/` owns framework-free contracts and policies.
 - `app/infrastructure/` owns external storage, model, corpus, and provider concerns.
@@ -139,13 +139,13 @@ Supported commands use their canonical ownership paths:
 | `python -m scripts.operations.ingest_preview --help` | Preview document ingestion | Reads input and may write requested output |
 | `python -m scripts.operations.query_smoke --help` | Bounded end-to-end query smoke | Uses Qdrant, models, and configured provider |
 | `python -m scripts.operations.validate_query_runtime --help` | Read-only runtime validation | Uses Qdrant and local models; no provider |
-| `python -m scripts.validate_phase7_dataset --help` | Offline dataset validation | Provider-free and Qdrant-free |
-| `python -m scripts.evaluate_phase7_retrieval_closure --help` | Provider-free retrieval closure | Uses Qdrant and local reranker |
-| `python -m scripts.evaluate_phase7_e2e --help` | Pinned resumable E2E evaluator | Provider use requires explicit approval |
+| `python -m scripts.evaluation.validate_phase7_dataset --help` | Offline dataset validation | Provider-free and Qdrant-free |
+| `python -m scripts.evaluation.evaluate_phase7_retrieval_closure --help` | Provider-free retrieval closure | Uses Qdrant and local reranker |
+| `python -m scripts.evaluation.evaluate_phase7_e2e --help` | Pinned resumable E2E evaluator | Provider use requires explicit approval |
 
-The five old top-level operational paths were removed in R13A. The three evaluation commands remain
-thin shims until R13B; their implementations already live in `scripts.evaluation`. E2E provenance
-uses artifact schema v6 and source identity v2 over canonical owners. See
+R13 removed all eight top-level command shims. Operational and evaluation commands now run directly
+through their ownership packages. E2E provenance uses artifact schema v6 and source identity v2 over
+canonical owners. See
 [scripts/README.md](scripts/README.md) before using integration or archived tools.
 
 Archived commands have no top-level compatibility path and are unsupported. They are retained for

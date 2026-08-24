@@ -6,9 +6,9 @@ R13 makes each supported command import path match its implementation owner. It 
 top-level `scripts.<command>` shims in two coherent slices:
 
 - R13A removes five operational shims; canonical commands live in `scripts.operations`.
-- R13B will remove three evaluation shims; canonical commands live in `scripts.evaluation`.
+- R13B removes three evaluation shims; canonical commands live in `scripts.evaluation`.
 
-R13A is implemented in the current worktree. R13B has not started.
+R13A and R13B are implemented in the current worktree.
 
 ## 2. Position in the system
 
@@ -20,6 +20,11 @@ python -m scripts.operations.<command>
                      ^
                      |
             infrastructure adapters
+
+python -m scripts.evaluation.<command>
+                     |
+                     v
+        evaluation + public runtime interfaces
 ```
 
 These modules are inbound adapters. Reusable behavior remains outside `scripts`.
@@ -33,17 +38,20 @@ These modules are inbound adapters. Reusable behavior remains outside `scripts`.
 
 ## 4. Input, output, and contracts
 
-R13A keeps parser options, defaults, stdout/stderr, exit codes, artifact formats, validation order,
+R13 keeps parser options, defaults, stdout/stderr, exit codes, artifact formats, validation order,
 and external effects for:
 
 - corpus audit;
 - guarded Phase 7 indexing;
 - ingestion preview;
 - bounded query smoke;
-- read-only query-runtime validation.
+- read-only query-runtime validation;
+- dataset validation;
+- provider-free retrieval closure;
+- approval-gated E2E evaluation.
 
-The intentional breaking change is module naming: `scripts.<operation>` no longer imports, while
-`scripts.operations.<operation>` is the supported path.
+The intentional breaking change is module naming: `scripts.<command>` no longer imports, while
+`scripts.operations.<operation>` and `scripts.evaluation.<evaluation-command>` are supported.
 
 ## 5. Step-by-step data flow
 
@@ -57,22 +65,23 @@ The intentional breaking change is module naming: `scripts.<operation>` no longe
 
 ## 6. Responsibilities of changed files
 
-| Path | Responsibility after R13A |
+| Path | Responsibility after R13 |
 | --- | --- |
 | [`scripts/operations`](../../scripts/operations) | Implementation and supported module path for five operational commands. |
+| [`scripts/evaluation`](../../scripts/evaluation) | Implementation and supported module path for three evaluation commands. |
 | [`tests/test_supported_cli_contracts.py`](../../tests/test_supported_cli_contracts.py) | Table-driven help/error contracts plus rejection of removed paths. |
 | [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) | Exact remaining top-level inventory and canonical dependency guards. |
 | [`README.md`](../../README.md) | Current supported invocations and external-effect warnings. |
-| [`scripts/README.md`](../../scripts/README.md) | Script ownership, lifecycle, and temporary R13B boundary. |
+| [`scripts/README.md`](../../scripts/README.md) | Script ownership, lifecycle, and canonical command inventory. |
 | [`docs/CODEBASE.md`](../CODEBASE.md) | Current command map in the codebase guide. |
 
-Per-command behavior tests import `scripts.operations` directly. The deleted top-level files owned no
-logic.
+Per-command behavior tests import their canonical ownership packages directly. The deleted top-level
+files owned no logic.
 
 ## 7. Important symbols and why they exist
 
 - `SUPPORTED_CLI_OPTIONS` records every current module and its public option surface.
-- `REMOVED_OPERATION_SHIMS` is the exact negative inventory for R13A.
+- `REMOVED_CLI_SHIMS` is the exact negative inventory for all eight removed paths.
 - `_run_cli` executes help/parser checks in a credential-sanitized subprocess.
 - Each canonical command's `main` remains the only execution boundary.
 
@@ -86,9 +95,10 @@ Before R13A
   scripts/query_smoke.py               -> scripts.operations.query_smoke
   scripts/validate_query_runtime.py    -> scripts.operations.validate_query_runtime
 
-After R13A
-  scripts/operations/*.py              implementation + supported entry point
-  scripts/*.py                         three temporary evaluation shims only
+After R13
+  scripts/operations/*.py              operational implementation + entry point
+  scripts/evaluation/*.py              evaluation implementation + entry point
+  scripts/*.py                         none
 ```
 
 ## 9. Design decisions and trade-offs
@@ -98,8 +108,8 @@ known consumers are updated together, and another compatibility layer would defe
 surface. The longer canonical name is useful: it makes operational versus evaluation ownership
 visible without opening the file.
 
-Operations and evaluation are cut separately so each review has one responsibility and fewer
-meaningful tests/docs. The command behavior remains characterized at the implementation owner.
+Operations and evaluation were cut separately so each review had one responsibility and fewer
+meaningful tests/docs. Command behavior remains characterized at the implementation owner.
 
 ## 10. Tests and the behavior each test protects
 
@@ -111,7 +121,7 @@ meaningful tests/docs. The command behavior remains characterized at the impleme
 | Corpus/index tests | Defaults, protected collections, deterministic validation, and sanitized audit output. |
 | Ingestion tests | Stable IDs, page/chunk behavior, atomic output, and lazy heavy imports. |
 | Smoke tests | Frozen Phase 7 selection, safe no-key output, and Phase 6 rejection. |
-| Architecture | Only temporary evaluation shims remain top-level; no private cross-script imports. |
+| Architecture | No command module remains top-level; no private cross-script imports. |
 
 ## 11. Commands and expected results
 
@@ -137,7 +147,8 @@ The second command is only an invocation example; R13 validation does not read a
 
 ## 13. Common failures and debugging
 
-- `No module named scripts.<operation>` is expected after R13A; use `scripts.operations.<operation>`.
+- `No module named scripts.<command>` is expected after R13; use the owning operations/evaluation
+  package.
 - An argparse exit code change means the canonical parser contract drifted; do not weaken the test.
 - If `--help` initializes Qdrant or a model, inspect import-time construction in the canonical module.
 - Never add a redirect shim to fix old documentation; update the command path at its owner.
@@ -145,8 +156,7 @@ The second command is only an invocation example; R13 validation does not read a
 
 ## 14. Current limitations
 
-- `scripts.validate_phase7_dataset`, `scripts.evaluate_phase7_retrieval_closure`, and
-  `scripts.evaluate_phase7_e2e` remain temporary shims until R13B.
+- All eight old top-level command paths are intentionally unavailable.
 - No real operational or evaluation command is executed during offline validation.
 - Historical walkthroughs retain historical commands unless they are current runbooks.
 
@@ -156,13 +166,13 @@ The second command is only an invocation example; R13 validation does not read a
 2. Which parser behaviors must survive a module-path hard cut?
 3. Why should an old path fail instead of redirecting silently?
 4. Which operational commands can mutate Qdrant or call a provider when explicitly run?
-5. Why are evaluation shims deferred to R13B?
+5. Why were evaluation shims isolated in R13B?
 
 ## 16. Interview summary
 
 R13 removes command aliases after canonical implementations and parser contracts are already stable.
-R13A makes five operational entry points honest: the module path now directly names the owner, old
-paths fail explicitly, and offline tests prove the command surface and guard ordering are unchanged.
+Operational and evaluation module paths now directly name their owners, old paths fail explicitly,
+and offline tests prove the command surface, governance, and guard ordering are unchanged.
 
 ## 17. Validation results and proposed commit
 
@@ -175,13 +185,26 @@ paths fail explicitly, and offline tests prove the command surface and guard ord
 | Full pytest, Python 3.11.15 | PASS — 380 tests, 1 dependency warning |
 | Docker Compose configuration | PASS |
 | Protected files, Markdown links, and diff scope | PASS — all 86 protected files unchanged |
+| R13B pre-change focused pytest, Python 3.11.15 | PASS — 90 tests |
+| R13B focused Ruff | PASS |
+| R13B focused pytest, Python 3.11.15 | PASS — 92 tests |
+| R13B full Ruff | PASS |
+| R13B full pytest, Python 3.11.15 | PASS — 382 tests, 1 dependency warning |
+| R13B Docker Compose configuration | PASS |
+| R13B protected files, links, and diff scope | PASS — all 86 protected files unchanged |
 
-Proposed R13A Conventional Commit after review:
+R13A commit:
 
 ```text
-refactor: hard-cut operational CLI shims
+f69f8e4 refactor: hard-cut operational CLI shims
+```
+
+Proposed R13B Conventional Commit after review:
+
+```text
+refactor: hard-cut evaluation CLI shims
 ```
 
 ## 18. Status
 
-`IN_PROGRESS` — R13A is complete; R13B has not started.
+`COMPLETE`

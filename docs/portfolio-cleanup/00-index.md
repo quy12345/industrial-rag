@@ -109,5 +109,6 @@ nào được thay đổi để đạt kết quả này.
 
 - R00–R07: `COMPLETE`.
 - Phase 7 là active runtime; Phase 6 chỉ là historical archive.
-- Eight top-level scripts là supported command surface; completed one-offs nằm trong archive.
+- Eight canonical commands live under `scripts.operations` and `scripts.evaluation`; R13 removed the
+  temporary top-level shims, while completed one-offs remain in the archive.
 - Round 2 chưa được bắt đầu và cần scope/approval riêng.

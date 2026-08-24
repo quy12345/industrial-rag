@@ -27,7 +27,7 @@ production -X-> evaluation or scripts
 
 Evaluation schemas, replay, candidate audits, and metric aggregation have canonical ownership in
 `evaluation/`. Current CLI implementations live in either `scripts/operations/` or
-`scripts/evaluation/`; stable top-level commands are thin `main` shims.
+`scripts/evaluation/`. R13 later removed the temporary top-level command shims.
 
 Completed research, migration, calibration, diagnostics, benchmark, and readiness workflows move to
 `scripts/archive/`. They are archived, not dropped, because their source explains historical

@@ -14,7 +14,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 SUPPORTED_CLI_OPTIONS = [
     ("scripts.operations.audit_phase7_corpus", {"--raw-dir", "--output"}),
     (
-        "scripts.evaluate_phase7_e2e",
+        "scripts.evaluation.evaluate_phase7_e2e",
         {
             "--dataset",
             "--calibration",
@@ -30,7 +30,7 @@ SUPPORTED_CLI_OPTIONS = [
         },
     ),
     (
-        "scripts.evaluate_phase7_retrieval_closure",
+        "scripts.evaluation.evaluate_phase7_retrieval_closure",
         {"--calibration", "--test", "--chunks", "--output"},
     ),
     (
@@ -60,18 +60,21 @@ SUPPORTED_CLI_OPTIONS = [
     ),
     ("scripts.operations.query_smoke", {"--output"}),
     (
-        "scripts.validate_phase7_dataset",
+        "scripts.evaluation.validate_phase7_dataset",
         {"--calibration", "--test", "--chunks", "--output"},
     ),
     ("scripts.operations.validate_query_runtime", {"--document-id"}),
 ]
 
-REMOVED_OPERATION_SHIMS = (
+REMOVED_CLI_SHIMS = (
     "scripts.audit_phase7_corpus",
     "scripts.index_phase7_corpus",
     "scripts.ingest_preview",
     "scripts.query_smoke",
     "scripts.validate_query_runtime",
+    "scripts.evaluate_phase7_e2e",
+    "scripts.evaluate_phase7_retrieval_closure",
+    "scripts.validate_phase7_dataset",
 )
 
 
@@ -127,7 +130,7 @@ def test_supported_cli_help_preserves_the_public_option_surface(
             "the following arguments are required: input",
         ),
         (
-            "scripts.evaluate_phase7_e2e",
+            "scripts.evaluation.evaluate_phase7_e2e",
             ("--dataset", "calibration"),
             "the following arguments are required: --provider-approval-token",
         ),
@@ -144,8 +147,8 @@ def test_supported_cli_invalid_arguments_fail_before_integration_access(
     assert expected_error in result.stderr
 
 
-@pytest.mark.parametrize("module", REMOVED_OPERATION_SHIMS)
-def test_removed_operation_shims_fail_instead_of_silently_redirecting(module: str) -> None:
+@pytest.mark.parametrize("module", REMOVED_CLI_SHIMS)
+def test_removed_cli_shims_fail_instead_of_silently_redirecting(module: str) -> None:
     result = _run_cli(module, "--help")
 
     assert result.returncode == 1

@@ -27,13 +27,13 @@ adapters.
 - the approval-gated Phase 7 E2E evaluator.
 
 Their reusable schemas and metrics live in `evaluation/`. Supported script implementations must not
-import private helpers from another script implementation.
+import private helpers from another script implementation. Invoke them through
+`python -m scripts.evaluation.<command>`; R13B removed the old top-level evaluation shims.
 
 ## Phase 7 E2E command
 
-`scripts/evaluation/evaluate_phase7_e2e.py` owns the current implementation. The temporary
-`scripts/evaluate_phase7_e2e.py` path remains a thin `main` shim until R13B removes all three
-evaluation shims together.
+`scripts/evaluation/evaluate_phase7_e2e.py` owns both the implementation and supported module path.
+The former `scripts.evaluate_phase7_e2e` shim was removed with the other evaluation shims in R13B.
 
 R12A introduced artifact schema v6 and source-identity v2 so current artifacts hash canonical
 application, domain, infrastructure, and evaluation owners. Historical v5 artifacts remain
@@ -71,10 +71,10 @@ scripts.operations.index_phase7_corpus
 scripts.operations.ingest_preview
 scripts.operations.query_smoke
 scripts.operations.validate_query_runtime
-scripts.validate_phase7_dataset              # temporary shim until R13B
-scripts.evaluate_phase7_retrieval_closure    # temporary shim until R13B
-scripts.evaluate_phase7_e2e                  # temporary shim until R13B
+scripts.evaluation.validate_phase7_dataset
+scripts.evaluation.evaluate_phase7_retrieval_closure
+scripts.evaluation.evaluate_phase7_e2e
 ```
 
-Canonical evaluation implementations already live under `scripts.evaluation`. The inventory,
-removed operational paths, and import boundaries are enforced by offline architecture tests.
+No Python command module remains directly under `scripts/`. The inventory, removed paths, and import
+boundaries are enforced by offline architecture tests.

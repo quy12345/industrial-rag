@@ -29,7 +29,7 @@ Use three explicit categories:
 
 R08 recorded the compatibility inventory and forbidden dependency edges as exact sets. R09 through
 R11 introduced canonical owners while the two source anchors remained unchanged. R12 performed one
-explicit provenance migration and removed the compatibility paths. R13 then hard-cuts the old
+explicit provenance migration and removed the compatibility paths. R13 then hard-cut the old
 repository-local CLI module names instead of adding another deprecation layer.
 
 The R12 E2E format uses artifact schema version 6 and source-identity version 2. Historical v5

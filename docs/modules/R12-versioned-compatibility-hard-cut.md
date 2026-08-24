@@ -9,7 +9,7 @@ facades only after moving E2E provenance and reranking diagnostics to their real
   `scripts.evaluation`, and introduced artifact schema v6 with source identity v2.
 - R12B removes 16 compatibility modules, removes the callable-based retrieval bridge, and moves
   reranking diagnostics to `evaluation.reranking`.
-- The eight top-level supported CLI shims remain until R13.
+- R13 later removed the eight top-level supported CLI shims.
 
 No retrieval algorithm, model, threshold, collection, corpus, dataset, provider, API schema, or
 answer policy changes in this module.
@@ -49,8 +49,9 @@ flow.
 
 ## 4. Input, output, and contracts
 
-The supported E2E invocation remains `python -m scripts.evaluate_phase7_e2e` with the same arguments,
-approval behavior, scoring rules, and exit statuses. Its intentional provenance changes are:
+R12 preserved the then-supported E2E invocation and its arguments, approval behavior, scoring rules,
+and exit statuses. R13 later changed only the module path to
+`python -m scripts.evaluation.evaluate_phase7_e2e`. R12's intentional provenance changes are:
 
 - default output/checkpoint names use `e2e-v6`;
 - output `schema_version` is `6`;
@@ -74,8 +75,8 @@ application, domain, infrastructure, or evaluation module.
 5. `app.application.query_service` selects/gates evidence before generation, validates source IDs,
    and constructs trusted citations.
 6. Offline reranking analysis imports `evaluation.reranking`; production does not.
-7. The supported E2E shim delegates to `scripts.evaluation.evaluate_phase7_e2e`, which composes the
-   same public runtime and sends completed executions to `evaluation.e2e`.
+7. The canonical `scripts.evaluation.evaluate_phase7_e2e` command composes the same public runtime
+   and sends completed executions to `evaluation.e2e`.
 
 ## 6. Responsibilities of changed files
 
@@ -84,7 +85,7 @@ application, domain, infrastructure, or evaluation module.
 | [`evaluation/e2e.py`](../../evaluation/e2e.py) | Pure E2E scoring, aggregation, facts, and quality gates. |
 | [`evaluation/reranking.py`](../../evaluation/reranking.py) | Provider-free reranking diagnostics and aggregation. |
 | [`scripts/evaluation/evaluate_phase7_e2e.py`](../../scripts/evaluation/evaluate_phase7_e2e.py) | Approval-gated integration composition, checkpointing, provenance, and sanitized output. |
-| [`scripts/evaluate_phase7_e2e.py`](../../scripts/evaluate_phase7_e2e.py) | Thin supported shim until R13. |
+| Historical `scripts/evaluate_phase7_e2e.py` (removed in R13B) | Temporary R12 command shim. |
 | [`app/application/reranking_service.py`](../../app/application/reranking_service.py) | Candidate preparation and reranking through explicit search ports. |
 | [`app/composition/retrieval.py`](../../app/composition/retrieval.py) | Concrete model/Qdrant adapter construction and injection. |
 | [`app/domain/retrieval.py`](../../app/domain/retrieval.py) | Retrieval records and state-bound application ports. |
@@ -124,7 +125,7 @@ After R12
   evaluation/e2e.py                  evaluator outside production
   scripts/evaluation/evaluate_phase7_e2e.py
                                      canonical integration implementation
-  scripts/evaluate_phase7_e2e.py     temporary supported CLI shim
+  scripts/evaluate_phase7_e2e.py     temporary R12 CLI shim; removed in R13B
 ```
 
 ## 9. Design decisions and trade-offs
@@ -141,8 +142,8 @@ Archived Phase 6/7 workflows remain byte-preserved provenance. They are unsuppor
 the active import graph, and are not guaranteed to import after canonical owners evolve. Git is the
 supported mechanism for reconstructing an old runnable state.
 
-R13 owns the common top-level CLI cut so R12 does not combine Python package ownership with command
-renaming.
+R13 later completed the common top-level CLI cut so R12 did not combine Python package ownership
+with command renaming.
 
 ## 10. Tests and the behavior each test protects
 
@@ -204,7 +205,7 @@ from evaluation.reranking import evaluate_reranked_cases
 
 ## 14. Current limitations
 
-- The eight supported top-level CLI shims remain until R13.
+- R13 removed all eight top-level CLI shims.
 - Archived workflows are provenance, not a supported runnable compatibility surface.
 - Existing v5 artifacts remain historical receipts and cannot be resumed as v6.
 - No real provider/model/Qdrant integration run is part of R12.
@@ -215,7 +216,7 @@ from evaluation.reranking import evaluate_reranked_cases
 2. Why do dense and sparse adapters bind infrastructure state before injection?
 3. Why are reranking metrics in `evaluation` rather than `app.application`?
 4. Why must a v1 checkpoint fail under source identity v2?
-5. Why does R13 own top-level CLI removal?
+5. Why was top-level CLI removal isolated in R13?
 6. How can an archived workflow be reconstructed without keeping active facades?
 
 ## 16. Interview summary

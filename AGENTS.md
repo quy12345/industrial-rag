@@ -26,9 +26,9 @@ The repository implementation completed this narrowly scoped transition on
 retrieval tuning, Phase 7 data changes, re-indexing, deletion of legacy Qdrant collections, or an
 automatic start of Round 2.
 
-The separately approved surface-simplification sequence has completed R08–R12 and R13A. R12 removed
-the legacy root `app.*` facades after versioning E2E provenance. R13A removed the five operational
-CLI shims; R13B (evaluation CLI hard cut) has not started and still requires user review.
+The separately approved surface-simplification sequence has completed R08–R13. R12 removed the
+legacy root `app.*` facades after versioning E2E provenance. R13 removed all eight top-level CLI
+shims; supported commands run directly through `scripts.operations` or `scripts.evaluation`.
 
 ## 2. Working language
 
