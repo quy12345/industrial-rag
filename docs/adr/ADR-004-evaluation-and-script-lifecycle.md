@@ -34,17 +34,16 @@ Completed research, migration, calibration, diagnostics, benchmark, and readines
 artifacts and engineering decisions. Former top-level imports fail instead of silently redirecting
 users to unsupported behavior.
 
-Two source-identity anchors remain where they are:
+At Round 1 closure, two source-identity anchors remained in place:
 
 - `scripts/evaluate_phase7_e2e.py`, blob
   `7ce4dc9c180fd675eb89e5c06844766b664c6b69`;
 - `app/evaluation_e2e.py`, blob
   `b8be722d43bc34c8bec00dfc2574d0a6341ab738`.
 
-Compatibility anchors `app.evaluation`, `app.phase7`, and `app.phase7_optimization` remain documented
-because current artifact or public-import identity makes removal riskier than their small surface.
-The expired `app.candidate_audit` and `app.phase7_replay` paths are removed after repository consumers
-move to canonical evaluation modules.
+R12 later versioned E2E provenance, moved both implementations to canonical owners, and removed the
+remaining compatibility layer. Git history retains the exact anchor blobs; ADR-005 records the
+versioned migration and hard cut.
 
 ## Consequences
 
@@ -53,8 +52,8 @@ move to canonical evaluation modules.
 - Historical code remains inspectable without cluttering the active command surface.
 - Source pins limit otherwise desirable moves; changing them requires a separate versioned artifact
   migration, outside Round 1.
-- Archive imports are maintained only enough to preserve provenance and `--help`; archived workflows
-  are not current product contracts.
+- Archive source is preserved for provenance, but current-tree import or `--help` compatibility is
+  not guaranteed; archived workflows are not current product contracts.
 
 ## Rejected alternatives
 

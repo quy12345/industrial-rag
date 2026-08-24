@@ -4,24 +4,19 @@ from __future__ import annotations
 
 import pytest
 
-import app.content_identity as compatibility_content_identity
-import app.evidence_selection as evidence_facade
 from app.domain import content_identity
-from app.domain import evidence as evidence_policy
+from app.domain.evidence import (
+    EvidenceGate,
+    EvidenceGateDecision,
+    EvidenceSelectionError,
+    select_evidence_candidates,
+)
 from app.domain.retrieval import RetrievalCandidate
-from app.evidence_selection import EvidenceSelectionError, select_evidence_candidates
-from app.query_service import EvidenceGate, EvidenceGateDecision
 
 
 def test_evidence_content_identity_normalizes_and_hashes_exactly() -> None:
     text = "  Disconnect\tPOWER\r\n before  service. "
 
-    assert compatibility_content_identity.normalize_evidence_content is (
-        content_identity.normalize_evidence_content
-    )
-    assert compatibility_content_identity.evidence_content_fingerprint is (
-        content_identity.evidence_content_fingerprint
-    )
     assert content_identity.normalize_evidence_content(text) == (
         "disconnect power before service."
     )
@@ -49,18 +44,6 @@ def _candidate(
         rerank_rank=1,
         metadata={"document_role": role},
     )
-
-
-def test_evidence_compatibility_exports_resolve_to_domain_policy() -> None:
-    assert evidence_facade.EvidenceSelectionError is evidence_policy.EvidenceSelectionError
-    assert evidence_facade.EvidenceDuplicateGroup is evidence_policy.EvidenceDuplicateGroup
-    assert evidence_facade.EvidenceSelection is evidence_policy.EvidenceSelection
-    assert evidence_facade.select_evidence_candidates is evidence_policy.select_evidence_candidates
-    assert evidence_facade.select_evidence_candidates_for_role is (
-        evidence_policy.select_evidence_candidates_for_role
-    )
-    assert EvidenceGate is evidence_policy.EvidenceGate
-    assert EvidenceGateDecision is evidence_policy.EvidenceGateDecision
 
 
 def test_cross_document_exact_duplicate_prefers_query_role_then_fills_top_k() -> None:

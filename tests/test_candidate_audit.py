@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.domain import retrieval as candidate_assembly
-from app.models import RetrievalCandidate, RetrievedChunk
+from app.domain.retrieval import RetrievalCandidate, RetrievedChunk
 from evaluation.candidate_audit import (
     aggregate_candidate_audit,
     audit_case,

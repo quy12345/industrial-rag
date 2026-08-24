@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-import app.citations as citation_facade
-from app.citations import build_citations, validate_generated_answer
-from app.domain import citations as citation_policy
+from app.domain.citations import build_citations, validate_generated_answer
+from app.domain.generation import GeneratedAnswer
+from app.domain.retrieval import RetrievalCandidate
 from app.errors import CitationValidationError
-from app.generation import GeneratedAnswer
-from app.models import RetrievalCandidate
 
 
 def _candidate(chunk_id: str = "chunk-a", *, document_id: str = "manual-a"):
@@ -31,12 +29,6 @@ def _output(answer="Có.", source_ids=None, insufficient=False):
         source_ids=["S1"] if source_ids is None else source_ids,
         insufficient_evidence=insufficient,
     )
-
-
-def test_citation_facade_exports_canonical_domain_policy() -> None:
-    assert citation_facade.ValidatedGeneration is citation_policy.ValidatedGeneration
-    assert citation_facade.validate_generated_answer is citation_policy.validate_generated_answer
-    assert citation_facade.build_citations is citation_policy.build_citations
 
 
 def test_valid_single_multiple_and_duplicate_source_ids() -> None:

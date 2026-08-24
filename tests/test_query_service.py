@@ -6,19 +6,17 @@ import logging
 
 import pytest
 
-from app import query_service as compatibility_query_service
 from app.application.query_service import QueryService
 from app.config import Settings
 from app.domain.evidence import EvidenceGate
-from app.domain.retrieval import QueryRetrievalResult
+from app.domain.generation import GeneratedAnswer, GenerationResult, TokenUsage
+from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate
 from app.errors import (
     GenerationValidationError,
     LLMRefusalError,
     LLMTimeoutError,
     RerankerUnavailableError,
 )
-from app.generation import GeneratedAnswer, GenerationResult, TokenUsage
-from app.models import RetrievalCandidate
 from app.request_context import request_id
 
 
@@ -94,11 +92,6 @@ def _service(retriever=None, generator=None, *, threshold=None, **settings):
         generator=generator or FakeGenerator(),
         settings=Settings(**settings),
     )
-
-
-def test_compatibility_facade_preserves_query_service_identity() -> None:
-    assert compatibility_query_service.QueryService is QueryService
-    assert compatibility_query_service.EvidenceGate is EvidenceGate
 
 
 def test_valid_grounded_query_preserves_metadata_and_timings() -> None:

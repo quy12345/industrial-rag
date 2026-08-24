@@ -11,39 +11,23 @@ import pytest
 from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
-import app.retrieval as retrieval
 from app.config import Settings
-from app.errors import RetrievalError as CanonicalRetrievalError
-from app.infrastructure.qdrant import client as qdrant_client_adapter
-from app.infrastructure.qdrant import dense as dense_infrastructure
-from app.infrastructure.qdrant import manifests as dense_manifests
-from app.models import DocumentChunk
-from app.retrieval import (
-    RetrievalError,
+from app.domain.documents import DocumentChunk
+from app.errors import RetrievalError
+from app.infrastructure.qdrant.dense import (
     build_embedding_text,
     build_point_id,
     create_embedding_model,
     dense_search,
+    document_filter,
     ensure_dense_collection,
     get_indexed_chunk_ids,
     index_chunks,
-    validate_index_manifest,
-    write_index_manifest,
 )
+from app.infrastructure.qdrant.manifests import validate_index_manifest, write_index_manifest
 
 COLLECTION = "test_chunks"
 VECTOR_NAME = "dense"
-
-
-def test_retrieval_facade_exports_canonical_infrastructure_symbols() -> None:
-    assert retrieval.RetrievalError is CanonicalRetrievalError
-    assert retrieval.create_qdrant_client is qdrant_client_adapter.create_qdrant_client
-    assert retrieval.build_point_id is dense_infrastructure.build_point_id
-    assert retrieval.dense_search is dense_infrastructure.dense_search
-    assert retrieval.index_chunks is dense_infrastructure.index_chunks
-    assert retrieval.ensure_dense_collection is dense_infrastructure.ensure_dense_collection
-    assert retrieval.write_index_manifest is dense_manifests.write_index_manifest
-    assert retrieval.validate_index_manifest is dense_manifests.validate_index_manifest
 
 
 class FakeEmbeddingModel:
@@ -270,7 +254,7 @@ def test_indexing_payload_and_reindex_behavior() -> None:
 
 
 def test_document_filter_snapshot_is_exact() -> None:
-    assert retrieval._document_filter("manual-a").model_dump(
+    assert document_filter("manual-a").model_dump(
         mode="json", exclude_none=True
     ) == {"must": [{"key": "document_id", "match": {"value": "manual-a"}}]}
 

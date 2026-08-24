@@ -63,10 +63,12 @@ configuration/composition, clarified ingestion/indexing and retrieval/reranking 
 grounded query orchestration, thinned FastAPI/CLI/Streamlit adapters, and moved offline evaluation to
 its canonical package.
 
-Completed research and calibration workflows were archived rather than deleted. Eight supported
-top-level commands remain, mostly as thin compatibility shims. Two source-hashed E2E files stay in
-place as explicit provenance exceptions. The cleanup did not tune algorithms, modify frozen data,
-re-index Qdrant, call a provider, or claim new benchmark results.
+Completed research and calibration workflows were archived rather than deleted. A later
+simplification pass versioned E2E provenance, moved scoring to its canonical evaluation owner, and
+removed the obsolete root `app.*` facade layer; Git history retains the original source anchors.
+Eight supported top-level command shims remain until their common R13 hard cut. The cleanup did not
+tune algorithms, modify frozen data, re-index Qdrant, call a provider, or claim new benchmark
+results.
 
 ## What changed in the architecture
 

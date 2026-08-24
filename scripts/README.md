@@ -38,6 +38,9 @@ R12A introduced artifact schema v6 and source-identity v2 so current artifacts h
 application, domain, infrastructure, and evaluation owners. Historical v5 artifacts remain
 immutable, and their checkpoints fail closed under the new identity.
 
+R12B removed the old root `app.*` facades. Supported commands import canonical owners only;
+archived workflows remain provenance and are not guaranteed to import under the current tree.
+
 This evaluator can call a real provider. Do not execute it without separate provider/data-egress
 approval. Held-out execution remains governance-sensitive, and exposed held-out v2 must not be used
 for tuning.

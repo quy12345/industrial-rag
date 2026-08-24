@@ -4,44 +4,23 @@ from __future__ import annotations
 
 import pytest
 
-import app.phase7_optimization as ranking_facade
-from app.domain.policies import fusion as fusion_policy
-from app.domain.policies import list_completeness as completeness_policy
-from app.domain.policies import query_roles as query_role_policy
-from app.domain.policies import ranking as ranking_policy
-from app.domain.retrieval import RetrievalCandidate
-from app.phase7_optimization import (
+from app.domain.policies.fusion import (
     Phase7FusionProfile,
     Phase7OptimizationError,
+    apply_role_aware_rank_fusion,
+    select_coverage_preserving_candidates,
+)
+from app.domain.policies.list_completeness import (
     apply_list_completeness_from_metadata,
     apply_relation_list_completeness_fallback,
     apply_relation_list_completeness_from_metadata,
-    apply_role_aware_rank_fusion,
     infer_list_intent,
-    infer_query_role,
     infer_relation_list_intent,
     list_completeness_features,
     relation_list_completeness_features,
-    select_coverage_preserving_candidates,
 )
-
-
-def test_phase7_facade_exports_canonical_ranking_policy() -> None:
-    assert ranking_facade.Phase7FusionProfile is ranking_policy.Phase7FusionProfile
-    assert ranking_policy.Phase7FusionProfile is fusion_policy.Phase7FusionProfile
-    assert ranking_facade.Phase7OptimizationError is ranking_policy.Phase7OptimizationError
-    assert ranking_policy.Phase7OptimizationError is fusion_policy.Phase7OptimizationError
-    assert ranking_facade.infer_query_role is ranking_policy.infer_query_role
-    assert ranking_policy.infer_query_role is query_role_policy.infer_query_role
-    assert (
-        ranking_policy.apply_relation_list_completeness_fallback
-        is completeness_policy.apply_relation_list_completeness_fallback
-    )
-    assert ranking_policy.fuse_weighted_rrf is fusion_policy.fuse_weighted_rrf
-    assert (
-        ranking_facade.PHASE7_CALIBRATION_FUSION_PROFILE
-        is fusion_policy.PHASE7_CALIBRATION_FUSION_PROFILE
-    )
+from app.domain.policies.query_roles import infer_query_role
+from app.domain.retrieval import RetrievalCandidate
 
 
 def _candidate(

@@ -1,4 +1,4 @@
-"""Compatibility ASGI export for ``uvicorn app.main:app``."""
+"""ASGI entry point for ``uvicorn app.main:app``."""
 
 from app.api.app import create_app
 

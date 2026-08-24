@@ -7,8 +7,8 @@ from app.api.app import create_app
 from app.application.query_service import QueryService
 from app.bootstrap import get_query_service
 from app.config import Settings, get_settings
+from app.errors import RetrievalError
 from app.main import app
-from app.retrieval import RetrievalError
 
 client = TestClient(app)
 

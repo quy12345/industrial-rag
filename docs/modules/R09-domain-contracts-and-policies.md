@@ -71,8 +71,8 @@ identity until R12. The frozen Phase 7 profile object is unchanged.
 | [`app/domain/policies/query_roles.py`](../../app/domain/policies/query_roles.py) | Query normalization, cue matching, role, and confidence inference. |
 | [`app/domain/policies/list_completeness.py`](../../app/domain/policies/list_completeness.py) | List intent, structural features, and bounded completeness ordering. |
 | [`app/domain/policies/fusion.py`](../../app/domain/policies/fusion.py) | Generic/weighted RRF, frozen profile, coverage selection, and rank priors. |
-| [`app/domain/policies/ranking.py`](../../app/domain/policies/ranking.py) | Temporary policy re-export for source compatibility. |
-| [`app/models.py`](../../app/models.py) | Temporary record/DTO re-export for source compatibility. |
+| Historical `app/domain/policies/ranking.py` (removed in R12B) | Temporary policy re-export for source compatibility. |
+| Historical `app/models.py` (removed in R12B) | Temporary record/DTO re-export for source compatibility. |
 | [`app/application/reranking_service.py`](../../app/application/reranking_service.py) | Orchestrates the focused policy interfaces. |
 | [`evaluation/replay.py`](../../evaluation/replay.py) | Uses canonical rank-policy interfaces for offline replay. |
 

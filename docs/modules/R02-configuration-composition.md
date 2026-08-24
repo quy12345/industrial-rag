@@ -141,11 +141,11 @@ it; model and provider construction remain absent from that path.
   eagerly importing policies or adapters.
 - [`app/config.py`](../../app/config.py) remains the public backend settings facade and now owns atomic
   profile application plus settings-to-contract validation.
-- [`app/retrieval_runtime.py`](../../app/retrieval_runtime.py) owns concrete retrieval construction and
+- Historical `app/retrieval_runtime.py` (removed in R12B) owned concrete retrieval construction and
   explicitly re-exports moved symbols for compatibility until R07.
 - [`app/bootstrap.py`](../../app/bootstrap.py) owns query-service construction, the cached service
   accessor, and lazy read-only readiness composition.
-- [`app/query_service.py`](../../app/query_service.py) now owns orchestration only and depends on
+- Historical `app/query_service.py` (removed in R12B) owned orchestration only and depended on
   injected retrieval/generation contracts.
 - [`app/api/query.py`](../../app/api/query.py) obtains its service dependency from the composition root.
 - [`app/api/app.py`](../../app/api/app.py) owns FastAPI construction, middleware, health/readiness

@@ -125,9 +125,9 @@ or Qdrant access. Application failures map back to the same CLI messages and exi
   supported document types, stable IDs, canonical keys, and pure page batching.
 - [`app/infrastructure/ingestion/docling.py`](../../app/infrastructure/ingestion/docling.py) owns lazy
   Docling/PDFium imports, conversion, status validation, and SDK error normalization.
-- [`app/ingestion.py`](../../app/ingestion.py) remains the compatibility facade and coordinates file
+- Historical `app/ingestion.py` (removed in R12B) was the compatibility facade and coordinated file
   validation, conversion ranges, normalization, occurrence tracking, and atomic JSONL output.
-- [`app/models.py`](../../app/models.py) explicitly re-exports the canonical `DocumentChunk` while
+- Historical `app/models.py` (removed in R12B) re-exported the canonical `DocumentChunk` while
   retaining existing API and retrieval models.
 - [`tests/test_ingestion.py`](../../tests/test_ingestion.py) protects exact IDs, facade identity,
   import laziness, conversion behavior, normalization, ordering, and atomic output.
@@ -144,9 +144,9 @@ or Qdrant access. Application failures map back to the same CLI messages and exi
   independent atomic dense and hybrid manifest contracts.
 - [`app/infrastructure/qdrant/hybrid.py`](../../app/infrastructure/qdrant/hybrid.py) owns sparse model
   construction, BM25 average-length preprocessing, hybrid schema validation, and safe hybrid indexing.
-- [`app/retrieval.py`](../../app/retrieval.py) remains a compatibility facade and retains dense search
+- Historical `app/retrieval.py` (removed in R12B) was a compatibility facade and retained dense search
   until the R04 retrieval boundary is implemented.
-- [`app/hybrid_retrieval.py`](../../app/hybrid_retrieval.py) remains a compatibility facade and owns
+- Historical `app/hybrid_retrieval.py` (removed in R12B) was a compatibility facade and owned
   sparse query mapping, component ranking, hybrid query coordination, and RRF until R04.
 - [`tests/test_retrieval.py`](../../tests/test_retrieval.py) additionally protects exact dense UUID,
   payload/filter/manifest snapshots, mutation ordering, and facade identity.

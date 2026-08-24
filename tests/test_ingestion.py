@@ -9,11 +9,9 @@ from types import SimpleNamespace
 import pytest
 from docling.datamodel.base_models import ConversionStatus
 
-import app.ingestion as compatibility_ingestion
 import scripts.ingest_preview as compatibility_ingest_preview
 from app.domain import documents
 from app.domain.documents import DocumentChunk
-from app.infrastructure.ingestion import docling as docling_adapter
 from app.infrastructure.ingestion import pipeline as ingestion
 from app.infrastructure.ingestion.jsonl import write_chunks_jsonl
 from scripts.operations import ingest_preview
@@ -24,21 +22,9 @@ def test_ingestion_preview_shim_preserves_supported_entry_point_identity() -> No
     assert compatibility_ingest_preview._build_parser is ingest_preview._build_parser
 
 
-def test_legacy_ingestion_exports_are_canonical_domain_objects() -> None:
-    assert DocumentChunk is documents.DocumentChunk
-    assert compatibility_ingestion.DocumentChunk is documents.DocumentChunk
-    assert compatibility_ingestion.IngestionError is documents.IngestionError
-    assert compatibility_ingestion.build_document_id is documents.build_document_id
-    assert compatibility_ingestion.build_chunk_id is documents.build_chunk_id
-    assert compatibility_ingestion.build_page_batches is documents.build_page_batches
-    assert compatibility_ingestion.get_pdf_page_count is docling_adapter.get_pdf_page_count
-    assert compatibility_ingestion.ingest_document is ingestion.ingest_document
-    assert compatibility_ingestion.write_chunks_jsonl is write_chunks_jsonl
-
-
-def test_importing_ingestion_does_not_load_docling_or_pdfium() -> None:
+def test_importing_canonical_ingestion_does_not_load_docling_or_pdfium() -> None:
     source = (
-        "import sys; import app.ingestion; "
+        "import sys; import app.infrastructure.ingestion.pipeline; "
         "assert not any(name == 'docling' or name.startswith('docling.') "
         "for name in sys.modules); "
         "assert 'pypdfium2' not in sys.modules"

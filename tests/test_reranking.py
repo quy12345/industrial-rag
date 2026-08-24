@@ -4,35 +4,33 @@ from __future__ import annotations
 
 import math
 import sys
-from inspect import signature
+from collections.abc import Callable
 from types import ModuleType
 
 import pytest
 from pydantic import ValidationError
 
-import app.reranking as reranking
-from app.application import reranking_service
-from app.config import Settings
-from app.domain import reranking as reranking_contracts
-from app.evaluation import EvaluationCase
-from app.infrastructure.models import reranker as reranker_adapter
-from app.infrastructure.qdrant import dense as dense_adapter
-from app.infrastructure.qdrant import hybrid as hybrid_adapter
-from app.models import RetrievalCandidate, RetrievedChunk
-from app.reranking import (
+from app.application.reranking_service import (
     CANDIDATE_TEXT_FORMAT,
-    CrossEncoderScore,
     RerankExecution,
-    RerankingError,
     RerankPipeline,
     build_candidate_pool,
     build_candidate_text,
-    classify_rerank_failure,
     deduplicate_candidates_by_content,
-    evaluate_reranked_cases,
     rerank_candidates,
 )
-from scripts.archive.phase6 import evaluate_reranking, search_reranked
+from app.config import Settings
+from app.domain.reranking import CrossEncoderScore, RerankingError
+from app.domain.retrieval import RetrievalCandidate, RetrievedChunk
+from app.infrastructure.models.reranker import (
+    FastEmbedCrossEncoder,
+    fastembed_model_metadata,
+)
+from evaluation.reranking import (
+    classify_rerank_failure,
+    evaluate_reranked_cases,
+)
+from evaluation.retrieval import EvaluationCase
 
 
 class FakeCrossEncoder:
@@ -53,27 +51,52 @@ class FailingCrossEncoder:
         raise RuntimeError("model exploded")
 
 
-def test_compatibility_facade_preserves_runtime_symbol_identity() -> None:
-    runtime_symbols = (
-        "CandidatePool",
-        "RerankExecution",
-        "build_candidate_pool",
-        "build_candidate_text",
-        "deduplicate_candidates_by_content",
-        "execute_rerank",
-        "rerank_candidates",
-    )
+class DenseSearchStub:
+    def __init__(
+        self,
+        callback: Callable[..., list[RetrievedChunk]],
+    ) -> None:
+        self._callback = callback
 
-    for name in runtime_symbols:
-        assert getattr(reranking, name) is getattr(reranking_service, name)
-    assert issubclass(reranking.RerankPipeline, reranking_service.RerankPipeline)
+    def search(
+        self,
+        query: str,
+        *,
+        collection_name: str,
+        limit: int,
+        document_id: str | None = None,
+        score_threshold: float | None = None,
+    ) -> list[RetrievedChunk]:
+        return self._callback(
+            query,
+            collection_name=collection_name,
+            limit=limit,
+            document_id=document_id,
+            score_threshold=score_threshold,
+        )
 
 
-def test_compatibility_pipeline_preserves_canonical_search_defaults() -> None:
-    parameters = signature(reranking.RerankPipeline).parameters
+class SparseSearchStub:
+    def __init__(
+        self,
+        callback: Callable[..., list[RetrievalCandidate]],
+    ) -> None:
+        self._callback = callback
 
-    assert parameters["dense_search_fn"].default is dense_adapter.dense_search
-    assert parameters["sparse_search_fn"].default is hybrid_adapter.sparse_search
+    def search(
+        self,
+        query: str,
+        *,
+        collection_name: str,
+        limit: int,
+        document_id: str | None = None,
+    ) -> list[RetrievalCandidate]:
+        return self._callback(
+            query,
+            collection_name=collection_name,
+            limit=limit,
+            document_id=document_id,
+        )
 
 
 def _candidate(
@@ -141,14 +164,6 @@ def test_settings_and_candidate_model_are_backward_compatible() -> None:
         Settings(rerank_batch_size=0)
 
 
-def test_reranking_facade_exports_canonical_cross_encoder_contracts() -> None:
-    assert reranking.CrossEncoderScore is reranking_contracts.CrossEncoderScore
-    assert reranking.CrossEncoder is reranking_contracts.CrossEncoder
-    assert reranking.RerankingError is reranking_contracts.RerankingError
-    assert reranking.FastEmbedCrossEncoder is reranker_adapter.FastEmbedCrossEncoder
-    assert reranking.fastembed_model_metadata is reranker_adapter.fastembed_model_metadata
-
-
 def test_fastembed_adapter_is_lazy_reused_and_preserves_sdk_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -177,7 +192,7 @@ def test_fastembed_adapter_is_lazy_reused_and_preserves_sdk_contract(
     monkeypatch.setitem(sys.modules, "fastembed.rerank", rerank_module)
     monkeypatch.setitem(sys.modules, "fastembed.rerank.cross_encoder", cross_encoder_module)
 
-    adapter = reranking.FastEmbedCrossEncoder("model-a", cache_dir="cache", threads=3)
+    adapter = FastEmbedCrossEncoder("model-a", cache_dir="cache", threads=3)
     assert adapter._model is None
     assert list(adapter.score(" query ", ["first", "second"], batch_size=4)) == [
         CrossEncoderScore(candidate_index=0, score=0.25),
@@ -200,7 +215,7 @@ def test_fastembed_adapter_is_lazy_reused_and_preserves_sdk_contract(
         (" query ", ["first", "second"], 4),
         ("again", ["first", "second"], 2),
     ]
-    assert reranking.fastembed_model_metadata("MODEL-A") == {
+    assert fastembed_model_metadata("MODEL-A") == {
         "model": "model-a",
         "license": "apache-2.0",
     }
@@ -363,17 +378,12 @@ def test_pipeline_content_dedup_is_opt_in() -> None:
         return [_candidate("sparse", sparse_rank=1).model_copy(update={"text": " SAME "})]
 
     pipeline = RerankPipeline(
-        client=object(),
-        dense_embedding_model=object(),
-        sparse_embedding_model=object(),
+        dense_searcher=DenseSearchStub(fake_dense),
+        sparse_searcher=SparseSearchStub(fake_sparse),
         cross_encoder=FakeCrossEncoder(),
         dense_collection="v1",
         hybrid_collection="v2",
-        dense_vector_name="dense",
-        sparse_vector_name="sparse",
         deduplicate_content=True,
-        dense_search_fn=fake_dense,
-        sparse_search_fn=fake_sparse,
     )
     execution = pipeline.search("q", strategy="union")
     assert len(execution.candidates_before_rerank) == 1
@@ -392,16 +402,11 @@ def test_pipeline_preserves_document_filter_and_uses_correct_dense_collection() 
         return [_candidate("sparse", sparse_rank=1, document_id=kwargs["document_id"])]
 
     pipeline = RerankPipeline(
-        client=object(),
-        dense_embedding_model=object(),
-        sparse_embedding_model=object(),
+        dense_searcher=DenseSearchStub(fake_dense),
+        sparse_searcher=SparseSearchStub(fake_sparse),
         cross_encoder=FakeCrossEncoder(),
         dense_collection="v1",
         hybrid_collection="v2",
-        dense_vector_name="dense",
-        sparse_vector_name="sparse",
-        dense_search_fn=fake_dense,
-        sparse_search_fn=fake_sparse,
     )
     pipeline.prepare_pool("q", strategy="union", document_id="manual-b")
     assert calls == [("v1", "manual-b"), ("v2", "manual-b")]
@@ -410,7 +415,7 @@ def test_pipeline_preserves_document_filter_and_uses_correct_dense_collection() 
     assert calls == [("v2", "manual-b"), ("v2", "manual-b")]
 
 
-def test_pipeline_from_searchers_preserves_bound_adapter_contract() -> None:
+def test_pipeline_preserves_bound_adapter_contract() -> None:
     calls: list[tuple[str, str, str, int, str | None, float | None]] = []
 
     class DensePort:
@@ -434,7 +439,7 @@ def test_pipeline_from_searchers_preserves_bound_adapter_contract() -> None:
             calls.append(("sparse", query, collection_name, limit, document_id, None))
             return [_candidate("sparse", sparse_rank=1, document_id=document_id)]
 
-    pipeline = reranking_service.RerankPipeline.from_searchers(
+    pipeline = RerankPipeline(
         dense_searcher=DensePort(),
         sparse_searcher=SparsePort(),
         cross_encoder=FakeCrossEncoder(),
@@ -461,22 +466,17 @@ def test_pipeline_attaches_only_configured_trusted_document_context() -> None:
         return [_candidate("sparse", sparse_rank=1, document_id="manual-b")]
 
     pipeline = RerankPipeline(
-        client=object(),
-        dense_embedding_model=object(),
-        sparse_embedding_model=object(),
+        dense_searcher=DenseSearchStub(fake_dense),
+        sparse_searcher=SparseSearchStub(fake_sparse),
         cross_encoder=FakeCrossEncoder(),
         dense_collection="v1",
         hybrid_collection="v2",
-        dense_vector_name="dense",
-        sparse_vector_name="sparse",
         document_contexts={
             "manual-a": {
                 "document_title": "Installation Manual",
                 "document_role": "installation",
             }
         },
-        dense_search_fn=fake_dense,
-        sparse_search_fn=fake_sparse,
     )
     pool = pipeline.prepare_pool("q", strategy="union").candidates
     dense = next(candidate for candidate in pool if candidate.chunk_id == "dense")
@@ -492,23 +492,18 @@ def test_pipeline_expands_sparse_query_then_rrf_prunes_before_fixed_rerank_budge
     def fake_dense(*args, **kwargs):
         return [_dense(f"d{index}", 1.0 - index / 10) for index in range(4)]
 
-    def fake_sparse(*args, **kwargs):
-        sparse_queries.append(args[1])
+    def fake_sparse(query, **kwargs):
+        sparse_queries.append(query)
         return [_candidate(f"s{index}", sparse_rank=index + 1) for index in range(4)]
 
     pipeline = RerankPipeline(
-        client=object(),
-        dense_embedding_model=object(),
-        sparse_embedding_model=object(),
+        dense_searcher=DenseSearchStub(fake_dense),
+        sparse_searcher=SparseSearchStub(fake_sparse),
         cross_encoder=FakeCrossEncoder(),
         dense_collection="v1",
         hybrid_collection="v2",
-        dense_vector_name="dense",
-        sparse_vector_name="sparse",
         sparse_query_transform=lambda query: f"{query} expanded",
         union_rrf_prune_limit=3,
-        dense_search_fn=fake_dense,
-        sparse_search_fn=fake_sparse,
     )
     pool = pipeline.prepare_pool("q", strategy="union")
     assert sparse_queries == ["q expanded"]
@@ -570,37 +565,6 @@ def test_failure_classification(candidate_rank, final_rank, expected) -> None:
     assert classify_rerank_failure(candidate_rank=candidate_rank, final_rank=final_rank) == expected
 
 
-def test_cli_requires_strategy_and_rejects_invalid_final_limit() -> None:
-    parser = search_reranked._build_parser()
-    args = parser.parse_args(["question", "--strategy", "union", "--limit", "5"])
-    assert args.strategy == "union"
-    with pytest.raises(SystemExit):
-        parser.parse_args(["question"])
-    with pytest.raises(SystemExit):
-        parser.parse_args(["question", "--strategy", "sparse", "--limit", "0"])
-
-
-def test_evaluation_cli_supports_model_free_comparison_rebuild() -> None:
-    args = evaluate_reranking._build_parser().parse_args(["--comparison-only"])
-    assert args.comparison_only is True
-    assert args.strategy == "all"
-
-
-def test_ranking_gate_can_pass_when_latency_gate_fails() -> None:
-    summary = {
-        "quality_gate": {
-            "critical_pairs_top5": {"actual": 3, "target": 3},
-            "hit_rate_at_5": {"actual": 0.733, "target": 0.633},
-            "mrr_at_5": {"actual": 0.529, "target": 0.485},
-            "warm_total_p95_ms": {"actual": 9879.69, "target_less_than": 1500.0},
-            "pass": False,
-        }
-    }
-    assert evaluate_reranking._ranking_gates_pass(summary)
-
-
 def test_importing_module_does_not_construct_fastembed_model() -> None:
-    import app.reranking as reranking
-
-    adapter = reranking.FastEmbedCrossEncoder("not-loaded")
+    adapter = FastEmbedCrossEncoder("not-loaded")
     assert adapter._model is None

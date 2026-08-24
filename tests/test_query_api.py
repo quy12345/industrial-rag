@@ -6,10 +6,10 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from app import models as compatibility_models
 from app.api.app import create_app
+from app.application.query_service import QueryExecution, QueryTimings
 from app.config import get_settings
-from app.contracts.query import Citation, QueryRequest, QueryResponse
+from app.contracts.query import Citation, QueryResponse
 from app.errors import (
     LLMNotConfiguredError,
     LLMTimeoutError,
@@ -17,13 +17,6 @@ from app.errors import (
     RerankerUnavailableError,
     RetrievalUnavailableError,
 )
-from app.query_service import QueryExecution, QueryTimings
-
-
-def test_query_contract_facade_preserves_schema_class_identity() -> None:
-    assert compatibility_models.QueryRequest is QueryRequest
-    assert compatibility_models.Citation is Citation
-    assert compatibility_models.QueryResponse is QueryResponse
 
 
 class FakeService:

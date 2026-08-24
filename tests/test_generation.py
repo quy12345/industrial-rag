@@ -7,10 +7,15 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.generation as generation_facade
-from app.application import generation_prompt
+from app.application.generation_prompt import (
+    HUMAN_PROMPT,
+    SYSTEM_PROMPT,
+    build_correction_text,
+    format_evidence,
+)
 from app.config import Settings
-from app.domain import generation as generation_contracts
+from app.domain.generation import GeneratedAnswer
+from app.domain.retrieval import RetrievalCandidate
 from app.errors import (
     GenerationValidationError,
     LLMNotConfiguredError,
@@ -18,14 +23,7 @@ from app.errors import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
-from app.generation import (
-    SYSTEM_PROMPT,
-    GeneratedAnswer,
-    LangChainOpenAIGenerator,
-    format_evidence,
-)
-from app.infrastructure.generation import langchain_structured as generation_adapter
-from app.models import RetrievalCandidate
+from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
 
 
 def _candidate(
@@ -92,7 +90,7 @@ def _adapter(result=None, *, error=None, **settings_overrides):
         model_kwargs.update(kwargs)
         return model
 
-    adapter = LangChainOpenAIGenerator(
+    adapter = _generator(
         Settings(_env_file=None, openai_api_key="secret", **settings_overrides),
         model_factory=model_factory,
         prompt_factory=lambda messages: prompt,
@@ -104,22 +102,13 @@ def _bundle():
     return format_evidence([_candidate("a")], max_chars=4_000)
 
 
-def test_generation_facade_exports_canonical_contracts_and_prompt_policy() -> None:
-    assert generation_facade.GeneratedAnswer is generation_contracts.GeneratedAnswer
-    assert generation_facade.TokenUsage is generation_contracts.TokenUsage
-    assert generation_facade.EvidenceBundle is generation_contracts.EvidenceBundle
-    assert generation_facade.GenerationResult is generation_contracts.GenerationResult
-    assert generation_facade.AnswerGenerator is generation_contracts.AnswerGenerator
-    assert generation_facade.SYSTEM_PROMPT is generation_prompt.SYSTEM_PROMPT
-    assert generation_facade.HUMAN_PROMPT is generation_prompt.HUMAN_PROMPT
-    assert generation_facade.format_evidence is generation_prompt.format_evidence
-    assert (
-        generation_facade.LangChainStructuredGenerator
-        is generation_adapter.LangChainStructuredGenerator
-    )
-    assert issubclass(
-        generation_facade.LangChainOpenAIGenerator,
-        generation_adapter.LangChainStructuredGenerator,
+def _generator(settings: Settings, **kwargs) -> LangChainStructuredGenerator:
+    return LangChainStructuredGenerator(
+        settings,
+        system_prompt=SYSTEM_PROMPT,
+        human_prompt=HUMAN_PROMPT,
+        correction_text_builder=build_correction_text,
+        **kwargs,
     )
 
 
@@ -160,7 +149,7 @@ def test_single_evidence_block_has_exact_frozen_rendering() -> None:
 def test_prompt_templates_have_frozen_bytes() -> None:
     captured: list[list[tuple[str, str]]] = []
     prompt = object()
-    adapter = LangChainOpenAIGenerator(
+    adapter = _generator(
         Settings(_env_file=None),
         prompt_factory=lambda messages: captured.append(messages) or prompt,
     )
@@ -229,18 +218,18 @@ def test_evidence_rejects_empty_input_and_impossibly_small_metadata_budget() -> 
 
 def test_missing_key_and_store_true_fail_without_constructing_model() -> None:
     calls = []
-    adapter = LangChainOpenAIGenerator(
+    adapter = _generator(
         Settings(_env_file=None), model_factory=lambda **kwargs: calls.append(kwargs)
     )
     with pytest.raises(LLMNotConfiguredError, match="OPENAI_API_KEY"):
         adapter.ensure_configured()
     assert calls == []
     with pytest.raises(LLMNotConfiguredError, match="OPENAI_STORE"):
-        LangChainOpenAIGenerator(
+        _generator(
             Settings(_env_file=None, openai_api_key="secret", openai_store=True)
         ).ensure_configured()
     with pytest.raises(LLMNotConfiguredError, match="GEMINI_API_KEY"):
-        LangChainOpenAIGenerator(
+        _generator(
             Settings(_env_file=None, generation_provider="gemini")
         ).ensure_configured()
 
@@ -389,8 +378,6 @@ def test_provider_exceptions_are_sanitized(error, exception) -> None:
 
 
 def test_import_and_adapter_construction_do_not_initialize_provider() -> None:
-    import app.generation as generation
-
-    adapter = generation.LangChainOpenAIGenerator(Settings(_env_file=None))
+    adapter = _generator(Settings(_env_file=None))
     assert adapter._structured_model is None
     assert adapter._prompt is None

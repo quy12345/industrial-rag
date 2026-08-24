@@ -118,7 +118,7 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
   parser defaults, failure ordering, atomic output, mutation order, and verification behavior.
 - [`app/contracts/query.py`](../../app/contracts/query.py) owns `QueryRequest`, `Citation`, and
   `QueryResponse`, including their exact Pydantic validation and schema behavior.
-- [`app/models.py`](../../app/models.py) retains internal retrieval/health records and directly
+- Historical `app/models.py` (removed in R12B) retained internal retrieval/health records and directly
   compatibility-exports the canonical query contracts.
 - [`app/application/query_service.py`](../../app/application/query_service.py),
   [`app/domain/citations.py`](../../app/domain/citations.py), and

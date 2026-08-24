@@ -26,6 +26,10 @@ The repository implementation completed this narrowly scoped transition on
 retrieval tuning, Phase 7 data changes, re-indexing, deletion of legacy Qdrant collections, or an
 automatic start of Round 2.
 
+The separately approved surface-simplification sequence has completed R08–R12. R12 removed the
+legacy root `app.*` facades after versioning E2E provenance. R13 (supported CLI hard cut) has not
+started and still requires the normal module boundary and user review.
+
 ## 2. Working language
 
 - Explain plans, results and technical concepts to the user in Vietnamese.
@@ -43,8 +47,8 @@ automatic start of Round 2.
   python -m pytest -q
   ```
 
-* `app/` contains the production modular monolith: API/application/domain/infrastructure layers plus
-  documented compatibility/source-identity anchors.
+* `app/` contains the production modular monolith: API, application, composition, domain and
+  infrastructure layers. R12 removed the old root compatibility facades; use canonical owners.
 * `evaluation/` owns offline evaluation schemas, replay and metrics.
 * `scripts/` contains thin supported adapters and explicit historical archives; read
   `scripts/README.md` before using integration commands.

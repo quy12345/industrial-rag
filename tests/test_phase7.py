@@ -6,10 +6,8 @@ from pathlib import Path
 
 import pytest
 
-import app.phase7 as compatibility_phase7
+from app.domain.documents import DocumentChunk
 from app.infrastructure import corpus_artifacts
-from app.models import DocumentChunk
-from evaluation import phase7_dataset
 from evaluation.phase7_dataset import (
     ExpectedAnswerFact,
     Phase7DatasetItem,
@@ -107,45 +105,6 @@ def _valid_sets() -> tuple[list[Phase7DatasetItem], list[Phase7DatasetItem], lis
         if item.answerable
     ]
     return calibration, test, chunks
-
-
-def test_phase7_facade_exports_canonical_dataset_and_corpus_utilities() -> None:
-    dataset_symbols = (
-        "AnswerFactType",
-        "DatasetKind",
-        "ExpectedAnswerFact",
-        "Phase7DatasetItem",
-        "Phase7Error",
-        "Phase7Source",
-        "PhraseMatchMode",
-        "QuestionLanguage",
-        "QuestionType",
-        "ReviewStatus",
-        "Scenario",
-        "build_exact_content_equivalence",
-        "chunk_ids_sha256",
-        "dataset_sha256",
-        "expand_exact_equivalent_qrels",
-        "read_phase7_dataset",
-        "validate_phase7_dataset",
-        "validate_phase7_datasets",
-        "validate_source_records",
-    )
-    corpus_symbols = (
-        "PHASE7_CORPUS_VERSION",
-        "PHASE7_DENSE_COLLECTION",
-        "PHASE7_HYBRID_COLLECTION",
-        "PROTECTED_COLLECTIONS",
-        "file_sha256",
-        "write_json_atomic",
-        "write_jsonl_atomic",
-    )
-
-    assert set(compatibility_phase7.__all__) == set((*dataset_symbols, *corpus_symbols))
-    for symbol in dataset_symbols:
-        assert getattr(compatibility_phase7, symbol) is getattr(phase7_dataset, symbol)
-    for symbol in corpus_symbols:
-        assert getattr(compatibility_phase7, symbol) is getattr(corpus_artifacts, symbol)
 
 
 def test_valid_phase7_sets_have_deterministic_hashes() -> None:

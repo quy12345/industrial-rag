@@ -8,9 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.evaluation as compatibility_evaluation
+from app.domain.documents import DocumentChunk
 from app.infrastructure import corpus_artifacts
-from app.models import DocumentChunk
 from evaluation import retrieval as retrieval_evaluation
 from evaluation.retrieval import (
     EvaluationCase,
@@ -24,7 +23,6 @@ from evaluation.retrieval import (
     percentile_nearest_rank,
     validate_cases_against_chunks,
 )
-from scripts.archive.phase6 import evaluate as evaluate_cli
 
 
 def _case(**overrides: object) -> EvaluationCase:
@@ -76,31 +74,7 @@ def _result(
     )
 
 
-def test_app_evaluation_facade_exports_canonical_retrieval_utilities() -> None:
-    exported_symbols = (
-        "DocumentLanguage",
-        "EvaluationCase",
-        "EvaluationCategory",
-        "EvaluationError",
-        "EvaluationLanguage",
-        "RetrievedLike",
-        "RetrievalScenario",
-        "aggregate_rows",
-        "chunk_set_metadata",
-        "diagnostic_page_rank",
-        "diagnostic_phrase_rank",
-        "direct_evidence_rank",
-        "evaluate_cases",
-        "load_evaluation_cases",
-        "load_frozen_chunks",
-        "percentile_nearest_rank",
-        "phrase_matches",
-        "validate_cases_against_chunks",
-    )
-
-    assert set(compatibility_evaluation.__all__) == set(exported_symbols)
-    for symbol in exported_symbols:
-        assert getattr(compatibility_evaluation, symbol) is getattr(retrieval_evaluation, symbol)
+def test_retrieval_evaluation_reuses_canonical_corpus_metadata() -> None:
     assert retrieval_evaluation.chunk_set_metadata is corpus_artifacts.chunk_set_metadata
 
 
@@ -281,11 +255,3 @@ def test_percentiles_use_nearest_rank_and_reject_invalid_inputs() -> None:
 def test_evaluator_requires_at_least_five_candidates() -> None:
     with pytest.raises(EvaluationError, match="at least 5"):
         evaluate_cases([_case()], lambda question, limit, document_id: [], candidate_limit=4)
-
-
-@pytest.mark.parametrize("strategy", ["dense", "sparse", "hybrid"])
-def test_evaluation_cli_accepts_all_comparable_retrieval_strategies(strategy: str) -> None:
-    args = evaluate_cli._build_parser().parse_args(["--strategy", strategy, "--limit", "20"])
-
-    assert args.strategy == strategy
-    assert args.limit == 20

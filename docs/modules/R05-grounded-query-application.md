@@ -134,7 +134,7 @@ returns the same class and record objects, not wrappers or copies.
   prompt templates, correction feedback text, evidence rendering, and truncation policy.
 - [`app/application/query_service.py`](../../app/application/query_service.py) owns the full grounded
   query use case, correction loop, abstention construction, usage aggregation, timings, and safe log.
-- [`app/generation.py`](../../app/generation.py) compatibility-exports canonical contracts/policy and
+- Historical `app/generation.py` (removed in R12B) compatibility-exported canonical contracts/policy and
   preserves the historical adapter constructor through a small compatibility subclass.
 - [`app/infrastructure/generation/__init__.py`](../../app/infrastructure/generation/__init__.py)
   identifies the outbound structured-generation adapter package without eager imports.
@@ -143,13 +143,13 @@ returns the same class and record objects, not wrappers or copies.
   provider error mapping.
 - [`app/bootstrap.py`](../../app/bootstrap.py) composes the canonical application service with the
   retrieval adapter, generation adapter, prompt policy, settings, and domain evidence gate.
-- [`app/query_service.py`](../../app/query_service.py) is an identity-preserving compatibility facade
+- Historical `app/query_service.py` (removed in R12B) was an identity-preserving compatibility facade
   for historical runtime, test, and evaluation imports.
-- [`app/retrieval_runtime.py`](../../app/retrieval_runtime.py) implements and compatibility-exports
+- Historical `app/retrieval_runtime.py` (removed in R12B) implemented and compatibility-exported
   the domain retrieval port/result while retaining the frozen Phase 7 composition behavior.
-- [`app/evidence_selection.py`](../../app/evidence_selection.py) is a compatibility facade whose
+- Historical `app/evidence_selection.py` (removed in R12B) was a compatibility facade whose
   public selection symbols are direct aliases to the domain owner.
-- [`app/citations.py`](../../app/citations.py) is now a compatibility facade whose public symbols are
+- Historical `app/citations.py` (removed in R12B) was a compatibility facade whose public symbols were
   direct aliases to canonical domain citation policy.
 - [`tests/test_generation.py`](../../tests/test_generation.py) protects prompt hashes, exact evidence
   rendering, facade identity, provider kwargs, errors, usage, and lazy construction.

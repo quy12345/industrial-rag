@@ -8,10 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.config import Settings, get_settings, resolve_retrieval_runtime
-from app.domain.retrieval_contracts import (
-    PHASE7_RETRIEVAL_CONTRACT,
-    FrozenRetrievalContract,
-)
+from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
 from app.errors import RetrievalUnavailableError
 
 INSTALLATION_DOCUMENT_ID = "atv320-installation-manual-en-nve41289-09-c181b4d7f11b"
@@ -169,11 +166,3 @@ def test_unsupported_runtime_matrix_fails_without_fallback(strategy, rerank_enab
 def test_retired_phase6_profile_is_rejected_by_settings() -> None:
     with pytest.raises(ValidationError, match="retrieval_profile"):
         Settings(retrieval_profile="phase6")  # type: ignore[arg-type]
-
-
-def test_retrieval_runtime_compatibility_exports_are_identity_preserving() -> None:
-    import app.retrieval_runtime as compatibility
-
-    assert compatibility.FrozenRetrievalContract is FrozenRetrievalContract
-    assert compatibility.PHASE7_RETRIEVAL_CONTRACT is PHASE7_RETRIEVAL_CONTRACT
-    assert compatibility.resolve_retrieval_runtime is resolve_retrieval_runtime

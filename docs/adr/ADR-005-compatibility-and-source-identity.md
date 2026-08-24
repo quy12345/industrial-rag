@@ -27,9 +27,9 @@ Use three explicit categories:
 3. A **source-identity anchor** is protected byte-for-byte because a historical artifact records its
    Git blob or hashes paths selected by it.
 
-R08 records the current compatibility inventory and forbidden dependency edges as exact sets. R09
-through R11 introduce canonical owners while the two source anchors remain unchanged. R12 performs
-one explicit provenance migration and removes the compatibility paths. R13 then hard-cuts the old
+R08 recorded the compatibility inventory and forbidden dependency edges as exact sets. R09 through
+R11 introduced canonical owners while the two source anchors remained unchanged. R12 performed one
+explicit provenance migration and removed the compatibility paths. R13 then hard-cuts the old
 repository-local CLI module names instead of adding another deprecation layer.
 
 The R12 E2E format uses artifact schema version 6 and source-identity version 2. Historical v5
@@ -63,9 +63,13 @@ so a historical checkpoint cannot be resumed under the new provenance contract.
   cannot silently preserve obsolete exceptions.
 - R12 and R13 contain intentional internal breaking changes. FastAPI, Streamlit, frozen retrieval,
   and the corresponding CLI argument/output behavior remain unchanged.
-- Archived Phase 6 and Phase 7 workflows keep their historical paths. The hard cut applies only to
-  active compatibility imports and supported command entry points.
-- No production file changes during R08; the module only strengthens observation and governance.
+- R12 removed the root `app.*` facade inventory and the legacy callable-based reranking bridge after
+  supported consumers moved to canonical owners.
+- Archived Phase 6 and Phase 7 workflows keep their historical source for provenance, but they are
+  not a supported import-compatible surface. Reconstruct their historical commit if rerun is ever
+  explicitly required.
+- R08 made no production changes; R12 completed the accepted hard cut under offline regression
+  coverage.
 
 ## Rejected alternatives
 
@@ -80,6 +84,8 @@ so a historical checkpoint cannot be resumed under the new provenance contract.
 
 ## Validation
 
-R08 protects the decision with offline source-pin tests, CLI parser characterization, Pydantic schema
-checks, a golden query execution, and an AST dependency matrix. Each later module must also compare
-the protected PDF/artifact hash manifest and run the full offline suite before review.
+R08 protected the decision with offline source-pin tests, CLI parser characterization, Pydantic
+schema checks, a golden query execution, and an AST dependency matrix. R12 replaced the temporary
+anchor inventory with an exact removed-path guard and a zero-exception dependency matrix. Each later
+module must also compare the protected PDF/artifact hash manifest and run the full offline suite
+before review.

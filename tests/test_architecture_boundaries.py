@@ -1,4 +1,4 @@
-"""Static dependency guards for the canonical runtime and temporary R12 anchors."""
+"""Static dependency guards for the canonical runtime after the R12 hard cut."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ PRODUCTION_RUNTIME_ROOTS = {
     "app.bootstrap",
     "app.composition.retrieval",
     "app.main",
-    "app.retrieval_runtime",
 }
 
 DOMAIN_FORBIDDEN_IMPORT_ROOTS = {
@@ -29,7 +28,7 @@ DOMAIN_FORBIDDEN_IMPORT_ROOTS = {
     "streamlit",
 }
 
-R12_ROOT_MODULE_ANCHORS = {
+REMOVED_COMPATIBILITY_MODULES = {
     "app.citations",
     "app.content_identity",
     "app.evaluation",
@@ -45,6 +44,7 @@ R12_ROOT_MODULE_ANCHORS = {
     "app.reranking",
     "app.retrieval",
     "app.retrieval_runtime",
+    "app.domain.policies.ranking",
 }
 
 ALLOWED_DEPENDENCY_LAYERS = {
@@ -62,9 +62,6 @@ ALLOWED_DEPENDENCY_LAYERS = {
     "evaluation": {"application", "domain", "evaluation", "infrastructure", "shared"},
     "shared": {"domain", "shared"},
 }
-
-R12_TEMPORARY_IMPORT_EDGES: set[tuple[str, str]] = set()
-
 
 def _module_name(path: Path) -> str:
     relative = path.relative_to(APP_ROOT.parent).with_suffix("")
@@ -137,8 +134,6 @@ def _reachable_modules(graph: dict[str, set[str]], root: str) -> set[str]:
 def _architecture_layer(module: str) -> str | None:
     if module in {"app", "evaluation", "ui"}:
         return "package"
-    if module in R12_ROOT_MODULE_ANCHORS:
-        return "compatibility"
     if (
         module == "app.main"
         or module == "app.api"
@@ -165,14 +160,16 @@ def _architecture_layer(module: str) -> str | None:
     return None
 
 
-def test_dependency_matrix_has_only_documented_r12_anchors() -> None:
+def test_dependency_matrix_has_no_compatibility_layer() -> None:
     graph = _import_graph()
     layers = {module: _architecture_layer(module) for module in graph}
 
     assert {module for module, layer in layers.items() if layer is None} == set()
-    assert {module for module, layer in layers.items() if layer == "compatibility"} == (
-        R12_ROOT_MODULE_ANCHORS
-    )
+    assert {
+        module
+        for module in REMOVED_COMPATIBILITY_MODULES
+        if (APP_ROOT.parent / Path(*module.split(".")).with_suffix(".py")).exists()
+    } == set()
 
     violations = {
         (source, dependency)
@@ -183,7 +180,7 @@ def test_dependency_matrix_has_only_documented_r12_anchors() -> None:
         and dependency_layer not in ALLOWED_DEPENDENCY_LAYERS[source_layer]
     }
 
-    assert violations == R12_TEMPORARY_IMPORT_EDGES
+    assert violations == set()
 
 
 def test_production_runtime_cannot_reach_evaluation() -> None:
@@ -268,20 +265,6 @@ def test_qdrant_infrastructure_does_not_import_compatibility_facades() -> None:
     assert unexpected == set()
 
 
-def test_hybrid_facade_does_not_import_private_dense_facade_helpers() -> None:
-    path = APP_ROOT / "hybrid_retrieval.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    private_imports = {
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "app.retrieval"
-        for alias in node.names
-        if alias.name.startswith("_")
-    }
-
-    assert private_imports == set()
-
-
 def test_application_services_have_no_adapter_or_evaluation_dependency() -> None:
     graph = _import_graph()
     application_modules = {
@@ -311,7 +294,6 @@ def test_content_identity_has_one_domain_owner() -> None:
     ):
         assert "app.domain.content_identity" in graph[module]
         assert "app.content_identity" not in graph[module]
-    assert "app.domain.content_identity" in graph["app.content_identity"]
 
 
 def test_supported_ingestion_commands_use_canonical_owners() -> None:
@@ -354,7 +336,6 @@ def test_query_runtime_uses_shared_public_contracts_not_the_models_facade() -> N
         assert "app.contracts.query" in graph[module]
 
     assert "app.models" not in graph["app.api.query"]
-    assert "app.contracts.query" in graph["app.models"]
     assert "app.models" not in graph["app.contracts.query"]
 
 
@@ -381,8 +362,6 @@ def test_grounded_query_consumers_use_canonical_generation_contracts_and_prompt_
     assert "app.generation" not in service
     assert "app.domain.citations" in service
     assert "app.citations" not in service
-    assert "app.application.query_service" in graph["app.query_service"]
-    assert "app.domain.citations" in graph["app.citations"]
     assert "app.domain.generation" in graph["app.domain.citations"]
     assert "app.generation" not in graph["app.domain.citations"]
 
@@ -393,7 +372,6 @@ def test_query_runtime_uses_canonical_domain_evidence_policy() -> None:
     assert "app.domain.evidence" in graph["app.application.query_service"]
     assert "app.evidence_selection" not in graph["app.application.query_service"]
     assert "app.domain.evidence" in graph["app.bootstrap"]
-    assert "app.domain.evidence" in graph["app.evidence_selection"]
 
 
 def test_query_service_depends_on_domain_retrieval_port_not_runtime_adapter() -> None:
@@ -436,7 +414,6 @@ def test_runtime_uses_canonical_domain_rrf_policy() -> None:
     graph = _import_graph()
 
     assert "app.domain.policies.fusion" in graph["app.application.reranking_service"]
-    assert "app.domain.policies.fusion" in graph["app.hybrid_retrieval"]
 
 
 def test_runtime_uses_canonical_domain_query_analysis_policy() -> None:
@@ -470,17 +447,14 @@ def test_runtime_uses_canonical_dense_search_adapter() -> None:
 
     service = graph["app.application.reranking_service"]
     assert "app.infrastructure.qdrant.dense" in graph["app.composition.retrieval"]
-    assert "app.infrastructure.qdrant.dense" in graph["app.hybrid_retrieval"]
     assert "app.infrastructure.qdrant.dense" not in service
     assert "app.retrieval" not in service
-    assert "app.retrieval" not in graph["app.hybrid_retrieval"]
 
 
 def test_runtime_uses_canonical_sparse_search_adapter() -> None:
     graph = _import_graph()
 
-    for module in ("app.composition.retrieval", "app.hybrid_retrieval"):
-        assert "app.infrastructure.qdrant.hybrid" in graph[module]
+    assert "app.infrastructure.qdrant.hybrid" in graph["app.composition.retrieval"]
     assert "app.infrastructure.qdrant.hybrid" not in graph[
         "app.application.reranking_service"
     ]
@@ -498,7 +472,6 @@ def test_runtime_composes_canonical_reranking_service_not_evaluation_facade() ->
 def test_retrieval_evaluation_is_owned_outside_production_package() -> None:
     graph = _import_graph()
 
-    assert "evaluation.retrieval" in graph["app.evaluation"]
     assert "app.domain.documents" in graph["evaluation.retrieval"]
     assert "app.infrastructure.corpus_artifacts" in graph["evaluation.retrieval"]
     assert "app.models" not in graph["evaluation.retrieval"]
@@ -516,7 +489,7 @@ def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
     assert not {
         dependency
         for dependency in evaluator
-        if dependency in R12_ROOT_MODULE_ANCHORS
+        if dependency in REMOVED_COMPATIBILITY_MODULES
     }
 
     canonical_cli = (
@@ -527,7 +500,7 @@ def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
     assert "app.composition.retrieval" in cli_imports
     assert "app.application.query_service" in cli_imports
     assert not {
-        dependency for dependency in cli_imports if dependency in R12_ROOT_MODULE_ANCHORS
+        dependency for dependency in cli_imports if dependency in REMOVED_COMPATIBILITY_MODULES
     }
 
     supported_shim = APP_ROOT.parent / "scripts" / "evaluate_phase7_e2e.py"
@@ -561,8 +534,6 @@ def test_sanitized_replay_is_owned_outside_production_package() -> None:
 def test_phase7_dataset_and_corpus_artifact_ownership_are_separate() -> None:
     graph = _import_graph()
 
-    assert "evaluation.phase7_dataset" in graph["app.phase7"]
-    assert "app.infrastructure.corpus_artifacts" in graph["app.phase7"]
     assert "evaluation.retrieval" in graph["evaluation.phase7_dataset"]
     assert "app.domain.documents" in graph["evaluation.phase7_dataset"]
     assert "app.infrastructure.corpus_artifacts" in graph["evaluation.phase7_dataset"]
@@ -706,124 +677,12 @@ def test_corpus_audit_cli_uses_canonical_artifact_infrastructure() -> None:
     assert imported_modules == {"scripts.operations.audit_phase7_corpus"}
 
 
-def test_phase7_archive_has_one_way_canonical_dependencies() -> None:
-    required_by_script = {
-        "aggregate_phase7_calibration_stability.py": {"app.infrastructure.corpus_artifacts"},
-        "apply_phase7_answer_facts.py": {
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "audit_phase7_retrieval_failures.py": {
-            "app.domain.retrieval",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-            "evaluation.retrieval",
-        },
-        "benchmark_phase7_reranker_cpu.py": {
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-            "evaluation.retrieval",
-        },
-        "calibrate_phase7_retrieval.py": {
-            "app.domain.retrieval",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-            "evaluation.retrieval",
-        },
-        "calibrate_phase7_role_prior.py": {
-            "app.domain.policies.ranking",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-            "evaluation.replay",
-            "evaluation.retrieval",
-        },
-        "calibrate_phase7_weighted_fusion.py": {
-            "app.domain.policies.ranking",
-            "app.domain.retrieval",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-            "evaluation.retrieval",
-        },
-        "diagnose_phase7_calibration_005.py": {
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "draft_phase7_calibration_fact_types.py": {
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "evaluate_phase7_heldout_v2.py": {
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "evaluate_phase7_weighted_rerank.py": {
-            "app.domain.policies.ranking",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-            "evaluation.retrieval",
-        },
-        "freeze_phase7_calibration_v3.py": {
-            "app.domain.retrieval_contracts",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "freeze_phase7_dataset.py": {
-            "app.domain.retrieval_contracts",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "freeze_phase7_heldout_v2.py": {
-            "app.domain.retrieval_contracts",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "generate_phase7_annotation_draft.py": {"app.infrastructure.corpus_artifacts"},
-        "generate_phase7_calibration_closure_readiness.py": {
-            "app.infrastructure.corpus_artifacts"
-        },
-        "generate_phase7_fact_evaluator_readiness.py": {
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "generate_phase7_runtime_readiness.py": {"app.infrastructure.corpus_artifacts"},
-        "migrate_phase7_dataset_v2.py": {
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-            "evaluation.retrieval",
-        },
-        "rescore_phase7_calibration_facts.py": {
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-        "create_phase7_reranker_snapshot.py": {
-            "app.domain.policies.ranking",
-            "app.infrastructure.corpus_artifacts",
-            "evaluation.phase7_dataset",
-        },
-    }
-    forbidden_imports = {
-        "app.candidate_audit",
-        "app.evaluation",
-        "app.phase7",
-        "app.phase7_replay",
-    }
-    no_runtime_scripts = {
-        "freeze_phase7_calibration_v3.py",
-        "freeze_phase7_dataset.py",
-        "freeze_phase7_heldout_v2.py",
-    }
+def test_phase7_archive_is_preserved_but_not_part_of_the_supported_surface() -> None:
+    archive_root = APP_ROOT.parent / "scripts" / "archive" / "phase7"
+    archived_scripts = {path.name for path in archive_root.glob("*.py")}
 
-    for filename, required_imports in required_by_script.items():
-        old_path = APP_ROOT.parent / "scripts" / filename
-        archived_path = APP_ROOT.parent / "scripts" / "archive" / "phase7" / filename
-
-        assert not old_path.exists()
-        assert archived_path.is_file()
-        imports = _local_imports(archived_path)
-        assert required_imports <= imports
-        assert forbidden_imports.isdisjoint(imports)
-        if filename in no_runtime_scripts:
-            assert "app.retrieval_runtime" not in imports
+    assert archived_scripts
+    assert all(not (APP_ROOT.parent / "scripts" / name).exists() for name in archived_scripts)
 
 
 def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_edge() -> None:
@@ -831,5 +690,5 @@ def test_cross_encoder_adapter_depends_on_domain_port_and_stays_lazy_at_runtime_
 
     assert "app.domain.reranking" in graph["app.infrastructure.models.reranker"]
     assert "app.reranking" not in graph["app.infrastructure.models.reranker"]
-    assert "app.domain.reranking" in graph["app.retrieval_runtime"]
-    assert "app.infrastructure.models.reranker" in graph["app.retrieval_runtime"]
+    assert "app.domain.reranking" in graph["app.composition.retrieval"]
+    assert "app.infrastructure.models.reranker" in graph["app.composition.retrieval"]

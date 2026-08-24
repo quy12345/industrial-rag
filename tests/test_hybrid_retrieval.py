@@ -10,51 +10,28 @@ import pytest
 from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
-import app.hybrid_retrieval as hybrid_facade
 from app.config import Settings
-from app.domain.policies import fusion as fusion_policy
-from app.hybrid_retrieval import (
-    HYBRID_SCHEMA_VERSION,
+from app.domain.documents import DocumentChunk
+from app.domain.policies.fusion import fuse_rrf
+from app.domain.retrieval import RetrievalCandidate
+from app.errors import RetrievalError
+from app.infrastructure.qdrant.dense import build_point_id, ensure_dense_collection
+from app.infrastructure.qdrant.hybrid import (
     compute_bm25_average_length,
     ensure_hybrid_collection,
-    fuse_rrf,
-    hybrid_search,
     index_hybrid_chunks,
     sparse_search,
+)
+from app.infrastructure.qdrant.manifests import (
+    HYBRID_SCHEMA_VERSION,
     validate_hybrid_index_manifest,
     write_hybrid_index_manifest,
 )
-from app.infrastructure.qdrant import hybrid as hybrid_infrastructure
-from app.infrastructure.qdrant import manifests as index_manifests
-from app.models import DocumentChunk, RetrievalCandidate
-from app.retrieval import RetrievalError, build_point_id, ensure_dense_collection
 
 V1 = "dense-v1"
 V2 = "hybrid-v2"
 DENSE = "dense"
 SPARSE = "sparse"
-
-
-def test_hybrid_facade_exports_canonical_infrastructure_symbols() -> None:
-    assert hybrid_facade.create_sparse_embedding_model is (
-        hybrid_infrastructure.create_sparse_embedding_model
-    )
-    assert hybrid_facade.compute_bm25_average_length is (
-        hybrid_infrastructure.compute_bm25_average_length
-    )
-    assert hybrid_facade.ensure_hybrid_collection is hybrid_infrastructure.ensure_hybrid_collection
-    assert hybrid_facade.sparse_search is hybrid_infrastructure.sparse_search
-    assert hybrid_facade.index_hybrid_chunks is hybrid_infrastructure.index_hybrid_chunks
-    assert hybrid_facade.write_hybrid_index_manifest is (
-        index_manifests.write_hybrid_index_manifest
-    )
-    assert hybrid_facade.validate_hybrid_index_manifest is (
-        index_manifests.validate_hybrid_index_manifest
-    )
-
-
-def test_hybrid_facade_exports_canonical_rrf_policy() -> None:
-    assert fuse_rrf is fusion_policy.fuse_rrf
 
 
 class FakeDenseModel:
@@ -421,51 +398,6 @@ def test_rrf_formula_duplicate_collapse_ties_and_empty_components() -> None:
     assert fuse_rrf([], [], rrf_k=60, final_limit=5) == []
     with pytest.raises(RetrievalError, match="RRF k"):
         fuse_rrf(dense, sparse, rrf_k=0, final_limit=5)
-
-
-def test_hybrid_search_uses_component_limits_and_does_not_mix_scores(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: dict[str, int] = {}
-
-    def fake_dense(*args, **kwargs):
-        calls["dense"] = kwargs["limit"]
-        return [
-            SimpleNamespace(
-                chunk_id="dense-only",
-                document_id="manual-a",
-                filename="manual.pdf",
-                text="dense",
-                page_numbers=[1],
-                headings=[],
-                content_type="text",
-                score=0.99,
-            )
-        ]
-
-    def fake_sparse(*args, **kwargs):
-        calls["sparse"] = kwargs["limit"]
-        return [candidate("sparse-only", sparse_score=999.0, sparse_rank=1)]
-
-    monkeypatch.setattr("app.hybrid_retrieval.dense_search", fake_dense)
-    monkeypatch.setattr("app.hybrid_retrieval.sparse_search", fake_sparse)
-    results = hybrid_search(
-        QdrantClient(":memory:"),
-        "question",
-        collection_name=V2,
-        dense_vector_name=DENSE,
-        sparse_vector_name=SPARSE,
-        dense_embedding_model=FakeDenseModel(),
-        sparse_embedding_model=FakeSparseModel(),
-        dense_candidate_limit=20,
-        sparse_candidate_limit=15,
-        final_limit=1,
-        rrf_k=60,
-    )
-
-    assert calls == {"dense": 20, "sparse": 15}
-    assert results[0].rrf_score == pytest.approx(1 / 61)
-    assert results[0].score == results[0].rrf_score
 
 
 def test_hybrid_manifest_round_trip_and_mismatch(tmp_path: Path) -> None:

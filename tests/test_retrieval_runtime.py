@@ -278,13 +278,6 @@ def test_importing_canonical_runtime_does_not_construct_models() -> None:
     assert not hasattr(runtime, "PHASE6_RETRIEVAL_CONTRACT")
 
 
-def test_legacy_runtime_anchor_retains_the_frozen_contract() -> None:
-    import app.retrieval_runtime as legacy_runtime
-
-    assert legacy_runtime.PHASE7_RETRIEVAL_CONTRACT is PHASE7_RETRIEVAL_CONTRACT
-    assert legacy_runtime._expand_phase7_query("MODE menu") == _expand_phase7_query("MODE menu")
-
-
 def test_runtime_composition_injects_canonical_search_adapters(monkeypatch) -> None:
     settings, contract = resolve_retrieval_runtime(Settings())
     captured: dict[str, object] = {}
@@ -304,8 +297,7 @@ def test_runtime_composition_injects_canonical_search_adapters(monkeypatch) -> N
     monkeypatch.setattr(runtime, "QdrantSparseSearcher", lambda *args, **kwargs: sparse_searcher)
 
     class PipelineFactory:
-        @classmethod
-        def from_searchers(cls, **kwargs):
+        def __new__(cls, **kwargs):
             captured.update(kwargs)
             return pipeline
 

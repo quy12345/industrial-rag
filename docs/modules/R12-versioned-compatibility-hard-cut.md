@@ -2,159 +2,163 @@
 
 ## 1. Goal and scope
 
-R12 removes the source-identity constraint that kept obsolete root modules alive, then retires the
-remaining compatibility layer without changing the application runtime. It is implemented in two
-broad vertical slices:
+R12 makes canonical package ownership visible from the file tree. It removes obsolete `app.*`
+facades only after moving E2E provenance and reranking diagnostics to their real owners.
 
-- R12A moves E2E scoring and command implementation to canonical evaluation owners and introduces
-  artifact schema v6 with source-identity v2.
-- R12B removes the remaining compatibility facades and the legacy callable search bridge after all
-  active tests and consumers use canonical imports.
+- R12A moved E2E scoring to `evaluation.e2e`, moved its command implementation to
+  `scripts.evaluation`, and introduced artifact schema v6 with source identity v2.
+- R12B removes 16 compatibility modules, removes the callable-based retrieval bridge, and moves
+  reranking diagnostics to `evaluation.reranking`.
+- The eight top-level supported CLI shims remain until R13.
 
-R12A is complete in the current worktree. R12B has not started.
+No retrieval algorithm, model, threshold, collection, corpus, dataset, provider, API schema, or
+answer policy changes in this module.
 
 ## 2. Position in the system
 
 ```text
-supported E2E entry point
-          |
-          v
-scripts.evaluation.evaluate_phase7_e2e
-          |
-          +--> application/domain/infrastructure public owners
-          +--> evaluation.e2e + evaluation.phase7_dataset
+FastAPI / supported CLI / Streamlit
+                 |
+                 v
+        application services
+                 |
+                 v
+          domain ports/policies
+                 ^
+                 |
+      infrastructure adapters
 
-production API runtime ----x----> evaluation
+evaluation ---> public application/domain interfaces
+production --x-> evaluation
 ```
 
-The top-level command remains a thin inbound shim until the common CLI cut in R13. Evaluation can
-consume public runtime interfaces; production cannot import evaluation.
+The hard cut affects internal import paths. It does not change the HTTP boundary or the runtime data
+flow.
 
 ## 3. Relevant background concepts
 
-- A **hard cut** removes an internal import path instead of preserving another indefinite shim.
-- **Source identity** records hashes of selected source files that materially define an evaluation
-  run.
-- **Artifact schema version** identifies the structure and interpretation of a sanitized result.
-- A **checkpoint identity** prevents partial results from being resumed under different code,
-  configuration, corpus, dataset, or provider settings.
-- Git history preserves old byte-for-byte source without copying stale implementations into the
-  current tree.
+- A **facade** re-exports symbols owned elsewhere. It is useful during migration but obscures the
+  owner if retained indefinitely.
+- A **hard cut** removes that old import path after every supported consumer uses the canonical path.
+- **Source identity** hashes the files that materially define an evaluation run.
+- An **artifact schema version** identifies the structure and interpretation of a sanitized result.
+- A **state-bound port** is an adapter object that already owns its Qdrant client/model/vector state;
+  the application service receives only its `search` interface.
+- Git history preserves removed implementations and compatibility paths without keeping them in the
+  active Python surface.
 
 ## 4. Input, output, and contracts
 
-The supported invocation remains `python -m scripts.evaluate_phase7_e2e` with the same option names,
-argparse behavior, approval token, calibration-only item selection, and governance block for the
-exposed held-out split.
+The supported E2E invocation remains `python -m scripts.evaluate_phase7_e2e` with the same arguments,
+approval behavior, scoring rules, and exit statuses. Its intentional provenance changes are:
 
-Scoring records, metric definitions, quality-gate thresholds, sanitization fields, and exit statuses
-are unchanged. The intentional provenance changes are:
-
-- default artifact and checkpoint filenames use `e2e-v6`;
+- default output/checkpoint names use `e2e-v6`;
 - output `schema_version` is `6`;
-- run identity includes `artifact_schema_version: 6`;
-- `source_identity` is a v2 object containing `version`, canonical file hashes, and the exact system
-  prompt hash.
+- source identity is a version-2 object over canonical owners and the exact system prompt;
+- old source-identity/checkpoint formats fail closed and historical v5 artifacts remain untouched.
 
-No v5 artifact is read, rewritten, or deleted. Its checkpoint identity cannot equal v2.
+`RerankPipeline` keeps the same retrieval, candidate, timing, reranking, and error outputs. Its
+constructor now accepts `DenseSearchPort` and `SparseSearchPort` objects directly; the legacy raw
+client/model/callable constructor path is removed.
+
+The removed `app.*` paths are not public product contracts. Supported code must import the canonical
+application, domain, infrastructure, or evaluation module.
 
 ## 5. Step-by-step data flow
 
-1. The top-level supported shim delegates to the canonical E2E command.
-2. Argparse validates the same dataset, approval, selection, output, and checkpoint options.
-3. Governance rejects held-out execution before data or provider access.
-4. The command reads only the selected approved split and validates its sealed manifest.
-5. Frozen collection identity is validated read-only before query execution.
-6. Canonical composition builds the same lazy retrieval and structured-generation object graph.
-7. `evaluation.e2e` scores the completed application execution without external I/O.
-8. Source identity v2 hashes selected canonical behavior owners rather than facade files.
-9. Checkpoint loading compares the entire run identity and rejects v1/v5 or otherwise changed runs.
-10. A sanitized schema-v6 result is written atomically only by an explicitly approved real run.
+1. FastAPI resolves the query service through `app.bootstrap`.
+2. `app.composition.retrieval` creates Qdrant dense/sparse adapters with bound infrastructure state.
+3. It injects those adapters into `app.application.reranking_service.RerankPipeline`.
+4. The pipeline retrieves the same dense and sparse candidates, applies the same frozen policies,
+   records the same stages, and calls the same lazy cross-encoder adapter.
+5. `app.application.query_service` selects/gates evidence before generation, validates source IDs,
+   and constructs trusted citations.
+6. Offline reranking analysis imports `evaluation.reranking`; production does not.
+7. The supported E2E shim delegates to `scripts.evaluation.evaluate_phase7_e2e`, which composes the
+   same public runtime and sends completed executions to `evaluation.e2e`.
 
 ## 6. Responsibilities of changed files
 
-| Path | Responsibility after R12A |
+| Path | Responsibility after R12 |
 | --- | --- |
-| [`evaluation/e2e.py`](../../evaluation/e2e.py) | Pure offline scoring, aggregation, typed-fact matching, and quality gates. |
+| [`evaluation/e2e.py`](../../evaluation/e2e.py) | Pure E2E scoring, aggregation, facts, and quality gates. |
+| [`evaluation/reranking.py`](../../evaluation/reranking.py) | Provider-free reranking diagnostics and aggregation. |
 | [`scripts/evaluation/evaluate_phase7_e2e.py`](../../scripts/evaluation/evaluate_phase7_e2e.py) | Approval-gated integration composition, checkpointing, provenance, and sanitized output. |
-| [`scripts/evaluate_phase7_e2e.py`](../../scripts/evaluate_phase7_e2e.py) | Thin supported `main` shim until R13. |
-| [`tests/test_evaluation_e2e.py`](../../tests/test_evaluation_e2e.py) | Scoring, governance, parser, manifest, and checkpoint behavior. |
-| [`tests/test_source_identity.py`](../../tests/test_source_identity.py) | Exact v2 source mapping and fail-closed v1 checkpoint characterization. |
-| [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) | Canonical evaluator/CLI ownership and shrinking compatibility inventory. |
-| [`ADR-005`](../adr/ADR-005-compatibility-and-source-identity.md) | Historical anchors and accepted v2 provenance structure. |
+| [`scripts/evaluate_phase7_e2e.py`](../../scripts/evaluate_phase7_e2e.py) | Thin supported shim until R13. |
+| [`app/application/reranking_service.py`](../../app/application/reranking_service.py) | Candidate preparation and reranking through explicit search ports. |
+| [`app/composition/retrieval.py`](../../app/composition/retrieval.py) | Concrete model/Qdrant adapter construction and injection. |
+| [`app/domain/retrieval.py`](../../app/domain/retrieval.py) | Retrieval records and state-bound application ports. |
+| [`tests/test_architecture_boundaries.py`](../../tests/test_architecture_boundaries.py) | Layer matrix, removed-path inventory, and production/evaluation isolation. |
+| [`ADR-005`](../adr/ADR-005-compatibility-and-source-identity.md) | Rationale and lifecycle of provenance plus the hard cut. |
 
-`app/evaluation_e2e.py` is removed; its original blob remains available in Git history.
+The removed facades were `app.citations`, `app.content_identity`, `app.evaluation`,
+`app.evidence_selection`, `app.generation`, `app.hybrid_retrieval`, `app.ingestion`, `app.models`,
+`app.phase7`, `app.phase7_optimization`, `app.query_expansion`, `app.query_service`, `app.reranking`,
+`app.retrieval`, `app.retrieval_runtime`, and `app.domain.policies.ranking`.
 
 ## 7. Important symbols and why they exist
 
-- `ARTIFACT_SCHEMA_VERSION` makes the output format bump explicit and testable.
-- `SOURCE_IDENTITY_VERSION` distinguishes canonical v2 provenance from the historical flat mapping.
-- `SOURCE_IDENTITY_PATHS` is an auditable selection of implementation owners, not facade paths.
-- `_source_identity` returns a structured receipt with file and prompt hashes.
-- `_load_checkpoint` compares the complete run identity and never merges incompatible executions.
-- `score_phase7_execution` creates one sanitized record from a completed `QueryExecution`.
-- `evaluate_phase7_quality_gates` retains the frozen documented release thresholds.
+- `SOURCE_IDENTITY_VERSION` distinguishes canonical v2 provenance from the historical mapping.
+- `SOURCE_IDENTITY_PATHS` is an auditable set of behavior owners rather than facade files.
+- `score_phase7_execution` scores one completed query without performing I/O.
+- `RerankPipeline` orchestrates candidate preparation and cross-encoder ordering.
+- `DenseSearchPort` and `SparseSearchPort` expose only the application-facing search behavior.
+- `QdrantDenseSearcher` and `QdrantSparseSearcher` bind infrastructure state at composition time.
+- `evaluate_reranked_cases` and `aggregate_rerank_rows` are evaluation-owned diagnostics.
 
 ## 8. Before-and-after structure
 
 ```text
-Before R12A
-  app/evaluation_e2e.py                  evaluator implementation in production package
-  scripts/evaluate_phase7_e2e.py         400-line integration implementation
-  source identity v1                     hashes 9 legacy facade paths
-  artifact/checkpoint                    e2e-v5
+Before R12
+  app/*.py facades                   duplicate import surface
+  app/reranking.py                  runtime exports + evaluation diagnostics
+  RerankPipeline                    raw SDK state or callable bridge
+  app/evaluation_e2e.py             evaluator inside production package
+  scripts/evaluate_phase7_e2e.py    full integration implementation
 
-After R12A
-  evaluation/e2e.py                      canonical offline evaluator
-  scripts/evaluation/evaluate_phase7_e2e.py canonical integration implementation
-  scripts/evaluate_phase7_e2e.py         thin supported shim
-  source identity v2                     hashes canonical behavior owners
-  artifact/checkpoint                    e2e-v6; v5 remains immutable
+After R12
+  app/api|application|domain|infrastructure|composition
+                                     one visible production ownership tree
+  evaluation/reranking.py            offline diagnostics
+  RerankPipeline                     state-bound search ports only
+  evaluation/e2e.py                  evaluator outside production
+  scripts/evaluation/evaluate_phase7_e2e.py
+                                     canonical integration implementation
+  scripts/evaluate_phase7_e2e.py     temporary supported CLI shim
 ```
-
-R12B will remove the other compatibility modules in the same learning document.
 
 ## 9. Design decisions and trade-offs
 
-The evaluator moves outside `app` because it consumes application results but is never a production
-runtime dependency. The command stays in `scripts/evaluation` because it owns integration concerns:
-approval, filesystem artifacts, live collection validation, and provider execution.
+The hard cut is intentional: keeping another re-export layer would make the shorter tree cosmetic.
+Repository-internal callers and tests move together, so a deprecation package would add maintenance
+without protecting a user-facing contract.
 
-The current top-level command remains temporarily because R13 owns one coherent change to all eight
-supported CLI names. This avoids mixing provenance migration with public command removal.
+Reranking diagnostics move to `evaluation` because they consume application executions but never
+belong in production reachability. `RerankPipeline` receives bound ports because passing raw clients,
+models, vector names, and search callables made the application service aware of adapter assembly.
 
-Source identity v2 enumerates canonical owners explicitly. A dependency-graph hash would be harder
-to audit and could include unrelated framework code; hashing only the old facades failed to capture
-the implementations after R09–R11. The exact approval token is retained to preserve current egress
-authorization behavior even though new output filenames are v6.
+Archived Phase 6/7 workflows remain byte-preserved provenance. They are unsupported, excluded from
+the active import graph, and are not guaranteed to import after canonical owners evolve. Git is the
+supported mechanism for reconstructing an old runnable state.
+
+R13 owns the common top-level CLI cut so R12 does not combine Python package ownership with command
+renaming.
 
 ## 10. Tests and the behavior each test protects
 
 | Test area | Protected behavior |
 | --- | --- |
-| Evaluator scoring | qrel-only ranks, evidence boundary, facts, citations, abstention, latency, and gates. |
-| Parser contract | Same options and errors; only default artifact/checkpoint version changes. |
-| Approval/governance | Invalid calibration token and every held-out request fail before execution. |
-| Dataset loading | Calibration never opens the held-out path. |
-| Checkpoints | Provider changes and v1 source identity both fail closed. |
-| Source identity | Exact canonical path inventory, SHA-256 values, version, and prompt hash. |
-| Architecture | Evaluator is outside `app`; canonical command imports no root compatibility anchor. |
-| Supported shim | Top-level command delegates only to the canonical evaluation command. |
+| Query/API characterization | Request/response schemas, abstention, citations, errors, and timings. |
+| Retrieval/reranking | Candidate membership, ordering, filters, metadata, stage timings, and no fallback. |
+| Generation/evidence | Prompt bounds, gate order, correction retry, and trusted source validation. |
+| E2E/source identity | Scoring, governance, schema v6, checkpoint fail-closed behavior, and exact v2 mapping. |
+| Architecture | No removed facade exists; dependency matrix is clean; production cannot reach evaluation. |
+| Archive boundary | Historical files remain outside the supported top-level script surface. |
+
+Tests that only asserted facade symbol identity or private helpers of unsupported archived CLIs were
+removed. Test count is not a contract; behavior coverage and the complete offline suite are.
 
 ## 11. Commands and expected results
-
-R12A focused validation:
-
-```powershell
-python -m ruff check evaluation/e2e.py scripts/evaluation/evaluate_phase7_e2e.py `
-  tests/test_evaluation_e2e.py tests/test_source_identity.py `
-  tests/test_architecture_boundaries.py
-python -m pytest -q tests/test_evaluation_e2e.py tests/test_source_identity.py `
-  tests/test_supported_cli_contracts.py tests/test_architecture_boundaries.py `
-  tests/test_phase7_operational_smoke.py
-```
-
-Final validation for each slice:
 
 ```powershell
 python -m ruff check .
@@ -163,85 +167,87 @@ docker compose config --quiet
 git diff --check
 ```
 
-Expected: no evaluation execution, Qdrant access, model loading, provider call, or held-out read.
+Expected: all offline checks pass, protected data/artifacts remain byte-identical, and no model,
+provider, live Qdrant, re-index, or held-out access occurs.
 
 ## 12. Small usage example
 
-The supported user-facing command remains:
-
-```powershell
-python -m scripts.evaluate_phase7_e2e --help
-```
-
-Offline code imports the canonical scorer directly:
+Production composes the state-bound pipeline:
 
 ```python
-from evaluation.e2e import score_phase7_execution
+pipeline = RerankPipeline(
+    dense_searcher=dense_searcher,
+    sparse_searcher=sparse_searcher,
+    cross_encoder=cross_encoder,
+    dense_collection=dense_collection,
+    hybrid_collection=hybrid_collection,
+)
+```
 
-record = score_phase7_execution(dataset_item, completed_execution)
+Offline code imports diagnostics directly:
+
+```python
+from evaluation.reranking import evaluate_reranked_cases
 ```
 
 ## 13. Common failures and debugging
 
-- A v5 checkpoint rejection is expected; start a new v6 path rather than modifying the old header.
-- A source-identity mismatch means a selected behavior owner changed; review the source diff before
-  any real evaluation.
-- If `--help` reaches settings or a provider, the shim or canonical module has an import-time side
-  effect.
-- If production can reach `evaluation.e2e`, the dependency direction has regressed.
-- If the held-out path is opened during calibration, stop immediately; do not weaken the guard.
-- A scoring difference is not a provenance migration and must be split into a separate bug fix.
+- `ModuleNotFoundError` for a removed `app.*` facade means the caller must use the owner shown in
+  `docs/CODEBASE.md`; do not recreate a shim.
+- A source-identity mismatch means a selected behavior owner changed; inspect the diff before any
+  approved evaluation.
+- A v5 checkpoint rejection is expected under v6; do not rewrite the historical checkpoint.
+- If production reaches `evaluation`, inspect the AST dependency test before changing allowlists.
+- If a reranking test changes candidate order or timing keys, stop: that is not a structural change.
+- Do not run an archived tool merely to diagnose an import failure; restore its historical commit if
+  historical reproduction is actually required.
 
 ## 14. Current limitations
 
-- R12B has not yet removed the remaining root compatibility facades.
-- The shared top-level CLI shim layout remains until R13.
-- Archived workflows retain historical imports as provenance and are unsupported.
-- Existing v5 artifacts remain valid historical receipts but are not resumable as v6.
-- No real integration validation was run; runtime algorithms, models, thresholds, and collections are
-  unchanged.
+- The eight supported top-level CLI shims remain until R13.
+- Archived workflows are provenance, not a supported runnable compatibility surface.
+- Existing v5 artifacts remain historical receipts and cannot be resumed as v6.
+- No real provider/model/Qdrant integration run is part of R12.
 
 ## 15. Self-check questions
 
-1. Why must E2E scoring live outside the production package?
-2. What makes a source-identity v2 checkpoint incompatible with v1?
-3. Why are v6 default filenames necessary even when record metrics are unchanged?
-4. Which command behavior remains public during R12A?
-5. Why does R13, rather than R12A, remove the top-level shim?
-6. Where does Git preserve the two historical source-anchor blobs?
+1. Why is a removed internal import path different from a changed HTTP contract?
+2. Why do dense and sparse adapters bind infrastructure state before injection?
+3. Why are reranking metrics in `evaluation` rather than `app.application`?
+4. Why must a v1 checkpoint fail under source identity v2?
+5. Why does R13 own top-level CLI removal?
+6. How can an archived workflow be reconstructed without keeping active facades?
 
 ## 16. Interview summary
 
-R12A resolves a provenance trap created by successful earlier refactors: historical artifacts
-hashed facade files that no longer owned behavior. The evaluator and command now live at their real
-boundaries, schema v6 records a structured v2 identity over canonical implementations, and old
-checkpoints fail closed. Public CLI behavior and every scoring decision stay covered offline while
-production remains unable to reach evaluation.
+R12 removes migration scaffolding after proving every supported consumer uses one canonical owner.
+It first versions E2E provenance so historical hashes remain explainable, then deletes the duplicate
+`app.*` surface, injects state-bound retrieval ports, and moves diagnostics out of production. The
+result is a smaller, honest modular-monolith tree with unchanged runtime decisions and explicit
+offline regression protection.
 
 ## 17. Validation results and proposed commit
 
-R12A receipts so far:
-
 | Check | Result |
 | --- | --- |
-| Pre-change focused pytest, Python 3.11.15 | PASS — 85 tests |
-| Post-change focused Ruff | PASS |
-| Post-change focused pytest, Python 3.11.15 | PASS — 86 tests |
-| Full Ruff | PASS |
-| Full pytest, Python 3.11.15 | PASS — 413 tests, 1 dependency warning |
+| R12A full Ruff | PASS |
+| R12A full pytest, Python 3.11.15 | PASS — 413 tests, 1 dependency warning |
+| R12A Compose/protected-data/links/diff checks | PASS |
+| R12B focused Ruff | PASS |
+| R12B focused pytest, Python 3.11.15 | PASS — 288 tests, 1 dependency warning |
+| R12B full Ruff | PASS |
+| R12B full pytest, Python 3.11.15 | PASS — 377 tests, 1 dependency warning |
 | Docker Compose configuration | PASS |
-| Protected data and artifacts | PASS — all 86 files unchanged |
-| Held-out worktree | PASS — unchanged |
-| Historical source blobs in Git | PASS — both original IDs retained at the R11 commit |
-| Local Markdown links | PASS |
-| `git diff --check` and exact scope | PASS — 12 files |
+| Protected PDFs/data/artifacts | PASS — all 86 files unchanged |
+| Removed facade/import inventory | PASS — all 16 paths absent; no supported consumer import |
+| Local Markdown links and `git diff --check` | PASS |
 
-Proposed R12A Conventional Commit after review:
+Proposed R12B Conventional Commit after review:
 
 ```text
-refactor: version e2e provenance and canonicalize evaluator
+refactor: remove legacy application compatibility layer
 ```
 
 ## 18. Status
 
-`IN_PROGRESS`
+`COMPLETE`

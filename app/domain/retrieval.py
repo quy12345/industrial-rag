@@ -90,39 +90,6 @@ class SparseSearchPort(Protocol):
     ) -> list[RetrievalCandidate]: ...
 
 
-class DenseSearcher(Protocol):
-    """Legacy source-anchor callable retained until R12."""
-
-    def __call__(
-        self,
-        client: Any,
-        query: str,
-        *,
-        collection_name: str,
-        vector_name: str,
-        embedding_model: Any,
-        limit: int,
-        document_id: str | None = None,
-        score_threshold: float | None = None,
-    ) -> list[RetrievedChunk]: ...
-
-
-class SparseSearcher(Protocol):
-    """Legacy source-anchor callable retained until R12."""
-
-    def __call__(
-        self,
-        client: Any,
-        query: str,
-        *,
-        collection_name: str,
-        sparse_vector_name: str,
-        sparse_embedding_model: Any,
-        limit: int,
-        document_id: str | None = None,
-    ) -> list[RetrievalCandidate]: ...
-
-
 def dense_results_to_candidates(
     results: Sequence[RetrievedChunk],
 ) -> list[RetrievalCandidate]:

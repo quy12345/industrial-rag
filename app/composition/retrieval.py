@@ -204,7 +204,7 @@ def build_union_rerank_runtime(
             b=settings.bm25_b,
             avg_len=contract.bm25_avg_len,
         )
-        pipeline = RerankPipeline.from_searchers(
+        pipeline = RerankPipeline(
             dense_searcher=QdrantDenseSearcher(
                 client,
                 vector_name=settings.dense_vector_name,

@@ -75,8 +75,8 @@ is removed.
 | [`app/infrastructure/ingestion/docling.py`](../../app/infrastructure/ingestion/docling.py) | Lazy Docling/PDFium conversion and SDK error mapping. |
 | [`app/infrastructure/ingestion/pipeline.py`](../../app/infrastructure/ingestion/pipeline.py) | Input validation, batching, conversion orchestration, and raw-chunk normalization. |
 | [`app/infrastructure/ingestion/jsonl.py`](../../app/infrastructure/ingestion/jsonl.py) | Atomic normalized-chunk JSONL output. |
-| [`app/ingestion.py`](../../app/ingestion.py) | Temporary public re-exports only. |
-| [`app/content_identity.py`](../../app/content_identity.py) | Temporary public re-exports only. |
+| Historical `app/ingestion.py` (removed in R12B) | Temporary public re-exports only. |
+| Historical `app/content_identity.py` (removed in R12B) | Temporary public re-exports only. |
 | [`scripts/operations/ingest_preview.py`](../../scripts/operations/ingest_preview.py) | Thin preview adapter using canonical owners. |
 | [`scripts/operations/index_phase7_corpus.py`](../../scripts/operations/index_phase7_corpus.py) | Explicit integration adapter using canonical ingestion owners. |
 

@@ -167,7 +167,7 @@ subclass retaining the same concrete defaults, argument names, and call behavior
   retrieval-policy package without eager exports.
 - [`app/domain/policies/query_analysis.py`](../../app/domain/policies/query_analysis.py) owns the
   frozen Vietnamese technical glossary and its deterministic lexical augmentation.
-- [`app/domain/policies/ranking.py`](../../app/domain/policies/ranking.py) owns query-role/list
+- Historical `app/domain/policies/ranking.py` (removed in R12B) owned query-role/list
   inference, weighted RRF, coverage reserves, list fallbacks, and post-rerank rank fusion.
 - [`app/infrastructure/qdrant/dense.py`](../../app/infrastructure/qdrant/dense.py) now owns dense search
   and payload mapping in addition to established dense embedding/indexing infrastructure.
@@ -184,22 +184,22 @@ subclass retaining the same concrete defaults, argument names, and call behavior
   through injected domain ports rather than Qdrant imports.
 - [`evaluation/candidate_audit.py`](../../evaluation/candidate_audit.py) now owns qrel/evaluation audit behavior after R07; during R04 the behavior remained under the former app facade and
   temporarily re-exports the two moved functions for compatibility.
-- [`app/hybrid_retrieval.py`](../../app/hybrid_retrieval.py) retains sparse/hybrid Qdrant coordination
+- Historical `app/hybrid_retrieval.py` (removed in R12B) retained sparse/hybrid Qdrant coordination
   for legacy `hybrid_search` and exposes canonical dense/sparse search and RRF compatibility aliases.
-- [`app/retrieval.py`](../../app/retrieval.py) is now a pure compatibility facade over dense Qdrant
+- Historical `app/retrieval.py` (removed in R12B) became a compatibility facade over dense Qdrant
   infrastructure and manifests.
-- [`app/reranking.py`](../../app/reranking.py) is now an evaluation-oriented compatibility facade. It
+- Historical `app/reranking.py` (removed in R12B) became an evaluation-oriented facade. It
   retains evaluator diagnostics, aliases canonical runtime functions, and preserves the historical
   pipeline constructor defaults through a compatibility subclass.
-- [`app/query_expansion.py`](../../app/query_expansion.py) remains a compatibility facade with an
+- Historical `app/query_expansion.py` (removed in R12B) remained a compatibility facade with an
   explicit public export list.
-- [`app/phase7_optimization.py`](../../app/phase7_optimization.py) remains an explicit compatibility
+- Historical `app/phase7_optimization.py` (removed in R12B) remained an explicit compatibility
   facade for historical scripts, replay code, and imports.
-- [`app/retrieval_runtime.py`](../../app/retrieval_runtime.py) composes query policy, the domain
+- Historical `app/retrieval_runtime.py` (removed in R12B) composed query policy, the domain
   reranking port, the infrastructure model adapter, and the canonical reranking application service.
 - [`app/domain/retrieval_contracts.py`](../../app/domain/retrieval_contracts.py) resolves the frozen
   query-expansion and fusion profiles without depending on top-level compatibility facades.
-- [`app/evidence_selection.py`](../../app/evidence_selection.py) consumes query-role inference from
+- Historical `app/evidence_selection.py` (removed in R12B) consumed query-role inference from
   the canonical domain owner.
 - [`tests/test_candidate_audit.py`](../../tests/test_candidate_audit.py) protects the exact candidate
   mapping, stable union behavior, and compatibility-export identity.
