@@ -5,12 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 
-from app.config import get_settings
-from app.retrieval_runtime import (
-    PHASE7_RETRIEVAL_CONTRACT,
-    build_query_retriever,
-    resolve_retrieval_runtime,
-)
+from app.composition.retrieval import build_query_retriever
+from app.config import get_settings, resolve_retrieval_runtime
+from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
 
 
 def main() -> int:

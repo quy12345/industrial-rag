@@ -24,9 +24,11 @@ from app.domain.policies.query_roles import QueryRoleInference, infer_query_role
 from app.domain.reranking import CrossEncoder, CrossEncoderScore, RerankingError
 from app.domain.retrieval import (
     DenseSearcher,
+    DenseSearchPort,
     RetrievalCandidate,
     RetrievedChunk,
     SparseSearcher,
+    SparseSearchPort,
     dense_results_to_candidates,
     union_dense_sparse_candidates,
 )
@@ -100,6 +102,51 @@ class RerankPipeline:
         self.query_role_inferer = query_role_inferer
         self.dense_search_fn = dense_search_fn
         self.sparse_search_fn = sparse_search_fn
+
+    @classmethod
+    def from_searchers(
+        cls,
+        *,
+        dense_searcher: DenseSearchPort,
+        sparse_searcher: SparseSearchPort,
+        cross_encoder: CrossEncoder,
+        dense_collection: str,
+        hybrid_collection: str,
+        dense_candidate_limit: int = 20,
+        sparse_candidate_limit: int = 20,
+        rrf_k: int = 60,
+        rerank_batch_size: int = 16,
+        deduplicate_content: bool = False,
+        document_contexts: Mapping[str, Mapping[str, str]] | None = None,
+        sparse_query_transform: Callable[[str], str] | None = None,
+        union_rrf_prune_limit: int | None = None,
+        phase7_fusion_profile: Phase7FusionProfile | None = None,
+        query_role_inferer: Callable[[str], QueryRoleInference] = infer_query_role,
+    ) -> RerankPipeline:
+        """Compose the pipeline from state-bound search ports."""
+
+        return cls(
+            client=None,
+            dense_embedding_model=None,
+            sparse_embedding_model=None,
+            cross_encoder=cross_encoder,
+            dense_collection=dense_collection,
+            hybrid_collection=hybrid_collection,
+            dense_vector_name="bound-by-adapter",
+            sparse_vector_name="bound-by-adapter",
+            dense_candidate_limit=dense_candidate_limit,
+            sparse_candidate_limit=sparse_candidate_limit,
+            rrf_k=rrf_k,
+            rerank_batch_size=rerank_batch_size,
+            deduplicate_content=deduplicate_content,
+            document_contexts=document_contexts,
+            sparse_query_transform=sparse_query_transform,
+            union_rrf_prune_limit=union_rrf_prune_limit,
+            phase7_fusion_profile=phase7_fusion_profile,
+            query_role_inferer=query_role_inferer,
+            dense_search_fn=_bind_dense_searcher(dense_searcher),
+            sparse_search_fn=_bind_sparse_searcher(sparse_searcher),
+        )
 
     def search(
         self, question: str, *, strategy: RerankStrategy, document_id: str | None = None
@@ -239,6 +286,56 @@ class RerankPipeline:
         if strategy == "sparse" and "union_preparation" in stages:
             stages.pop("union_preparation")
         return CandidatePool(candidates, stages)
+
+
+def _bind_dense_searcher(searcher: DenseSearchPort) -> DenseSearcher:
+    """Adapt one state-bound dense port to the legacy source-anchor callable."""
+
+    def search(
+        client: Any,
+        query: str,
+        *,
+        collection_name: str,
+        vector_name: str,
+        embedding_model: Any,
+        limit: int,
+        document_id: str | None = None,
+        score_threshold: float | None = None,
+    ) -> list[RetrievedChunk]:
+        del client, vector_name, embedding_model
+        return searcher.search(
+            query,
+            collection_name=collection_name,
+            limit=limit,
+            document_id=document_id,
+            score_threshold=score_threshold,
+        )
+
+    return search
+
+
+def _bind_sparse_searcher(searcher: SparseSearchPort) -> SparseSearcher:
+    """Adapt one state-bound sparse port to the legacy source-anchor callable."""
+
+    def search(
+        client: Any,
+        query: str,
+        *,
+        collection_name: str,
+        sparse_vector_name: str,
+        sparse_embedding_model: Any,
+        limit: int,
+        document_id: str | None = None,
+    ) -> list[RetrievalCandidate]:
+        del client, sparse_vector_name, sparse_embedding_model
+        return searcher.search(
+            query,
+            collection_name=collection_name,
+            limit=limit,
+            document_id=document_id,
+        )
+
+    return search
 
 
 def build_candidate_text(candidate: RetrievalCandidate) -> str:

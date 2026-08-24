@@ -410,6 +410,49 @@ def test_pipeline_preserves_document_filter_and_uses_correct_dense_collection() 
     assert calls == [("v2", "manual-b"), ("v2", "manual-b")]
 
 
+def test_pipeline_from_searchers_preserves_bound_adapter_contract() -> None:
+    calls: list[tuple[str, str, str, int, str | None, float | None]] = []
+
+    class DensePort:
+        @staticmethod
+        def search(
+            query,
+            *,
+            collection_name,
+            limit,
+            document_id=None,
+            score_threshold=None,
+        ):
+            calls.append(
+                ("dense", query, collection_name, limit, document_id, score_threshold)
+            )
+            return [_dense("dense", document_id=document_id)]
+
+    class SparsePort:
+        @staticmethod
+        def search(query, *, collection_name, limit, document_id=None):
+            calls.append(("sparse", query, collection_name, limit, document_id, None))
+            return [_candidate("sparse", sparse_rank=1, document_id=document_id)]
+
+    pipeline = reranking_service.RerankPipeline.from_searchers(
+        dense_searcher=DensePort(),
+        sparse_searcher=SparsePort(),
+        cross_encoder=FakeCrossEncoder(),
+        dense_collection="v1",
+        hybrid_collection="v2",
+        dense_candidate_limit=7,
+        sparse_candidate_limit=9,
+    )
+
+    pool = pipeline.prepare_pool("q", strategy="union", document_id="manual-b")
+
+    assert {candidate.chunk_id for candidate in pool.candidates} == {"dense", "sparse"}
+    assert calls == [
+        ("dense", "q", "v1", 7, "manual-b", None),
+        ("sparse", "q", "v2", 9, "manual-b", None),
+    ]
+
+
 def test_pipeline_attaches_only_configured_trusted_document_context() -> None:
     def fake_dense(*args, **kwargs):
         return [_dense("dense", document_id="manual-a")]

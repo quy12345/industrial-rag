@@ -10,13 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from app.application.reranking_service import PHASE7_CANDIDATE_TEXT_FORMAT
+from app.composition.retrieval import build_query_retriever
 from app.config import Settings
+from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
 from app.evaluation_e2e import FACT_EVALUATOR_ID
 from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
-from app.retrieval_runtime import (
-    PHASE7_RETRIEVAL_CONTRACT,
-    build_query_retriever,
-)
 from evaluation.phase7_dataset import (
     dataset_sha256,
     read_phase7_dataset,

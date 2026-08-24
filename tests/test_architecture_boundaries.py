@@ -14,6 +14,7 @@ PRODUCTION_RUNTIME_ROOTS = {
     "app.application.query_service",
     "app.application.reranking_service",
     "app.bootstrap",
+    "app.composition.retrieval",
     "app.main",
     "app.retrieval_runtime",
 }
@@ -63,10 +64,7 @@ ALLOWED_DEPENDENCY_LAYERS = {
     "shared": {"domain", "shared"},
 }
 
-R12_TEMPORARY_IMPORT_EDGES = {
-    ("app.bootstrap", "app.retrieval"),
-    ("app.bootstrap", "app.retrieval_runtime"),
-}
+R12_TEMPORARY_IMPORT_EDGES: set[tuple[str, str]] = set()
 
 
 def _module_name(path: Path) -> str:
@@ -149,7 +147,9 @@ def _architecture_layer(module: str) -> str | None:
         or module.startswith("ui.")
     ):
         return "inbound"
-    if module == "app.bootstrap":
+    if module == "app.bootstrap" or module == "app.composition" or module.startswith(
+        "app.composition."
+    ):
         return "composition"
     if module in {"app.config", "app.errors", "app.request_context"}:
         return "shared"
@@ -404,8 +404,11 @@ def test_query_service_depends_on_domain_retrieval_port_not_runtime_adapter() ->
     assert "app.domain.retrieval" in service
     assert "app.retrieval_runtime" not in service
     assert "app.config" not in service
-    assert "app.domain.retrieval" in graph["app.retrieval_runtime"]
+    assert "app.domain.retrieval" in graph["app.composition.retrieval"]
     assert "app.application.query_service" in graph["app.bootstrap"]
+    assert "app.composition.retrieval" in graph["app.bootstrap"]
+    assert "app.retrieval_runtime" not in graph["app.bootstrap"]
+    assert "app.retrieval" not in graph["app.bootstrap"]
     assert "app.query_service" not in graph["app.bootstrap"]
 
 
@@ -440,8 +443,8 @@ def test_runtime_uses_canonical_domain_rrf_policy() -> None:
 def test_runtime_uses_canonical_domain_query_analysis_policy() -> None:
     graph = _import_graph()
 
-    assert "app.domain.policies.query_analysis" in graph["app.retrieval_runtime"]
-    assert "app.query_expansion" not in graph["app.retrieval_runtime"]
+    assert "app.domain.policies.query_analysis" in graph["app.composition.retrieval"]
+    assert "app.query_expansion" not in graph["app.composition.retrieval"]
     assert "app.domain.policies.query_analysis" in graph["app.domain.retrieval_contracts"]
 
 
@@ -467,7 +470,7 @@ def test_runtime_uses_canonical_dense_search_adapter() -> None:
     graph = _import_graph()
 
     service = graph["app.application.reranking_service"]
-    assert "app.infrastructure.qdrant.dense" in graph["app.retrieval_runtime"]
+    assert "app.infrastructure.qdrant.dense" in graph["app.composition.retrieval"]
     assert "app.infrastructure.qdrant.dense" in graph["app.hybrid_retrieval"]
     assert "app.infrastructure.qdrant.dense" not in service
     assert "app.retrieval" not in service
@@ -477,23 +480,20 @@ def test_runtime_uses_canonical_dense_search_adapter() -> None:
 def test_runtime_uses_canonical_sparse_search_adapter() -> None:
     graph = _import_graph()
 
-    for module in (
-        "app.retrieval_runtime",
-        "app.hybrid_retrieval",
-    ):
+    for module in ("app.composition.retrieval", "app.hybrid_retrieval"):
         assert "app.infrastructure.qdrant.hybrid" in graph[module]
     assert "app.infrastructure.qdrant.hybrid" not in graph[
         "app.application.reranking_service"
     ]
     assert "app.hybrid_retrieval" not in graph["app.application.reranking_service"]
-    assert "app.hybrid_retrieval" not in graph["app.retrieval_runtime"]
+    assert "app.hybrid_retrieval" not in graph["app.composition.retrieval"]
 
 
 def test_runtime_composes_canonical_reranking_service_not_evaluation_facade() -> None:
     graph = _import_graph()
 
-    assert "app.application.reranking_service" in graph["app.retrieval_runtime"]
-    assert "app.reranking" not in graph["app.retrieval_runtime"]
+    assert "app.application.reranking_service" in graph["app.composition.retrieval"]
+    assert "app.reranking" not in graph["app.composition.retrieval"]
 
 
 def test_retrieval_evaluation_is_owned_outside_production_package() -> None:
@@ -598,6 +598,8 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
     imports = _local_imports(canonical_path)
 
     assert "app.application.reranking_service" in imports
+    assert "app.composition.retrieval" in imports
+    assert "app.domain.retrieval_contracts" in imports
     assert "app.infrastructure.corpus_artifacts" in imports
     assert "evaluation.phase7_dataset" in imports
     assert "evaluation.retrieval" in imports
@@ -605,6 +607,7 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
     assert "app.evaluation" not in imports
     assert "app.phase7" not in imports
     assert "app.reranking" not in imports
+    assert "app.retrieval_runtime" not in imports
 
     compatibility_path = APP_ROOT.parent / "scripts" / "evaluate_phase7_retrieval_closure.py"
     assert _imported_modules(compatibility_path) == {
@@ -633,6 +636,24 @@ def test_supported_script_surface_is_explicit_and_has_no_private_cross_imports()
             assert not {
                 module for module in _imported_modules(path) if module.startswith("scripts.")
             }
+
+
+def test_supported_retrieval_commands_use_canonical_composition_and_adapters() -> None:
+    scripts_root = APP_ROOT.parent / "scripts" / "operations"
+    validate_imports = _local_imports(scripts_root / "validate_query_runtime.py")
+    query_imports = _local_imports(scripts_root / "query_smoke.py")
+    index_imports = _local_imports(scripts_root / "index_phase7_corpus.py")
+
+    assert "app.composition.retrieval" in validate_imports
+    assert "app.domain.retrieval_contracts" in validate_imports
+    assert "app.domain.retrieval_contracts" in query_imports
+    assert "app.infrastructure.qdrant.client" in index_imports
+    assert "app.infrastructure.qdrant.dense" in index_imports
+    assert "app.infrastructure.qdrant.hybrid" in index_imports
+    for imports in (validate_imports, query_imports, index_imports):
+        assert "app.retrieval" not in imports
+        assert "app.retrieval_runtime" not in imports
+        assert "app.hybrid_retrieval" not in imports
 
 
 def test_corpus_audit_cli_uses_canonical_artifact_infrastructure() -> None:

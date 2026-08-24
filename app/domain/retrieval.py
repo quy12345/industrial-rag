@@ -63,8 +63,35 @@ class QueryRetriever(Protocol):
     def retrieve(self, question: str, *, document_id: str | None) -> QueryRetrievalResult: ...
 
 
+class DenseSearchPort(Protocol):
+    """Retrieve dense results through an adapter with bound infrastructure state."""
+
+    def search(
+        self,
+        query: str,
+        *,
+        collection_name: str,
+        limit: int,
+        document_id: str | None = None,
+        score_threshold: float | None = None,
+    ) -> list[RetrievedChunk]: ...
+
+
+class SparseSearchPort(Protocol):
+    """Retrieve sparse candidates through an adapter with bound infrastructure state."""
+
+    def search(
+        self,
+        query: str,
+        *,
+        collection_name: str,
+        limit: int,
+        document_id: str | None = None,
+    ) -> list[RetrievalCandidate]: ...
+
+
 class DenseSearcher(Protocol):
-    """Port for retrieving dense candidates without naming a vector-store adapter."""
+    """Legacy source-anchor callable retained until R12."""
 
     def __call__(
         self,
@@ -81,7 +108,7 @@ class DenseSearcher(Protocol):
 
 
 class SparseSearcher(Protocol):
-    """Port for retrieving sparse candidates without naming a vector-store adapter."""
+    """Legacy source-anchor callable retained until R12."""
 
     def __call__(
         self,

@@ -10,12 +10,12 @@ from app.config import Settings
 from app.contracts.health import HealthResponse, ReadinessResponse
 from app.contracts.query import Citation, QueryRequest, QueryResponse
 from app.domain.documents import DocumentChunk
-from app.domain.retrieval import RetrievalCandidate, RetrievedChunk
+from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate, RetrievedChunk
+from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
 from app.evidence_selection import EvidenceDuplicateGroup
 from app.generation import GeneratedAnswer, GenerationResult, TokenUsage
 from app.main import app
 from app.query_service import EvidenceGate, QueryService
-from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, QueryRetrievalResult
 
 INSTALLATION_DOCUMENT_ID = PHASE7_RETRIEVAL_CONTRACT.document_ids[0]
 PROGRAMMING_DOCUMENT_ID = PHASE7_RETRIEVAL_CONTRACT.document_ids[1]

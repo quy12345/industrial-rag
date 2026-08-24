@@ -6,7 +6,7 @@ import json
 from types import SimpleNamespace
 
 from app.config import Settings
-from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT
+from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
 from scripts import query_smoke as compatibility_query_smoke
 from scripts import validate_query_runtime as compatibility_validate_query_runtime
 from scripts.operations import query_smoke, validate_query_runtime

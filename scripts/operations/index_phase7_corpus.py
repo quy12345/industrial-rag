@@ -19,11 +19,7 @@ from app.application.indexing_service import (
 )
 from app.config import get_settings
 from app.domain.documents import IngestionError
-from app.hybrid_retrieval import (
-    compute_bm25_average_length,
-    create_sparse_embedding_model,
-    index_hybrid_chunks,
-)
+from app.errors import RetrievalError
 from app.infrastructure.corpus_artifacts import (
     PHASE7_CORPUS_VERSION,
     PHASE7_DENSE_COLLECTION,
@@ -36,13 +32,17 @@ from app.infrastructure.corpus_artifacts import (
 )
 from app.infrastructure.ingestion.jsonl import write_chunks_jsonl
 from app.infrastructure.ingestion.pipeline import ingest_document
-from app.retrieval import (
-    RetrievalError,
+from app.infrastructure.qdrant.client import create_qdrant_client
+from app.infrastructure.qdrant.dense import (
     create_embedding_model,
-    create_qdrant_client,
     get_embedding_dimension,
     get_indexed_chunk_ids,
     index_chunks,
+)
+from app.infrastructure.qdrant.hybrid import (
+    compute_bm25_average_length,
+    create_sparse_embedding_model,
+    index_hybrid_chunks,
 )
 
 DEFAULT_INPUTS = (

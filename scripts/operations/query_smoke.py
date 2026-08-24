@@ -15,8 +15,8 @@ from typing import Any
 
 from app.bootstrap import get_query_service
 from app.config import get_settings
+from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
 from app.errors import QueryPipelineError
-from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT
 
 DEFAULT_OUTPUT = Path("artifacts/metrics/phase-7-query-smoke.json")
 

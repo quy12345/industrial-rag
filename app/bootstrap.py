@@ -7,15 +7,15 @@ from functools import lru_cache
 
 from app.application.generation_prompt import HUMAN_PROMPT, SYSTEM_PROMPT, build_correction_text
 from app.application.query_service import QueryService
-from app.config import Settings, get_settings, resolve_retrieval_runtime
-from app.domain.evidence import EvidenceGate
-from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
-from app.retrieval import create_qdrant_client
-from app.retrieval_runtime import (
+from app.composition.retrieval import (
     LazyQueryRetriever,
     build_query_retriever,
     validate_frozen_runtime,
 )
+from app.config import Settings, get_settings, resolve_retrieval_runtime
+from app.domain.evidence import EvidenceGate
+from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
+from app.infrastructure.qdrant.client import create_qdrant_client
 
 ReadinessChecker = Callable[[], None]
 
