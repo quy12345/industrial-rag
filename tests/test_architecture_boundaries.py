@@ -64,11 +64,8 @@ ALLOWED_DEPENDENCY_LAYERS = {
 }
 
 R12_TEMPORARY_IMPORT_EDGES = {
-    ("app.application.reranking_service", "app.content_identity"),
     ("app.bootstrap", "app.retrieval"),
     ("app.bootstrap", "app.retrieval_runtime"),
-    ("app.domain.evidence", "app.content_identity"),
-    ("evaluation.phase7_dataset", "app.content_identity"),
 }
 
 
@@ -303,6 +300,30 @@ def test_application_services_have_no_adapter_or_evaluation_dependency() -> None
             or dependency == "app.infrastructure"
             or dependency.startswith("app.infrastructure.")
         }
+
+
+def test_content_identity_has_one_domain_owner() -> None:
+    graph = _import_graph()
+
+    for module in (
+        "app.application.reranking_service",
+        "app.domain.evidence",
+        "evaluation.phase7_dataset",
+    ):
+        assert "app.domain.content_identity" in graph[module]
+        assert "app.content_identity" not in graph[module]
+    assert "app.domain.content_identity" in graph["app.content_identity"]
+
+
+def test_supported_ingestion_commands_use_canonical_owners() -> None:
+    for path in (
+        APP_ROOT.parent / "scripts" / "operations" / "ingest_preview.py",
+        APP_ROOT.parent / "scripts" / "operations" / "index_phase7_corpus.py",
+    ):
+        imports = _local_imports(path)
+        assert "app.infrastructure.ingestion.pipeline" in imports
+        assert "app.infrastructure.ingestion.jsonl" in imports
+        assert "app.ingestion" not in imports
 
 
 def test_fastapi_modules_use_one_explicit_dependency_seam() -> None:

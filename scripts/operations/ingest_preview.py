@@ -8,14 +8,10 @@ from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
-from app.domain.documents import DocumentChunk
-from app.ingestion import (
-    IngestionError,
-    build_page_batches,
-    get_pdf_page_count,
-    ingest_document,
-    write_chunks_jsonl,
-)
+from app.domain.documents import DocumentChunk, IngestionError, build_page_batches
+from app.infrastructure.ingestion.docling import get_pdf_page_count
+from app.infrastructure.ingestion.jsonl import write_chunks_jsonl
+from app.infrastructure.ingestion.pipeline import ingest_document
 
 
 def main(argv: Sequence[str] | None = None) -> int:

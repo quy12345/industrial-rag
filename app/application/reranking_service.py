@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Literal
 
-from app.content_identity import evidence_content_fingerprint
+from app.domain.content_identity import evidence_content_fingerprint
 from app.domain.policies.fusion import (
     Phase7FusionProfile,
     Phase7OptimizationError,

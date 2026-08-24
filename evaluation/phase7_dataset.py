@@ -24,7 +24,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.content_identity import evidence_content_fingerprint
+from app.domain.content_identity import evidence_content_fingerprint
 from app.domain.documents import DocumentChunk
 from app.infrastructure.corpus_artifacts import chunk_set_metadata
 from evaluation.retrieval import phrase_matches

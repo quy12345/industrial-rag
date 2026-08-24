@@ -1,20 +1,8 @@
-"""Dependency-free identity helpers for equivalent evidence content."""
+"""Compatibility facade for evidence-content identity policies."""
 
-from __future__ import annotations
+from app.domain.content_identity import (
+    evidence_content_fingerprint as evidence_content_fingerprint,
+)
+from app.domain.content_identity import normalize_evidence_content as normalize_evidence_content
 
-import hashlib
-import re
-import unicodedata
-
-
-def normalize_evidence_content(text: str) -> str:
-    """Normalize case and whitespace without removing technical punctuation."""
-
-    normalized = unicodedata.normalize("NFKC", text).casefold()
-    return re.sub(r"\s+", " ", normalized).strip()
-
-
-def evidence_content_fingerprint(text: str) -> str:
-    """Return a stable hash used only for exact-normalized content equivalence."""
-
-    return hashlib.sha256(normalize_evidence_content(text).encode("utf-8")).hexdigest()
+__all__ = ["evidence_content_fingerprint", "normalize_evidence_content"]

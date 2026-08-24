@@ -4,11 +4,30 @@ from __future__ import annotations
 
 import pytest
 
+import app.content_identity as compatibility_content_identity
 import app.evidence_selection as evidence_facade
+from app.domain import content_identity
 from app.domain import evidence as evidence_policy
+from app.domain.retrieval import RetrievalCandidate
 from app.evidence_selection import EvidenceSelectionError, select_evidence_candidates
-from app.models import RetrievalCandidate
 from app.query_service import EvidenceGate, EvidenceGateDecision
+
+
+def test_evidence_content_identity_normalizes_and_hashes_exactly() -> None:
+    text = "  Disconnect\tPOWER\r\n before  service. "
+
+    assert compatibility_content_identity.normalize_evidence_content is (
+        content_identity.normalize_evidence_content
+    )
+    assert compatibility_content_identity.evidence_content_fingerprint is (
+        content_identity.evidence_content_fingerprint
+    )
+    assert content_identity.normalize_evidence_content(text) == (
+        "disconnect power before service."
+    )
+    assert content_identity.evidence_content_fingerprint(text) == (
+        "5e8167a98d18e8c913f4731198d5c80e1600085e409bc53d09ec13142fcd9575"
+    )
 
 
 def _candidate(

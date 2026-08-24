@@ -18,6 +18,7 @@ from app.application.indexing_service import (
     validate_collection_targets,
 )
 from app.config import get_settings
+from app.domain.documents import IngestionError
 from app.hybrid_retrieval import (
     compute_bm25_average_length,
     create_sparse_embedding_model,
@@ -33,7 +34,8 @@ from app.infrastructure.corpus_artifacts import (
     load_frozen_chunks,
     write_json_atomic,
 )
-from app.ingestion import IngestionError, ingest_document, write_chunks_jsonl
+from app.infrastructure.ingestion.jsonl import write_chunks_jsonl
+from app.infrastructure.ingestion.pipeline import ingest_document
 from app.retrieval import (
     RetrievalError,
     create_embedding_model,
