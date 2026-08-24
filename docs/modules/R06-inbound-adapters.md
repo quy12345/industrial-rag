@@ -101,8 +101,8 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
   bounded query smoke, sanitized artifact, scenarios, and explicit Phase 7 guard.
 - [`scripts/operations/validate_query_runtime.py`](../../scripts/operations/validate_query_runtime.py)
   owns the supported read-only retrieval smoke and its stable parser/output contract.
-- [`scripts/query_smoke.py`](../../scripts/query_smoke.py) and
-  [`scripts/validate_query_runtime.py`](../../scripts/validate_query_runtime.py) are thin historical
+- Historical `scripts/query_smoke.py` and `scripts/validate_query_runtime.py` (removed in R13A) were
+  thin historical
   entry-point shims.
 - [`tests/test_phase7_operational_smoke.py`](../../tests/test_phase7_operational_smoke.py) protects
   parser defaults, guards, artifact sanitization, exit behavior, and shim identity.
@@ -110,8 +110,8 @@ Invalid or absent values produce a generated ID. Every response keeps the `X-Req
   supported parse/preview/optional-JSONL command adapter.
 - [`scripts/operations/index_phase7_corpus.py`](../../scripts/operations/index_phase7_corpus.py) owns
   guarded Phase 7 indexing composition, manifest output, and the explicit mutation entry point.
-- [`scripts/ingest_preview.py`](../../scripts/ingest_preview.py) and
-  [`scripts/index_phase7_corpus.py`](../../scripts/index_phase7_corpus.py) preserve historical command
+- Historical `scripts/ingest_preview.py` and `scripts/index_phase7_corpus.py` (removed in R13A)
+  preserved historical command
   paths as thin shims.
 - [`tests/test_ingestion.py`](../../tests/test_ingestion.py) and
   [`tests/test_phase7_index_cli.py`](../../tests/test_phase7_index_cli.py) protect shim identity,

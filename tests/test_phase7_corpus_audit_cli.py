@@ -8,15 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import scripts.audit_phase7_corpus as compatibility_cli
 from scripts.operations import audit_phase7_corpus as audit_cli
 
 
-def test_corpus_audit_shim_and_parser_preserve_cli_contract() -> None:
-    assert compatibility_cli.main is audit_cli.main
-    assert compatibility_cli._build_parser is audit_cli._build_parser
-    assert compatibility_cli.SOURCES is audit_cli.SOURCES
-
+def test_corpus_audit_parser_preserves_cli_contract() -> None:
     args = audit_cli._build_parser().parse_args([])
 
     assert args.raw_dir == Path("data/raw")

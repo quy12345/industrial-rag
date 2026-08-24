@@ -151,7 +151,7 @@ it; model and provider construction remain absent from that path.
 - [`app/api/app.py`](../../app/api/app.py) owns FastAPI construction, middleware, health/readiness
   routes, and dependency overrides.
 - [`app/main.py`](../../app/main.py) is the compatibility ASGI export only.
-- [`scripts/query_smoke.py`](../../scripts/query_smoke.py) uses the same composition root as FastAPI.
+- Historical `scripts/query_smoke.py` (removed in R13A) used the same composition root as FastAPI.
 - [`tests/test_config_contracts.py`](../../tests/test_config_contracts.py) owns configuration
   precedence, cache, exact contract, profile matrix, and compatibility characterization.
 - [`tests/test_bootstrap.py`](../../tests/test_bootstrap.py) owns resolved-graph, lazy-construction,

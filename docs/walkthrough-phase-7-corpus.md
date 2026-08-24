@@ -46,7 +46,7 @@ Run technical metadata/text-layer audit without copying vendor text into an arti
 
 ```powershell
 docker compose --profile tools run --rm --no-deps -v "${PWD}:/workspace" -w /workspace ingestion `
-  python -m scripts.audit_phase7_corpus
+  python -m scripts.operations.audit_phase7_corpus
 ```
 
 The first hierarchical preview exposed excessive Programming-manual fragmentation (2,913 of 5,808
@@ -56,7 +56,7 @@ parsing-correctness change, not retrieval tuning:
 
 ```powershell
 docker compose --profile tools run --rm --no-deps -v "${PWD}:/workspace" -w /workspace ingestion `
-  python -m scripts.index_phase7_corpus --preview-only --page-batch-size 64 --chunker hybrid
+  python -m scripts.operations.index_phase7_corpus --preview-only --page-batch-size 64 --chunker hybrid
 ```
 
 After human review of the preview, index only the new collections and verify a deterministic second
@@ -65,7 +65,7 @@ indexing pass:
 ```powershell
 docker compose up -d qdrant
 docker compose --profile tools run --rm --no-deps -v "${PWD}:/workspace" -w /workspace ingestion `
-  python -m scripts.index_phase7_corpus --page-batch-size 64 --chunker hybrid --verify-reindex
+  python -m scripts.operations.index_phase7_corpus --page-batch-size 64 --chunker hybrid --verify-reindex
 ```
 
 This writes ignored runtime evidence only:

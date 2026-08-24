@@ -154,18 +154,18 @@ abstention. There is no silent provider or retrieval fallback.
 
 ## Supported commands
 
-The current implementations live under `scripts.operations` and `scripts.evaluation`. Until R13,
-these eight supported top-level shims preserve the documented invocation paths:
+The five operational commands use canonical module paths. Three evaluation shims remain only until
+R13B:
 
 ```text
-audit_phase7_corpus.py
-evaluate_phase7_e2e.py
-evaluate_phase7_retrieval_closure.py
-index_phase7_corpus.py
-ingest_preview.py
-query_smoke.py
-validate_phase7_dataset.py
-validate_query_runtime.py
+scripts.operations.audit_phase7_corpus
+scripts.operations.index_phase7_corpus
+scripts.operations.ingest_preview
+scripts.operations.query_smoke
+scripts.operations.validate_query_runtime
+scripts.validate_phase7_dataset
+scripts.evaluate_phase7_retrieval_closure
+scripts.evaluate_phase7_e2e
 ```
 
 Read [`scripts/README.md`](../scripts/README.md) before any integration command. Archived scripts are

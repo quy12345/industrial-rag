@@ -13,9 +13,10 @@ not imply that it is supported or safe to execute.
 - bounded query smoke;
 - read-only query-runtime validation.
 
-Stable top-level modules re-export only `main`, preserving the documented
-`python -m scripts.<command>` paths. Reusable domain or infrastructure behavior belongs under `app`,
-not inside these adapters.
+Invoke these commands through `python -m scripts.operations.<command>`. R13A removed the old
+top-level operational shims so this package is both the implementation owner and the supported
+entry point. Reusable domain or infrastructure behavior belongs under `app`, not inside these
+adapters.
 
 ## `evaluation`
 
@@ -30,9 +31,9 @@ import private helpers from another script implementation.
 
 ## Phase 7 E2E command
 
-`scripts/evaluation/evaluate_phase7_e2e.py` owns the current implementation. The supported
-`scripts/evaluate_phase7_e2e.py` path is a thin `main` shim like the other current commands and is
-scheduled for the common R13 CLI hard cut.
+`scripts/evaluation/evaluate_phase7_e2e.py` owns the current implementation. The temporary
+`scripts/evaluate_phase7_e2e.py` path remains a thin `main` shim until R13B removes all three
+evaluation shims together.
 
 R12A introduced artifact schema v6 and source-identity v2 so current artifacts hash canonical
 application, domain, infrastructure, and evaluation owners. Historical v5 artifacts remain
@@ -62,17 +63,18 @@ Archive policy:
 
 Read the phase-specific archive README before inspecting or executing historical code.
 
-## Supported top-level inventory
+## Supported command inventory
 
 ```text
-audit_phase7_corpus.py
-evaluate_phase7_e2e.py
-evaluate_phase7_retrieval_closure.py
-index_phase7_corpus.py
-ingest_preview.py
-query_smoke.py
-validate_phase7_dataset.py
-validate_query_runtime.py
+scripts.operations.audit_phase7_corpus
+scripts.operations.index_phase7_corpus
+scripts.operations.ingest_preview
+scripts.operations.query_smoke
+scripts.operations.validate_query_runtime
+scripts.validate_phase7_dataset              # temporary shim until R13B
+scripts.evaluate_phase7_retrieval_closure    # temporary shim until R13B
+scripts.evaluate_phase7_e2e                  # temporary shim until R13B
 ```
 
-The inventory and import boundaries are enforced by offline architecture tests.
+Canonical evaluation implementations already live under `scripts.evaluation`. The inventory,
+removed operational paths, and import boundaries are enforced by offline architecture tests.

@@ -618,17 +618,12 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
 
 def test_supported_script_surface_is_explicit_and_has_no_private_cross_imports() -> None:
     scripts_root = APP_ROOT.parent / "scripts"
-    supported = {
-        "audit_phase7_corpus.py",
+    remaining_evaluation_shims = {
         "evaluate_phase7_e2e.py",
         "evaluate_phase7_retrieval_closure.py",
-        "index_phase7_corpus.py",
-        "ingest_preview.py",
-        "query_smoke.py",
         "validate_phase7_dataset.py",
-        "validate_query_runtime.py",
     }
-    assert {path.name for path in scripts_root.glob("*.py")} == supported
+    assert {path.name for path in scripts_root.glob("*.py")} == remaining_evaluation_shims
 
     for package in (scripts_root / "operations", scripts_root / "evaluation"):
         for path in package.glob("*.py"):
@@ -664,17 +659,7 @@ def test_corpus_audit_cli_uses_canonical_artifact_infrastructure() -> None:
     assert imports == {"app.infrastructure.corpus_artifacts"}
     assert "app.phase7" not in imports
 
-    compatibility_path = APP_ROOT.parent / "scripts" / "audit_phase7_corpus.py"
-    tree = ast.parse(
-        compatibility_path.read_text(encoding="utf-8"),
-        filename=str(compatibility_path),
-    )
-    imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    }
-    assert imported_modules == {"scripts.operations.audit_phase7_corpus"}
+    assert not (APP_ROOT.parent / "scripts" / "audit_phase7_corpus.py").exists()
 
 
 def test_phase7_archive_is_preserved_but_not_part_of_the_supported_surface() -> None:

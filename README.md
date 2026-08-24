@@ -130,22 +130,22 @@ preserved local state.
 
 ## Supported commands
 
-Top-level `scripts/` intentionally exposes eight supported entry points:
+Supported commands use their canonical ownership paths:
 
 | Command | Purpose | External effects |
 | --- | --- | --- |
-| `python -m scripts.audit_phase7_corpus --help` | Audit the two source manuals | Reads local PDFs when executed |
-| `python -m scripts.index_phase7_corpus --help` | Guarded Phase 7 indexing | Mutates Qdrant only when explicitly executed |
-| `python -m scripts.ingest_preview --help` | Preview document ingestion | Reads input and may write requested output |
-| `python -m scripts.query_smoke --help` | Bounded end-to-end query smoke | Uses Qdrant, models, and configured provider |
-| `python -m scripts.validate_query_runtime --help` | Read-only runtime validation | Uses Qdrant and local models; no provider |
+| `python -m scripts.operations.audit_phase7_corpus --help` | Audit the two source manuals | Reads local PDFs when executed |
+| `python -m scripts.operations.index_phase7_corpus --help` | Guarded Phase 7 indexing | Mutates Qdrant only when explicitly executed |
+| `python -m scripts.operations.ingest_preview --help` | Preview document ingestion | Reads input and may write requested output |
+| `python -m scripts.operations.query_smoke --help` | Bounded end-to-end query smoke | Uses Qdrant, models, and configured provider |
+| `python -m scripts.operations.validate_query_runtime --help` | Read-only runtime validation | Uses Qdrant and local models; no provider |
 | `python -m scripts.validate_phase7_dataset --help` | Offline dataset validation | Provider-free and Qdrant-free |
 | `python -m scripts.evaluate_phase7_retrieval_closure --help` | Provider-free retrieval closure | Uses Qdrant and local reranker |
 | `python -m scripts.evaluate_phase7_e2e --help` | Pinned resumable E2E evaluator | Provider use requires explicit approval |
 
-The first six commands are thin compatibility shims over `scripts.operations` or
-`scripts.evaluation`. The retrieval-closure command is also a thin shim. The E2E evaluator remains
-top-level byte-for-byte because sanitized readiness artifacts pin its source blob. See
+The five old top-level operational paths were removed in R13A. The three evaluation commands remain
+thin shims until R13B; their implementations already live in `scripts.evaluation`. E2E provenance
+uses artifact schema v6 and source identity v2 over canonical owners. See
 [scripts/README.md](scripts/README.md) before using integration or archived tools.
 
 Archived commands have no top-level compatibility path and are unsupported. They are retained for

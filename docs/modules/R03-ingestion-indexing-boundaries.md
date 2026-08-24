@@ -154,7 +154,7 @@ or Qdrant access. Application failures map back to the same CLI messages and exi
   schema/payload/manifest, both embedding failure paths, mutation ordering, sparse search, and RRF.
 - [`app/application/indexing_service.py`](../../app/application/indexing_service.py) owns target and
   chunk safety validation plus injected indexing/archive/verification orchestration.
-- [`scripts/index_phase7_corpus.py`](../../scripts/index_phase7_corpus.py) remains the explicit
+- Historical `scripts/index_phase7_corpus.py` (removed in R13A) remained the explicit
   integration composition root: arguments, concrete adapter wiring, manifest metadata, and output.
 - [`tests/test_phase7_index_cli.py`](../../tests/test_phase7_index_cli.py) protects validation timing,
   call order, archive guards, chunk contracts, and exact post-index verification without Qdrant.

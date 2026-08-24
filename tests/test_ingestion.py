@@ -9,17 +9,11 @@ from types import SimpleNamespace
 import pytest
 from docling.datamodel.base_models import ConversionStatus
 
-import scripts.ingest_preview as compatibility_ingest_preview
 from app.domain import documents
 from app.domain.documents import DocumentChunk
 from app.infrastructure.ingestion import pipeline as ingestion
 from app.infrastructure.ingestion.jsonl import write_chunks_jsonl
 from scripts.operations import ingest_preview
-
-
-def test_ingestion_preview_shim_preserves_supported_entry_point_identity() -> None:
-    assert compatibility_ingest_preview.main is ingest_preview.main
-    assert compatibility_ingest_preview._build_parser is ingest_preview._build_parser
 
 
 def test_importing_canonical_ingestion_does_not_load_docling_or_pdfium() -> None:

@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import scripts.index_phase7_corpus as compatibility_index_cli
 from app.application.indexing_service import (
     IndexingSafetyError,
     Phase7IndexingService,
@@ -20,10 +19,7 @@ from app.infrastructure.corpus_artifacts import (
 from scripts.operations import index_phase7_corpus as index_cli
 
 
-def test_indexing_shim_and_parser_preserve_supported_contract() -> None:
-    assert compatibility_index_cli.main is index_cli.main
-    assert compatibility_index_cli._parser is index_cli._parser
-
+def test_indexing_parser_preserves_supported_contract() -> None:
     args = index_cli._parser().parse_args([])
     assert args.inputs == list(index_cli.DEFAULT_INPUTS)
     assert args.page_batch_size == 16
