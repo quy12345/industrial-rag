@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 
 import app.phase7_optimization as ranking_facade
+from app.domain.policies import fusion as fusion_policy
+from app.domain.policies import list_completeness as completeness_policy
+from app.domain.policies import query_roles as query_role_policy
 from app.domain.policies import ranking as ranking_policy
-from app.models import RetrievalCandidate
+from app.domain.retrieval import RetrievalCandidate
 from app.phase7_optimization import (
     Phase7FusionProfile,
     Phase7OptimizationError,
@@ -25,11 +28,19 @@ from app.phase7_optimization import (
 
 def test_phase7_facade_exports_canonical_ranking_policy() -> None:
     assert ranking_facade.Phase7FusionProfile is ranking_policy.Phase7FusionProfile
+    assert ranking_policy.Phase7FusionProfile is fusion_policy.Phase7FusionProfile
     assert ranking_facade.Phase7OptimizationError is ranking_policy.Phase7OptimizationError
+    assert ranking_policy.Phase7OptimizationError is fusion_policy.Phase7OptimizationError
     assert ranking_facade.infer_query_role is ranking_policy.infer_query_role
+    assert ranking_policy.infer_query_role is query_role_policy.infer_query_role
+    assert (
+        ranking_policy.apply_relation_list_completeness_fallback
+        is completeness_policy.apply_relation_list_completeness_fallback
+    )
+    assert ranking_policy.fuse_weighted_rrf is fusion_policy.fuse_weighted_rrf
     assert (
         ranking_facade.PHASE7_CALIBRATION_FUSION_PROFILE
-        is ranking_policy.PHASE7_CALIBRATION_FUSION_PROFILE
+        is fusion_policy.PHASE7_CALIBRATION_FUSION_PROFILE
     )
 
 

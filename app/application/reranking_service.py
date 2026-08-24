@@ -9,25 +9,27 @@ from time import perf_counter
 from typing import Any, Literal
 
 from app.content_identity import evidence_content_fingerprint
-from app.domain.policies.fusion import fuse_rrf
-from app.domain.policies.ranking import (
+from app.domain.policies.fusion import (
     Phase7FusionProfile,
     Phase7OptimizationError,
-    QueryRoleInference,
-    apply_list_completeness_fallback,
-    apply_relation_list_completeness_fallback,
     apply_role_aware_rank_fusion,
-    infer_query_role,
+    fuse_rrf,
     select_coverage_preserving_candidates,
 )
+from app.domain.policies.list_completeness import (
+    apply_list_completeness_fallback,
+    apply_relation_list_completeness_fallback,
+)
+from app.domain.policies.query_roles import QueryRoleInference, infer_query_role
 from app.domain.reranking import CrossEncoder, CrossEncoderScore, RerankingError
 from app.domain.retrieval import (
     DenseSearcher,
+    RetrievalCandidate,
+    RetrievedChunk,
     SparseSearcher,
     dense_results_to_candidates,
     union_dense_sparse_candidates,
 )
-from app.models import RetrievalCandidate, RetrievedChunk
 
 RerankStrategy = Literal["sparse", "hybrid", "union"]
 CANDIDATE_TEXT_FORMAT = "heading_content_v1"

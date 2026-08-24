@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
 from app.domain.documents import DocumentChunk
+from app.domain.retrieval import RetrievalCandidate, RetrievedChunk
 from app.errors import RetrievalError
 from app.infrastructure.qdrant.dense import (
     batched,
@@ -19,7 +20,6 @@ from app.infrastructure.qdrant.dense import (
     scroll_document_point_ids,
     to_float_vector,
 )
-from app.models import RetrievalCandidate, RetrievedChunk
 
 
 def create_sparse_embedding_model(

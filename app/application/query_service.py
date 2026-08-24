@@ -15,9 +15,8 @@ from app.domain.evidence import EvidenceGate as EvidenceGate
 from app.domain.evidence import EvidenceGateDecision as EvidenceGateDecision
 from app.domain.evidence import EvidenceSelectionError, select_evidence_candidates
 from app.domain.generation import AnswerGenerator, TokenUsage
-from app.domain.retrieval import QueryRetriever
+from app.domain.retrieval import QueryRetriever, RetrievalCandidate
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
-from app.models import RetrievalCandidate
 from app.request_context import request_id
 
 # Keep the established category stable while the implementation moves behind a facade.

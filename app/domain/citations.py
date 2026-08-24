@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from app.contracts.query import Citation
 from app.domain.generation import GeneratedAnswer
+from app.domain.retrieval import RetrievalCandidate
 from app.errors import CitationValidationError
-from app.models import RetrievalCandidate
 
 
 @dataclass(frozen=True)

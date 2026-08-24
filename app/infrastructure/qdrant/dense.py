@@ -11,8 +11,8 @@ from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
 from app.domain.documents import DocumentChunk
+from app.domain.retrieval import RetrievedChunk
 from app.errors import RetrievalError
-from app.models import RetrievedChunk
 
 POINT_NAMESPACE = UUID("91bf9b94-7641-5d4f-9e2a-d76c9d358c7d")
 

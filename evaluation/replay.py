@@ -5,13 +5,12 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from app.domain.policies.ranking import (
+from app.domain.policies.fusion import (
     Phase7OptimizationError,
     PostRerankConfidenceMode,
-    QueryRole,
-    RoleConfidence,
     apply_role_aware_rank_fusion,
 )
+from app.domain.policies.query_roles import QueryRole, RoleConfidence
 from app.domain.retrieval import RetrievalCandidate
 
 

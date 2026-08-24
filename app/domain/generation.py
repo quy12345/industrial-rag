@@ -8,7 +8,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models import RetrievalCandidate
+from app.domain.retrieval import RetrievalCandidate
 
 
 class GeneratedAnswer(BaseModel):

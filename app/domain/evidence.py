@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.content_identity import evidence_content_fingerprint
-from app.domain.policies.ranking import QueryRole, QueryRoleInference, infer_query_role
-from app.models import RetrievalCandidate
+from app.domain.policies.query_roles import QueryRole, QueryRoleInference, infer_query_role
+from app.domain.retrieval import RetrievalCandidate
 
 EvidenceGateReason = Literal[
     "no_candidates",

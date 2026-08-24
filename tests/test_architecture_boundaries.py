@@ -64,20 +64,10 @@ ALLOWED_DEPENDENCY_LAYERS = {
 }
 
 R12_TEMPORARY_IMPORT_EDGES = {
-    ("app.application.generation_prompt", "app.models"),
-    ("app.application.query_service", "app.models"),
     ("app.application.reranking_service", "app.content_identity"),
-    ("app.application.reranking_service", "app.models"),
     ("app.bootstrap", "app.retrieval"),
     ("app.bootstrap", "app.retrieval_runtime"),
-    ("app.domain.citations", "app.models"),
     ("app.domain.evidence", "app.content_identity"),
-    ("app.domain.evidence", "app.models"),
-    ("app.domain.generation", "app.models"),
-    ("app.domain.policies.fusion", "app.models"),
-    ("app.domain.policies.ranking", "app.models"),
-    ("app.infrastructure.qdrant.dense", "app.models"),
-    ("app.infrastructure.qdrant.hybrid", "app.models"),
     ("evaluation.phase7_dataset", "app.content_identity"),
 }
 
@@ -434,15 +424,21 @@ def test_runtime_uses_canonical_domain_query_analysis_policy() -> None:
     assert "app.domain.policies.query_analysis" in graph["app.domain.retrieval_contracts"]
 
 
-def test_runtime_uses_canonical_domain_ranking_policy() -> None:
+def test_runtime_uses_focused_domain_ranking_policies() -> None:
     graph = _import_graph()
 
+    service = graph["app.application.reranking_service"]
+    assert "app.domain.policies.fusion" in service
+    assert "app.domain.policies.list_completeness" in service
+    assert "app.domain.policies.query_roles" in service
+    assert "app.domain.policies.query_roles" in graph["app.domain.evidence"]
+    assert "app.domain.policies.fusion" in graph["app.domain.retrieval_contracts"]
     for module in (
         "app.application.reranking_service",
         "app.domain.evidence",
         "app.domain.retrieval_contracts",
     ):
-        assert "app.domain.policies.ranking" in graph[module]
+        assert "app.domain.policies.ranking" not in graph[module]
         assert "app.phase7_optimization" not in graph[module]
 
 
@@ -503,7 +499,9 @@ def test_sanitized_replay_is_owned_outside_production_package() -> None:
 
     assert not (APP_ROOT / "phase7_replay.py").exists()
     assert "app.domain.retrieval" in graph["evaluation.replay"]
-    assert "app.domain.policies.ranking" in graph["evaluation.replay"]
+    assert "app.domain.policies.fusion" in graph["evaluation.replay"]
+    assert "app.domain.policies.query_roles" in graph["evaluation.replay"]
+    assert "app.domain.policies.ranking" not in graph["evaluation.replay"]
     assert "app.models" not in graph["evaluation.replay"]
     assert "app.phase7_optimization" not in graph["evaluation.replay"]
     assert "app.phase7_replay" not in graph["evaluation.replay"]
