@@ -4,8 +4,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import ReadinessChecker, Settings
-from app.models import HealthResponse, ReadinessResponse
-from app.retrieval import RetrievalError
+from app.contracts.health import HealthResponse, ReadinessResponse
+from app.errors import RetrievalError
 
 
 def create_health_router(

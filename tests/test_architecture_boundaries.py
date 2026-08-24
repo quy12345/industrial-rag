@@ -64,8 +64,6 @@ ALLOWED_DEPENDENCY_LAYERS = {
 }
 
 R12_TEMPORARY_IMPORT_EDGES = {
-    ("app.api.health", "app.models"),
-    ("app.api.health", "app.retrieval"),
     ("app.application.generation_prompt", "app.models"),
     ("app.application.query_service", "app.models"),
     ("app.application.reranking_service", "app.content_identity"),
@@ -78,7 +76,6 @@ R12_TEMPORARY_IMPORT_EDGES = {
     ("app.domain.generation", "app.models"),
     ("app.domain.policies.fusion", "app.models"),
     ("app.domain.policies.ranking", "app.models"),
-    ("app.domain.retrieval", "app.models"),
     ("app.infrastructure.qdrant.dense", "app.models"),
     ("app.infrastructure.qdrant.hybrid", "app.models"),
     ("evaluation.phase7_dataset", "app.content_identity"),

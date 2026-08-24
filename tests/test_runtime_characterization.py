@@ -5,11 +5,15 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+import app.models as compatibility_models
 from app.config import Settings
+from app.contracts.health import HealthResponse, ReadinessResponse
+from app.contracts.query import Citation, QueryRequest, QueryResponse
+from app.domain.documents import DocumentChunk
+from app.domain.retrieval import RetrievalCandidate, RetrievedChunk
 from app.evidence_selection import EvidenceDuplicateGroup
 from app.generation import GeneratedAnswer, GenerationResult, TokenUsage
 from app.main import app
-from app.models import QueryRequest, QueryResponse, RetrievalCandidate
 from app.query_service import EvidenceGate, QueryService
 from app.retrieval_runtime import PHASE7_RETRIEVAL_CONTRACT, QueryRetrievalResult
 
@@ -133,6 +137,17 @@ def test_public_query_schema_matches_the_active_http_contract() -> None:
     assert operation["parameters"][0]["name"] == "authorization"
     assert operation["parameters"][0]["in"] == "header"
     assert operation["parameters"][0]["required"] is False
+
+
+def test_models_facade_preserves_canonical_contract_identity() -> None:
+    assert compatibility_models.Citation is Citation
+    assert compatibility_models.DocumentChunk is DocumentChunk
+    assert compatibility_models.HealthResponse is HealthResponse
+    assert compatibility_models.QueryRequest is QueryRequest
+    assert compatibility_models.QueryResponse is QueryResponse
+    assert compatibility_models.ReadinessResponse is ReadinessResponse
+    assert compatibility_models.RetrievalCandidate is RetrievalCandidate
+    assert compatibility_models.RetrievedChunk is RetrievedChunk
 
 
 def test_retrieval_candidate_schema_and_copy_contract_are_stable() -> None:
