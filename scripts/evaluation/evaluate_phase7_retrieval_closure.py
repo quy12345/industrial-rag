@@ -13,8 +13,8 @@ from app.application.reranking_service import PHASE7_CANDIDATE_TEXT_FORMAT
 from app.composition.retrieval import build_query_retriever
 from app.config import Settings
 from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
-from app.evaluation_e2e import FACT_EVALUATOR_ID
 from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
+from evaluation.e2e import FACT_EVALUATOR_ID
 from evaluation.phase7_dataset import (
     dataset_sha256,
     read_phase7_dataset,

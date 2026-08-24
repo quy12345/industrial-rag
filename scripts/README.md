@@ -22,17 +22,21 @@ not inside these adapters.
 `scripts/evaluation/` owns supported offline/integration evaluation adapters:
 
 - Phase 7 dataset validation;
-- provider-free retrieval-closure execution.
+- provider-free retrieval-closure execution;
+- the approval-gated Phase 7 E2E evaluator.
 
 Their reusable schemas and metrics live in `evaluation/`. Supported script implementations must not
 import private helpers from another script implementation.
 
-## Pinned top-level E2E exception
+## Phase 7 E2E command
 
-`scripts/evaluate_phase7_e2e.py` deliberately remains top-level and byte-for-byte stable. Historical
-sanitized readiness artifacts include its Git blob in their source identity. Moving it without an
-explicit versioned artifact migration would invalidate provenance, so Round 1 documents this narrow
-exception instead of creating a misleading facade.
+`scripts/evaluation/evaluate_phase7_e2e.py` owns the current implementation. The supported
+`scripts/evaluate_phase7_e2e.py` path is a thin `main` shim like the other current commands and is
+scheduled for the common R13 CLI hard cut.
+
+R12A introduced artifact schema v6 and source-identity v2 so current artifacts hash canonical
+application, domain, infrastructure, and evaluation owners. Historical v5 artifacts remain
+immutable, and their checkpoints fail closed under the new identity.
 
 This evaluator can call a real provider. Do not execute it without separate provider/data-egress
 approval. Held-out execution remains governance-sensitive, and exposed held-out v2 must not be used

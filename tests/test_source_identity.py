@@ -1,54 +1,70 @@
-"""Offline characterization for the legacy Phase 7 E2E source identity."""
+"""Offline characterization for canonical Phase 7 E2E source identity v2."""
 
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
 
-from scripts import evaluate_phase7_e2e
+import pytest
+
+from scripts.evaluation import evaluate_phase7_e2e
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
-PINNED_GIT_BLOBS = {
-    Path("scripts/evaluate_phase7_e2e.py"): "7ce4dc9c180fd675eb89e5c06844766b664c6b69",
-    Path("app/evaluation_e2e.py"): "b8be722d43bc34c8bec00dfc2574d0a6341ab738",
+CANONICAL_SOURCE_IDENTITY_PATHS = {
+    "citation_policy": Path("app/domain/citations.py"),
+    "dataset_contract": Path("evaluation/phase7_dataset.py"),
+    "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
+    "evaluator": Path("evaluation/e2e.py"),
+    "evaluation_command": Path("scripts/evaluation/evaluate_phase7_e2e.py"),
+    "evidence_policy": Path("app/domain/evidence.py"),
+    "fusion_policy": Path("app/domain/policies/fusion.py"),
+    "generation_adapter": Path("app/infrastructure/generation/langchain_structured.py"),
+    "generation_prompt_policy": Path("app/application/generation_prompt.py"),
+    "list_completeness_policy": Path("app/domain/policies/list_completeness.py"),
+    "query_analysis_policy": Path("app/domain/policies/query_analysis.py"),
+    "query_role_policy": Path("app/domain/policies/query_roles.py"),
+    "query_service": Path("app/application/query_service.py"),
+    "reranker_adapter": Path("app/infrastructure/models/reranker.py"),
+    "reranking_service": Path("app/application/reranking_service.py"),
+    "retrieval_metrics": Path("evaluation/retrieval.py"),
+    "retrieval_composition": Path("app/composition/retrieval.py"),
+    "retrieval_contract": Path("app/domain/retrieval_contracts.py"),
+    "search_adapters": Path("app/infrastructure/qdrant/search.py"),
+    "sparse_search_adapter": Path("app/infrastructure/qdrant/hybrid.py"),
 }
 
-LEGACY_SOURCE_IDENTITY_PATHS = {
-    "prompt": Path("app/generation.py"),
-    "evaluator": Path("app/evaluation_e2e.py"),
-    "evidence_selector": Path("app/evidence_selection.py"),
-    "retrieval_runtime": Path("app/retrieval_runtime.py"),
-    "reranking": Path("app/reranking.py"),
-    "phase7_optimization": Path("app/phase7_optimization.py"),
-    "query_service": Path("app/query_service.py"),
-    "citations": Path("app/citations.py"),
-    "query_expansion": Path("app/query_expansion.py"),
-}
 
+def test_e2e_source_identity_v2_hashes_canonical_behavior_owners() -> None:
+    assert evaluate_phase7_e2e.SOURCE_IDENTITY_VERSION == 2
+    assert evaluate_phase7_e2e.SOURCE_IDENTITY_PATHS == CANONICAL_SOURCE_IDENTITY_PATHS
 
-def _git_blob_sha1(path: Path) -> str:
-    payload = path.read_bytes()
-    git_blob = b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload
-    return hashlib.sha1(git_blob, usedforsecurity=False).hexdigest()
-
-
-def test_exact_e2e_source_anchor_blobs_are_unchanged() -> None:
-    actual = {
-        path: _git_blob_sha1(REPOSITORY_ROOT / path) for path in PINNED_GIT_BLOBS
-    }
-
-    assert actual == PINNED_GIT_BLOBS
-
-
-def test_legacy_e2e_source_identity_tracks_the_documented_files() -> None:
-    actual = evaluate_phase7_e2e._source_identity()
-    expected = {
+    expected_files = {
         name: hashlib.sha256((REPOSITORY_ROOT / path).read_bytes()).hexdigest()
-        for name, path in LEGACY_SOURCE_IDENTITY_PATHS.items()
+        for name, path in CANONICAL_SOURCE_IDENTITY_PATHS.items()
     }
-    expected["system_prompt_sha256"] = (
-        "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"
-    )
 
-    assert actual == expected
+    assert evaluate_phase7_e2e._source_identity() == {
+        "version": 2,
+        "files": expected_files,
+        "system_prompt_sha256": (
+            "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"
+        ),
+    }
+
+
+def test_v1_checkpoint_fails_closed_under_source_identity_v2(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "legacy-v1-checkpoint.jsonl"
+    legacy_identity = {
+        "source_identity": {
+            "prompt": "legacy",
+            "evaluator": "legacy",
+        }
+    }
+    evaluate_phase7_e2e._write_checkpoint(checkpoint, legacy_identity, [])
+
+    with pytest.raises(RuntimeError, match="different frozen run"):
+        evaluate_phase7_e2e._load_checkpoint(
+            checkpoint,
+            {"source_identity": evaluate_phase7_e2e._source_identity()},
+        )

@@ -33,7 +33,6 @@ R12_ROOT_MODULE_ANCHORS = {
     "app.citations",
     "app.content_identity",
     "app.evaluation",
-    "app.evaluation_e2e",
     "app.evidence_selection",
     "app.generation",
     "app.hybrid_retrieval",
@@ -504,6 +503,37 @@ def test_retrieval_evaluation_is_owned_outside_production_package() -> None:
     assert "app.infrastructure.corpus_artifacts" in graph["evaluation.retrieval"]
     assert "app.models" not in graph["evaluation.retrieval"]
     assert "app.evaluation" not in graph["evaluation.retrieval"]
+
+
+def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
+    graph = _import_graph()
+
+    assert not (APP_ROOT / "evaluation_e2e.py").exists()
+    evaluator = graph["evaluation.e2e"]
+    assert "app.application.query_service" in evaluator
+    assert "evaluation.phase7_dataset" in evaluator
+    assert "evaluation.retrieval" in evaluator
+    assert not {
+        dependency
+        for dependency in evaluator
+        if dependency in R12_ROOT_MODULE_ANCHORS
+    }
+
+    canonical_cli = (
+        APP_ROOT.parent / "scripts" / "evaluation" / "evaluate_phase7_e2e.py"
+    )
+    cli_imports = _local_imports(canonical_cli)
+    assert "evaluation.e2e" in cli_imports
+    assert "app.composition.retrieval" in cli_imports
+    assert "app.application.query_service" in cli_imports
+    assert not {
+        dependency for dependency in cli_imports if dependency in R12_ROOT_MODULE_ANCHORS
+    }
+
+    supported_shim = APP_ROOT.parent / "scripts" / "evaluate_phase7_e2e.py"
+    assert _imported_modules(supported_shim) == {
+        "scripts.evaluation.evaluate_phase7_e2e"
+    }
 
 
 def test_candidate_audit_is_owned_outside_production_package() -> None:

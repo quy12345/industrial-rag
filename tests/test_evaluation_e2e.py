@@ -6,17 +6,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.evaluation_e2e import (
+from app.application.query_service import QueryExecution, QueryTimings
+from app.contracts.query import Citation, QueryResponse
+from app.domain.generation import TokenUsage
+from app.domain.retrieval import RetrievalCandidate
+from evaluation.e2e import (
     aggregate_phase7_records,
     evaluate_phase7_quality_gates,
     score_expected_answer_fact,
     score_phase7_execution,
 )
-from app.generation import TokenUsage
-from app.models import Citation, QueryResponse, RetrievalCandidate
-from app.phase7 import ExpectedAnswerFact, Phase7DatasetItem
-from app.query_service import QueryExecution, QueryTimings
-from scripts import evaluate_phase7_e2e
+from evaluation.phase7_dataset import ExpectedAnswerFact, Phase7DatasetItem
+from scripts.evaluation import evaluate_phase7_e2e
 
 
 def _candidate(chunk_id: str, *, document_id: str = "installation") -> RetrievalCandidate:
@@ -454,7 +455,7 @@ def test_document_contamination_metrics_and_gate_are_explicit() -> None:
     assert gates["gates"]["wrong_document_citations"]["passed"] is False
 
 
-def test_phase7_v5_cli_uses_new_artifact_paths(monkeypatch) -> None:
+def test_phase7_v6_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -466,8 +467,9 @@ def test_phase7_v5_cli_uses_new_artifact_paths(monkeypatch) -> None:
         ],
     )
     args = evaluate_phase7_e2e._parse_args()
-    assert args.output.name == "phase-7-calibration-e2e-v5.json"
-    assert args.checkpoint.name == "phase-7-calibration-e2e-v5-checkpoint.jsonl"
+    assert evaluate_phase7_e2e.ARTIFACT_SCHEMA_VERSION == 6
+    assert args.output.name == "phase-7-calibration-e2e-v6.json"
+    assert args.checkpoint.name == "phase-7-calibration-e2e-v6-checkpoint.jsonl"
     settings = evaluate_phase7_e2e._phase7_settings(evaluate_phase7_e2e.Settings())
     assert settings.rerank_deduplicate_content is True
     assert settings.dense_candidate_limit == 60

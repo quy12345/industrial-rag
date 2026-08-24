@@ -1,6 +1,6 @@
 """Offline, direct-evidence scoring for the frozen Phase 7 end-to-end suite.
 
-This module scores a completed :class:`~app.query_service.QueryExecution`.  It
+This module scores a completed :class:`~app.application.query_service.QueryExecution`.  It
 never initializes Qdrant, an embedding model, reranker, or generation provider;
 the CLI is responsible for executing the live pipeline and passing its sanitized
 result here.
@@ -15,9 +15,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from app.evaluation import direct_evidence_rank, percentile_nearest_rank, phrase_matches
-from app.phase7 import ExpectedAnswerFact, Phase7DatasetItem
-from app.query_service import QueryExecution
+from app.application.query_service import QueryExecution
+from evaluation.phase7_dataset import ExpectedAnswerFact, Phase7DatasetItem
+from evaluation.retrieval import direct_evidence_rank, percentile_nearest_rank, phrase_matches
 
 FACT_EVALUATOR_ID = "phase7_deterministic_typed_facts_v2"
 _NEGATION_TOKENS = frozenset(

@@ -32,20 +32,28 @@ through R11 introduce canonical owners while the two source anchors remain uncha
 one explicit provenance migration and removes the compatibility paths. R13 then hard-cuts the old
 repository-local CLI module names instead of adding another deprecation layer.
 
-The R12 E2E format will use artifact schema version 6 and source-identity version 2. Historical v5
+The R12 E2E format uses artifact schema version 6 and source-identity version 2. Historical v5
 artifacts remain immutable, old checkpoints fail closed, and Git history retains the original blobs.
 The migration changes provenance metadata and import paths only; it does not authorize an evaluation
 run, a provider call, retrieval tuning, or a frozen-data change.
 
-## Current source anchors
+## Historical source anchors
 
 ```text
 scripts/evaluate_phase7_e2e.py  7ce4dc9c180fd675eb89e5c06844766b664c6b69
 app/evaluation_e2e.py           b8be722d43bc34c8bec00dfc2574d0a6341ab738
 ```
 
-R08 verifies these values by reconstructing Git blob IDs directly from file bytes. The test does not
-need Git metadata and therefore also works in a source-only validation container.
+R08 verified these values by reconstructing Git blob IDs directly from file bytes. R12A then moved
+the implementation to `evaluation/e2e.py` and `scripts/evaluation/evaluate_phase7_e2e.py`; Git
+history retains the two exact blobs above without copying obsolete implementations into the active
+tree.
+
+Source-identity v2 hashes the selected canonical behavior owners for evaluation, query
+orchestration, retrieval composition and contracts, ranking policies, evidence/citation policies,
+generation, reranking, and Qdrant search. The source identity is an explicit object with `version`,
+`files`, and `system_prompt_sha256` fields. Artifact schema version is also part of the run identity,
+so a historical checkpoint cannot be resumed under the new provenance contract.
 
 ## Consequences
 

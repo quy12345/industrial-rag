@@ -30,8 +30,8 @@ Gemini OpenAI-compatible Chat Completions invocation, and provider-native struct
 
 ## Main modules
 
-Round 1 established these canonical owners while retaining a few explicit compatibility/source-pin
-anchors:
+Round 1 established these canonical owners. The current simplification pass is removing the
+remaining explicit compatibility paths through versioned hard cuts:
 
 ```text
 app/api                 inbound HTTP adapters
@@ -63,7 +63,7 @@ ui                      HTTP-only Streamlit adapter
 - `app/phase7.py`: compatibility/source-identity anchor. Canonical two-manual dataset schemas,
   validation, hashing, qrel closure, and review state live in `evaluation/phase7_dataset.py`; active
   corpus file identity lives in `app/infrastructure/corpus_artifacts.py`.
-- `app/evaluation_e2e.py`: offline scoring of a completed query execution: qrel-only ranks,
+- `evaluation/e2e.py`: offline scoring of a completed query execution: qrel-only ranks,
   citation outcomes, abstention confusion matrix, typed deterministic answer facts, strict-phrase
   and token-overlap diagnostics, bounded lexical inflection for text facts, span-aware negation,
   document contamination, full-ranking versus actual-evidence qrel ranks, and latency summaries. It
@@ -120,10 +120,10 @@ ui                      HTTP-only Streamlit adapter
   indexing for the isolated ATV320 collections.
 - `scripts/archive/phase7/freeze_phase7_calibration_v3.py`: unsupported completed approval tool that
   copied the reviewed typed calibration draft to the frozen v3 file and manifest.
-- `scripts/evaluate_phase7_e2e.py`: resumable integration evaluator that validates the approved
-  manifest and live frozen hash before it sends anything to a provider. Calibration mode reads one
-  split only and records a full non-secret run identity. Held-out execution currently fails closed
-  with `BLOCKED_GOVERNANCE` because historical repository content exposed that split.
+- `scripts/evaluate_phase7_e2e.py`: supported thin entry point for the resumable implementation in
+  `scripts/evaluation/evaluate_phase7_e2e.py`. It validates the approved manifest and live frozen
+  hash before provider egress, writes schema-v6 artifacts with canonical source-identity v2, and
+  keeps held-out execution blocked by governance.
 - `scripts/archive/phase7/calibrate_phase7_retrieval.py`,
   `audit_phase7_retrieval_failures.py`, and `calibrate_phase7_weighted_fusion.py`: unsupported
   completed Phase 7 retrieval experiments retained for provenance.
