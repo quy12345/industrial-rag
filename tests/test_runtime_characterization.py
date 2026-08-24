@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from app.config import Settings
 from app.evidence_selection import EvidenceDuplicateGroup
 from app.generation import GeneratedAnswer, GenerationResult, TokenUsage
@@ -130,6 +133,65 @@ def test_public_query_schema_matches_the_active_http_contract() -> None:
     assert operation["parameters"][0]["name"] == "authorization"
     assert operation["parameters"][0]["in"] == "header"
     assert operation["parameters"][0]["required"] is False
+
+
+def test_retrieval_candidate_schema_and_copy_contract_are_stable() -> None:
+    schema = RetrievalCandidate.model_json_schema()
+
+    assert schema["required"] == [
+        "chunk_id",
+        "document_id",
+        "filename",
+        "text",
+        "page_numbers",
+        "headings",
+        "content_type",
+        "score",
+    ]
+    for field_name in ("dense_rank", "sparse_rank", "rrf_rank", "rerank_rank"):
+        assert schema["properties"][field_name]["anyOf"][0] == {
+            "minimum": 1,
+            "type": "integer",
+        }
+
+    candidate = RetrievalCandidate(
+        chunk_id="candidate-1",
+        document_id=INSTALLATION_DOCUMENT_ID,
+        filename="ATV320_installation.pdf",
+        text="Disconnect all power before servicing the drive.",
+        page_numbers=[42],
+        headings=["Safety"],
+        content_type="text",
+        score=0.75,
+    )
+    copied = candidate.model_copy(update={"dense_rank": 2, "dense_score": 0.75})
+
+    assert candidate.dense_rank is None
+    assert candidate.dense_score is None
+    assert copied.dense_rank == 2
+    assert copied.dense_score == 0.75
+    assert copied.metadata == {}
+
+
+@pytest.mark.parametrize("field_name", ["dense_rank", "sparse_rank", "rrf_rank", "rerank_rank"])
+def test_retrieval_candidate_rejects_non_positive_one_based_ranks(field_name: str) -> None:
+    values = {
+        "chunk_id": "candidate-1",
+        "document_id": INSTALLATION_DOCUMENT_ID,
+        "filename": "ATV320_installation.pdf",
+        "text": "Disconnect all power before servicing the drive.",
+        "page_numbers": [42],
+        "headings": ["Safety"],
+        "content_type": "text",
+        "score": 0.75,
+        field_name: 0,
+    }
+
+    with pytest.raises(ValidationError) as caught:
+        RetrievalCandidate(**values)
+
+    assert caught.value.errors()[0]["loc"] == (field_name,)
+    assert caught.value.errors()[0]["type"] == "greater_than_equal"
 
 
 def test_golden_phase7_query_execution_preserves_all_stage_boundaries() -> None:

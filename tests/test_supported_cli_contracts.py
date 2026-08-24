@@ -1,0 +1,128 @@
+"""Public invocation characterization for every supported repository CLI."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPOSITORY_ROOT = Path(__file__).parents[1]
+
+SUPPORTED_CLI_OPTIONS = [
+    ("scripts.audit_phase7_corpus", {"--raw-dir", "--output"}),
+    (
+        "scripts.evaluate_phase7_e2e",
+        {
+            "--dataset",
+            "--calibration",
+            "--test",
+            "--chunks",
+            "--manifest",
+            "--top-k",
+            "--provider-approval-token",
+            "--max-queries",
+            "--item-id",
+            "--checkpoint",
+            "--output",
+        },
+    ),
+    (
+        "scripts.evaluate_phase7_retrieval_closure",
+        {"--calibration", "--test", "--chunks", "--output"},
+    ),
+    (
+        "scripts.index_phase7_corpus",
+        {
+            "--page-batch-size",
+            "--chunker",
+            "--dense-collection",
+            "--hybrid-collection",
+            "--chunks-output",
+            "--frozen-chunks",
+            "--manifest-output",
+            "--preview-only",
+            "--verify-reindex",
+        },
+    ),
+    (
+        "scripts.ingest_preview",
+        {
+            "--limit",
+            "--output",
+            "--page-start",
+            "--page-end",
+            "--batch-size",
+            "--preview-chars",
+        },
+    ),
+    ("scripts.query_smoke", {"--output"}),
+    (
+        "scripts.validate_phase7_dataset",
+        {"--calibration", "--test", "--chunks", "--output"},
+    ),
+    ("scripts.validate_query_runtime", {"--document-id"}),
+]
+
+
+def _offline_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in (
+        "API_AUTH_KEY",
+        "GEMINI_API_KEY",
+        "OPENAI_API_KEY",
+        "PHASE7_BASE_COMMIT",
+    ):
+        environment.pop(name, None)
+    environment["PYTHONUTF8"] = "1"
+    return environment
+
+
+def _run_cli(module: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", module, *arguments],
+        cwd=REPOSITORY_ROOT,
+        env=_offline_environment(),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@pytest.mark.parametrize(("module", "expected_options"), SUPPORTED_CLI_OPTIONS)
+def test_supported_cli_help_preserves_the_public_option_surface(
+    module: str,
+    expected_options: set[str],
+) -> None:
+    result = _run_cli(module, "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.startswith("usage:")
+    assert expected_options <= set(result.stdout.split())
+
+
+@pytest.mark.parametrize(
+    ("module", "arguments", "expected_error"),
+    [
+        ("scripts.index_phase7_corpus", ("--chunker", "invalid"), "invalid choice"),
+        ("scripts.ingest_preview", (), "the following arguments are required: input"),
+        (
+            "scripts.evaluate_phase7_e2e",
+            ("--dataset", "calibration"),
+            "the following arguments are required: --provider-approval-token",
+        ),
+    ],
+)
+def test_supported_cli_invalid_arguments_fail_before_integration_access(
+    module: str,
+    arguments: tuple[str, ...],
+    expected_error: str,
+) -> None:
+    result = _run_cli(module, *arguments)
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr

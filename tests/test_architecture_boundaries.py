@@ -1,4 +1,4 @@
-"""Static dependency characterization for the pre-cleanup application graph."""
+"""Static dependency guards for the canonical runtime and temporary R12 anchors."""
 
 from __future__ import annotations
 
@@ -26,6 +26,62 @@ DOMAIN_FORBIDDEN_IMPORT_ROOTS = {
     "openai",
     "qdrant_client",
     "streamlit",
+}
+
+R12_ROOT_MODULE_ANCHORS = {
+    "app.citations",
+    "app.content_identity",
+    "app.evaluation",
+    "app.evaluation_e2e",
+    "app.evidence_selection",
+    "app.generation",
+    "app.hybrid_retrieval",
+    "app.ingestion",
+    "app.models",
+    "app.phase7",
+    "app.phase7_optimization",
+    "app.query_expansion",
+    "app.query_service",
+    "app.reranking",
+    "app.retrieval",
+    "app.retrieval_runtime",
+}
+
+ALLOWED_DEPENDENCY_LAYERS = {
+    "inbound": {"inbound", "application", "composition", "domain", "shared"},
+    "composition": {
+        "application",
+        "composition",
+        "domain",
+        "infrastructure",
+        "shared",
+    },
+    "application": {"application", "domain", "shared"},
+    "domain": {"domain", "shared"},
+    "infrastructure": {"domain", "infrastructure", "shared"},
+    "evaluation": {"application", "domain", "evaluation", "infrastructure", "shared"},
+    "shared": {"domain", "shared"},
+}
+
+R12_TEMPORARY_IMPORT_EDGES = {
+    ("app.api.health", "app.models"),
+    ("app.api.health", "app.retrieval"),
+    ("app.application.generation_prompt", "app.models"),
+    ("app.application.query_service", "app.models"),
+    ("app.application.reranking_service", "app.content_identity"),
+    ("app.application.reranking_service", "app.models"),
+    ("app.bootstrap", "app.retrieval"),
+    ("app.bootstrap", "app.retrieval_runtime"),
+    ("app.domain.citations", "app.models"),
+    ("app.domain.evidence", "app.content_identity"),
+    ("app.domain.evidence", "app.models"),
+    ("app.domain.generation", "app.models"),
+    ("app.domain.policies.fusion", "app.models"),
+    ("app.domain.policies.ranking", "app.models"),
+    ("app.domain.retrieval", "app.models"),
+    ("app.infrastructure.qdrant.dense", "app.models"),
+    ("app.infrastructure.qdrant.hybrid", "app.models"),
+    ("evaluation.phase7_dataset", "app.content_identity"),
 }
 
 
@@ -95,6 +151,56 @@ def _reachable_modules(graph: dict[str, set[str]], root: str) -> set[str]:
         reachable.add(module)
         pending.extend(graph.get(module, ()))
     return reachable
+
+
+def _architecture_layer(module: str) -> str | None:
+    if module in {"app", "evaluation", "ui"}:
+        return "package"
+    if module in R12_ROOT_MODULE_ANCHORS:
+        return "compatibility"
+    if (
+        module == "app.main"
+        or module == "app.api"
+        or module.startswith("app.api.")
+        or module.startswith("ui.")
+    ):
+        return "inbound"
+    if module == "app.bootstrap":
+        return "composition"
+    if module in {"app.config", "app.errors", "app.request_context"}:
+        return "shared"
+    if module == "app.application" or module.startswith("app.application."):
+        return "application"
+    if module in {"app.contracts", "app.domain"} or module.startswith(
+        ("app.contracts.", "app.domain.")
+    ):
+        return "domain"
+    if module == "app.infrastructure" or module.startswith("app.infrastructure."):
+        return "infrastructure"
+    if module.startswith("evaluation."):
+        return "evaluation"
+    return None
+
+
+def test_dependency_matrix_has_only_documented_r12_anchors() -> None:
+    graph = _import_graph()
+    layers = {module: _architecture_layer(module) for module in graph}
+
+    assert {module for module, layer in layers.items() if layer is None} == set()
+    assert {module for module, layer in layers.items() if layer == "compatibility"} == (
+        R12_ROOT_MODULE_ANCHORS
+    )
+
+    violations = {
+        (source, dependency)
+        for source, dependencies in graph.items()
+        if (source_layer := layers[source]) in ALLOWED_DEPENDENCY_LAYERS
+        for dependency in dependencies
+        if (dependency_layer := layers[dependency]) != "package"
+        and dependency_layer not in ALLOWED_DEPENDENCY_LAYERS[source_layer]
+    }
+
+    assert violations == R12_TEMPORARY_IMPORT_EDGES
 
 
 def test_production_runtime_cannot_reach_evaluation() -> None:
