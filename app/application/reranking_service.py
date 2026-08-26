@@ -10,8 +10,8 @@ from typing import Literal
 
 from app.domain.content_identity import evidence_content_fingerprint
 from app.domain.policies.fusion import (
-    Phase7FusionProfile,
-    Phase7OptimizationError,
+    FusionPolicyError,
+    FusionProfile,
     apply_role_aware_rank_fusion,
     fuse_rrf,
     select_coverage_preserving_candidates,
@@ -32,8 +32,7 @@ from app.domain.retrieval import (
 )
 
 RerankStrategy = Literal["sparse", "hybrid", "union"]
-CANDIDATE_TEXT_FORMAT = "heading_content_v1"
-PHASE7_CANDIDATE_TEXT_FORMAT = "document_context_heading_content_v2"
+CANDIDATE_TEXT_FORMAT = "document_context_heading_content_v2"
 
 
 @dataclass(frozen=True)
@@ -72,7 +71,7 @@ class RerankPipeline:
         document_contexts: Mapping[str, Mapping[str, str]] | None = None,
         sparse_query_transform: Callable[[str], str] | None = None,
         union_rrf_prune_limit: int | None = None,
-        phase7_fusion_profile: Phase7FusionProfile | None = None,
+        fusion_profile: FusionProfile | None = None,
         query_role_inferer: Callable[[str], QueryRoleInference] = infer_query_role,
     ) -> None:
         self.dense_searcher = dense_searcher
@@ -88,7 +87,7 @@ class RerankPipeline:
         self.document_contexts = dict(document_contexts or {})
         self.sparse_query_transform = sparse_query_transform
         self.union_rrf_prune_limit = union_rrf_prune_limit
-        self.phase7_fusion_profile = phase7_fusion_profile
+        self.fusion_profile = fusion_profile
         self.query_role_inferer = query_role_inferer
 
     def search(
@@ -102,7 +101,7 @@ class RerankPipeline:
             strategy=strategy,
             batch_size=self.rerank_batch_size,
         )
-        if strategy != "union" or self.phase7_fusion_profile is None:
+        if strategy != "union" or self.fusion_profile is None:
             return execution
         inference_started = perf_counter()
         inference = self.query_role_inferer(question)
@@ -110,20 +109,20 @@ class RerankPipeline:
             candidates = apply_role_aware_rank_fusion(
                 execution.candidates_after_rerank,
                 query_role=inference.role,
-                role_multiplier=self.phase7_fusion_profile.post_rerank_role_multiplier,
-                rrf_rank_multiplier=self.phase7_fusion_profile.post_rerank_rrf_multiplier,
-                rank_offset=self.phase7_fusion_profile.post_rerank_rank_offset,
+                role_multiplier=self.fusion_profile.post_rerank_role_multiplier,
+                rrf_rank_multiplier=self.fusion_profile.post_rerank_rrf_multiplier,
+                rank_offset=self.fusion_profile.post_rerank_rank_offset,
                 confidence=inference.confidence,
-                confidence_mode=self.phase7_fusion_profile.post_rerank_confidence_mode,
+                confidence_mode=self.fusion_profile.post_rerank_confidence_mode,
             )
-            if self.phase7_fusion_profile.list_completeness_enabled:
+            if self.fusion_profile.list_completeness_enabled:
                 candidates = apply_list_completeness_fallback(candidates, query=question)
-            if self.phase7_fusion_profile.relation_list_completeness_enabled:
+            if self.fusion_profile.relation_list_completeness_enabled:
                 candidates = apply_relation_list_completeness_fallback(
                     candidates,
                     query=question,
                 )
-        except Phase7OptimizationError as exc:
+        except FusionPolicyError as exc:
             raise RerankingError(str(exc)) from exc
         stages = dict(execution.stage_latency_ms)
         stages["role_aware_rank_fusion"] = (perf_counter() - inference_started) * 1000
@@ -174,7 +173,7 @@ class RerankPipeline:
             _with_document_context(candidate, self.document_contexts.get(candidate.document_id))
             for candidate in sparse_candidates
         ]
-        if strategy == "union" and self.phase7_fusion_profile is not None:
+        if strategy == "union" and self.fusion_profile is not None:
             role_started = perf_counter()
             query_role = self.query_role_inferer(question)
             stages["query_role_inference"] = (perf_counter() - role_started) * 1000
@@ -182,10 +181,10 @@ class RerankPipeline:
                 candidates = select_coverage_preserving_candidates(
                     dense_candidates,
                     contextual_sparse_candidates,
-                    profile=self.phase7_fusion_profile,
+                    profile=self.fusion_profile,
                     query_role=query_role.role,
                 )
-            except Phase7OptimizationError as exc:
+            except FusionPolicyError as exc:
                 raise RerankingError(str(exc)) from exc
             preparation_stage = "coverage_preserving_weighted_rrf"
         elif strategy == "union" and self.union_rrf_prune_limit is not None:
@@ -208,7 +207,7 @@ class RerankPipeline:
                 hybrid_limit=max(self.dense_candidate_limit, self.sparse_candidate_limit),
             )
             preparation_stage = "fusion" if strategy == "hybrid" else "union_preparation"
-        if not (strategy == "union" and self.phase7_fusion_profile is not None):
+        if not (strategy == "union" and self.fusion_profile is not None):
             candidates = [
                 _with_document_context(candidate, self.document_contexts.get(candidate.document_id))
                 for candidate in candidates

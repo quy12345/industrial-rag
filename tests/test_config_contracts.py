@@ -5,10 +5,9 @@ from __future__ import annotations
 from dataclasses import asdict
 
 import pytest
-from pydantic import ValidationError
 
 from app.config import Settings, get_settings, resolve_retrieval_runtime
-from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.errors import RetrievalUnavailableError
 
 INSTALLATION_DOCUMENT_ID = "atv320-installation-manual-en-nve41289-09-c181b4d7f11b"
@@ -38,7 +37,8 @@ def test_empty_environment_value_keeps_the_canonical_default(monkeypatch) -> Non
 
 
 def test_phase7_contract_snapshot_is_exact_and_immutable() -> None:
-    assert asdict(PHASE7_RETRIEVAL_CONTRACT) == {
+    assert asdict(ATV320_RETRIEVAL_CONTRACT) == {
+        "contract_id": "atv320-2025-04-v1",
         "document_id": INSTALLATION_DOCUMENT_ID,
         "chunk_count": 2753,
         "chunk_ids_sha256": (
@@ -78,7 +78,7 @@ def test_phase7_contract_snapshot_is_exact_and_immutable() -> None:
         ),
         "union_rrf_prune_limit": 30,
         "query_expansion_profile": "vi_technical_glossary_v1",
-        "phase7_fusion_profile": {
+        "fusion_profile": {
             "name": (
                 "weighted_rrf_k40_s1.25_frole0.1_prole0.5_offset40_"
                 "strong_and_weak_d5_s24_relation_list_v1"
@@ -103,7 +103,7 @@ def test_phase7_contract_snapshot_is_exact_and_immutable() -> None:
     }
 
     with pytest.raises(AttributeError):
-        PHASE7_RETRIEVAL_CONTRACT.chunk_count = 1  # type: ignore[misc]
+        ATV320_RETRIEVAL_CONTRACT.chunk_count = 1  # type: ignore[misc]
 
 
 def test_profile_resolution_is_atomic_and_preserves_non_profile_settings() -> None:
@@ -122,7 +122,7 @@ def test_profile_resolution_is_atomic_and_preserves_non_profile_settings() -> No
 
     resolved, contract = resolve_retrieval_runtime(source)
 
-    assert contract is PHASE7_RETRIEVAL_CONTRACT
+    assert contract is ATV320_RETRIEVAL_CONTRACT
     assert resolved is not source
     assert resolved.qdrant_url == "http://qdrant.internal"
     assert resolved.api_auth_enabled is True
@@ -163,6 +163,11 @@ def test_unsupported_runtime_matrix_fails_without_fallback(strategy, rerank_enab
         )
 
 
-def test_retired_phase6_profile_is_rejected_by_settings() -> None:
-    with pytest.raises(ValidationError, match="retrieval_profile"):
-        Settings(retrieval_profile="phase6")  # type: ignore[arg-type]
+def test_obsolete_profile_selector_is_not_part_of_settings(monkeypatch) -> None:
+    monkeypatch.setenv("RETRIEVAL_PROFILE", "phase6")
+
+    settings = Settings(_env_file=None)
+    _, contract = resolve_retrieval_runtime(settings)
+
+    assert "retrieval_profile" not in Settings.model_fields
+    assert contract is ATV320_RETRIEVAL_CONTRACT

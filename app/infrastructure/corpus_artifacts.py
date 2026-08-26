@@ -1,4 +1,4 @@
-"""Active Phase 7 corpus identity and local artifact file operations."""
+"""Active ATV320 corpus identity and local artifact file operations."""
 
 from __future__ import annotations
 
@@ -12,12 +12,11 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.domain.documents import DocumentChunk
-from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 
-PHASE7_DENSE_COLLECTION = PHASE7_RETRIEVAL_CONTRACT.dense_collection
-PHASE7_HYBRID_COLLECTION = PHASE7_RETRIEVAL_CONTRACT.hybrid_collection
+ATV320_DENSE_COLLECTION = ATV320_RETRIEVAL_CONTRACT.dense_collection
+ATV320_HYBRID_COLLECTION = ATV320_RETRIEVAL_CONTRACT.hybrid_collection
 PROTECTED_COLLECTIONS = {"industrial_manual_chunks", "industrial_manual_chunks_v2"}
-PHASE7_CORPUS_VERSION = "atv320-2025-04-v1"
 
 
 class CorpusArtifactError(ValueError):

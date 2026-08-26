@@ -223,7 +223,7 @@ def test_fastembed_adapter_is_lazy_reused_and_preserves_sdk_contract(
 
 def test_candidate_text_uses_heading_breadcrumb_without_mutating_raw_text() -> None:
     candidate = _candidate("a", sparse_rank=1)
-    assert CANDIDATE_TEXT_FORMAT == "heading_content_v1"
+    assert CANDIDATE_TEXT_FORMAT == "document_context_heading_content_v2"
     assert build_candidate_text(candidate) == "Safety > Limits\n\nraw a"
     assert candidate.text == "raw a"
     assert build_candidate_text(candidate.model_copy(update={"headings": []})) == "raw a"

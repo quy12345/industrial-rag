@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.domain.retrieval_contracts import FrozenRetrievalContract, retrieval_contract_for
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT, FrozenRetrievalContract
 from app.errors import RetrievalUnavailableError
 
 
@@ -47,7 +47,6 @@ class Settings(BaseSettings):
     rerank_candidate_strategy: Literal["sparse", "hybrid", "union"] | None = None
     rerank_final_limit: int = Field(default=5, gt=0)
     retrieval_strategy: Literal["union", "sparse"] = "union"
-    retrieval_profile: Literal["phase7"] = "phase7"
     rerank_enabled: bool = True
     evidence_score_threshold: float | None = None
     generation_max_context_chars: int = Field(default=24_000, ge=4_000)
@@ -137,9 +136,7 @@ def resolve_retrieval_runtime(
 ) -> tuple[Settings, FrozenRetrievalContract]:
     """Apply one complete frozen profile without mixing mutable overrides into it."""
 
-    # Settings validation makes Phase 7 the only constructible profile. Resolve the
-    # canonical value rather than treating later mutation as a profile-selection path.
-    contract = retrieval_contract_for("phase7")
+    contract = ATV320_RETRIEVAL_CONTRACT
     resolved = settings.model_copy(
         update={
             "qdrant_collection": contract.dense_collection,
@@ -169,15 +166,15 @@ def validate_retrieval_settings(
 ) -> None:
     """Reject partial profile overrides and unsupported strategy combinations."""
 
-    if contract.phase7_fusion_profile is not None:
-        profile = contract.phase7_fusion_profile
+    if contract.fusion_profile is not None:
+        profile = contract.fusion_profile
         if profile.rrf_k != contract.rrf_k:
             raise RetrievalUnavailableError(
-                "Frozen Phase 7 fusion profile RRF k differs from the retrieval contract."
+                "Frozen fusion profile RRF k differs from the retrieval contract."
             )
         if profile.max_candidates != contract.union_rrf_prune_limit:
             raise RetrievalUnavailableError(
-                "Frozen Phase 7 fusion profile candidate budget differs from the "
+                "Frozen fusion profile candidate budget differs from the "
                 "retrieval contract."
             )
     if contract.frozen_rerank_batch_size is not None and contract.frozen_rerank_batch_size <= 0:

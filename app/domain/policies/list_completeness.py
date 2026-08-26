@@ -6,7 +6,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from app.domain.policies.fusion import Phase7OptimizationError
+from app.domain.policies.fusion import FusionPolicyError
 from app.domain.policies.query_roles import normalize_query_text, query_contains_phrase
 from app.domain.retrieval import RetrievalCandidate
 
@@ -199,7 +199,7 @@ def apply_list_completeness_from_metadata(
     if any(rank is None or rank <= 0 for rank in ranks) or set(ranks) != set(
         range(1, len(candidates) + 1)
     ):
-        raise Phase7OptimizationError(
+        raise FusionPolicyError(
             "List completeness requires unique, contiguous one-based rerank ranks."
         )
     if len(candidates) < 5:
@@ -210,7 +210,7 @@ def apply_list_completeness_from_metadata(
         for field in ("query_identifier_match_count", "bracketed_label_code_pair_count"):
             value = candidate.metadata.get(field)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise Phase7OptimizationError(
+                raise FusionPolicyError(
                     "List completeness requires non-negative sanitized feature counts."
                 )
     window.sort(
@@ -275,7 +275,7 @@ def apply_relation_list_completeness_from_metadata(
     if any(rank is None or rank <= 0 for rank in ranks) or set(ranks) != set(
         range(1, len(candidates) + 1)
     ):
-        raise Phase7OptimizationError(
+        raise FusionPolicyError(
             "Relation-list completeness requires unique, contiguous one-based rerank ranks."
         )
     if len(candidates) < 5:
@@ -291,7 +291,7 @@ def apply_relation_list_completeness_from_metadata(
         for field in fields:
             value = candidate.metadata.get(field)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise Phase7OptimizationError(
+                raise FusionPolicyError(
                     "Relation-list completeness requires non-negative sanitized feature counts."
                 )
     window.sort(

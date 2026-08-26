@@ -1,4 +1,4 @@
-"""Read-only real-model smoke for the active frozen Phase 7 retrieval runtime."""
+"""Read-only real-model smoke for the active frozen ATV320 retrieval runtime."""
 
 from __future__ import annotations
 
@@ -7,21 +7,18 @@ import json
 
 from app.composition.retrieval import build_query_retriever
 from app.config import get_settings, resolve_retrieval_runtime
-from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 
 
 def main() -> int:
     args = _build_parser().parse_args()
     settings, contract = resolve_retrieval_runtime(get_settings())
-    if contract is not PHASE7_RETRIEVAL_CONTRACT:
-        print("Phase 7 retrieval smoke requires RETRIEVAL_PROFILE=phase7; no query was made.")
-        return 2
     retriever = build_query_retriever(settings, contract=contract)
     result = retriever.retrieve(args.question, document_id=args.document_id)
     print(
         json.dumps(
             {
-                "retrieval_profile": "phase7",
+                "contract_id": contract.contract_id,
                 "contract_chunk_count": contract.chunk_count,
                 "retriever": type(retriever).__name__,
                 "candidate_count": len(result.candidates),
@@ -44,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--document-id",
-        default=PHASE7_RETRIEVAL_CONTRACT.document_ids[0],
+        default=ATV320_RETRIEVAL_CONTRACT.document_ids[0],
     )
     return parser
 

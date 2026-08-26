@@ -1,14 +1,11 @@
-"""Immutable corpus and retrieval identity for the active Phase 7 runtime."""
+"""Immutable corpus and retrieval identity for the active ATV320 runtime."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
-from app.domain.policies.fusion import PHASE7_CALIBRATION_FUSION_PROFILE, Phase7FusionProfile
+from app.domain.policies.fusion import ATV320_FUSION_PROFILE, FusionProfile
 from app.domain.policies.query_analysis import QUERY_EXPANSION_PROFILE
-
-RetrievalProfile = Literal["phase7"]
 
 
 @dataclass(frozen=True)
@@ -24,6 +21,7 @@ class FrozenDocumentContext:
 class FrozenRetrievalContract:
     """Immutable index identity required by a frozen retrieval runtime."""
 
+    contract_id: str
     document_id: str
     chunk_count: int
     chunk_ids_sha256: str
@@ -46,7 +44,7 @@ class FrozenRetrievalContract:
     document_contexts: tuple[FrozenDocumentContext, ...] = ()
     union_rrf_prune_limit: int | None = None
     query_expansion_profile: str | None = None
-    phase7_fusion_profile: Phase7FusionProfile | None = None
+    fusion_profile: FusionProfile | None = None
     frozen_rerank_batch_size: int | None = None
     freeze_rerank_threads: bool = False
     frozen_rerank_threads: int | None = None
@@ -72,7 +70,8 @@ class FrozenRetrievalContract:
 
 # Package-owned values let every adapter validate the same corpus identity without
 # reading host artifacts or accepting field-by-field environment overrides.
-PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
+ATV320_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
+    contract_id="atv320-2025-04-v1",
     document_id="atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
     document_ids=(
         "atv320-installation-manual-en-nve41289-09-c181b4d7f11b",
@@ -100,16 +99,8 @@ PHASE7_RETRIEVAL_CONTRACT = FrozenRetrievalContract(
     sparse_candidate_limit=40,
     union_rrf_prune_limit=30,
     query_expansion_profile=QUERY_EXPANSION_PROFILE,
-    phase7_fusion_profile=PHASE7_CALIBRATION_FUSION_PROFILE,
+    fusion_profile=ATV320_FUSION_PROFILE,
     frozen_rerank_batch_size=8,
     freeze_rerank_threads=True,
     frozen_rerank_threads=None,
 )
-
-
-def retrieval_contract_for(profile: RetrievalProfile) -> FrozenRetrievalContract:
-    """Return the complete immutable contract for one supported runtime profile."""
-
-    if profile != "phase7":
-        raise ValueError(f"Unsupported retrieval profile: {profile}")
-    return PHASE7_RETRIEVAL_CONTRACT

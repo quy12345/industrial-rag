@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from app.domain.policies.fusion import (
-    Phase7FusionProfile,
-    Phase7OptimizationError,
+    FusionPolicyError,
+    FusionProfile,
     apply_role_aware_rank_fusion,
     select_coverage_preserving_candidates,
 )
@@ -45,7 +45,7 @@ def _candidate(
     )
 
 
-def _profile(**updates: object) -> Phase7FusionProfile:
+def _profile(**updates: object) -> FusionProfile:
     values: dict[str, object] = {
         "name": "test-profile",
         "rrf_k": 60,
@@ -57,7 +57,7 @@ def _profile(**updates: object) -> Phase7FusionProfile:
         "max_candidates": 3,
     }
     values.update(updates)
-    return Phase7FusionProfile(**values)  # type: ignore[arg-type]
+    return FusionProfile(**values)  # type: ignore[arg-type]
 
 
 def test_query_role_is_bilingual_boundary_safe_and_confidence_aware() -> None:
@@ -167,7 +167,7 @@ def test_relation_list_replay_rejects_missing_sanitized_features() -> None:
         _candidate(f"chunk-{rank}").model_copy(update={"rerank_rank": rank})
         for rank in range(1, 6)
     ]
-    with pytest.raises(Phase7OptimizationError, match="sanitized feature counts"):
+    with pytest.raises(FusionPolicyError, match="sanitized feature counts"):
         apply_relation_list_completeness_from_metadata(candidates, enabled=True)
 
 
@@ -205,7 +205,7 @@ def test_list_fallback_rejects_non_contiguous_ranks() -> None:
         _candidate("a").model_copy(update={"rerank_rank": 1}),
         _candidate("b").model_copy(update={"rerank_rank": 3}),
     ]
-    with pytest.raises(Phase7OptimizationError, match="contiguous one-based"):
+    with pytest.raises(FusionPolicyError, match="contiguous one-based"):
         apply_list_completeness_from_metadata(candidates, enabled=True)
 
 
@@ -268,7 +268,7 @@ def test_post_rerank_rrf_prior_uses_only_one_based_ranks() -> None:
 
 def test_post_rerank_rrf_prior_requires_a_positive_component_rank() -> None:
     candidate = _candidate("missing-rank").model_copy(update={"rerank_rank": 1})
-    with pytest.raises(Phase7OptimizationError, match="one-based pre-rerank RRF"):
+    with pytest.raises(FusionPolicyError, match="one-based pre-rerank RRF"):
         apply_role_aware_rank_fusion(
             [candidate],
             query_role="neutral",
@@ -298,7 +298,7 @@ def test_weak_and_neutral_roles_do_not_receive_strong_only_prior() -> None:
 def test_selector_fails_instead_of_silently_truncating_mandatory_reserves() -> None:
     dense = [_candidate(f"d{index}", dense_rank=index + 1) for index in range(2)]
     sparse = [_candidate(f"s{index}", sparse_rank=index + 1) for index in range(2)]
-    with pytest.raises(Phase7OptimizationError, match="reserves"):
+    with pytest.raises(FusionPolicyError, match="reserves"):
         select_coverage_preserving_candidates(
             dense,
             sparse,

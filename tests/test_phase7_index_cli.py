@@ -9,14 +9,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.application.indexing_service import (
+    CorpusIndexingService,
     IndexingSafetyError,
-    Phase7IndexingService,
     validate_chunk_preview,
 )
 from app.domain.documents import DocumentChunk
 from app.infrastructure.corpus_artifacts import (
-    PHASE7_DENSE_COLLECTION,
-    PHASE7_HYBRID_COLLECTION,
+    ATV320_DENSE_COLLECTION,
+    ATV320_HYBRID_COLLECTION,
 )
 from scripts.operations import index_phase7_corpus as index_cli
 
@@ -26,10 +26,10 @@ PROJECT_ROOT = Path(__file__).parents[1]
 def test_indexing_parser_preserves_supported_contract() -> None:
     args = index_cli._parser().parse_args([])
     assert args.inputs == list(index_cli.DEFAULT_INPUTS)
-    assert args.page_batch_size == index_cli.PHASE7_PAGE_BATCH_SIZE == 64
+    assert args.page_batch_size == index_cli.FROZEN_PAGE_BATCH_SIZE == 64
     assert args.chunker == "hybrid"
-    assert args.dense_collection == PHASE7_DENSE_COLLECTION
-    assert args.hybrid_collection == PHASE7_HYBRID_COLLECTION
+    assert args.dense_collection == ATV320_DENSE_COLLECTION
+    assert args.hybrid_collection == ATV320_HYBRID_COLLECTION
     assert args.preview_only is False
     assert args.verify_reindex is False
 
@@ -120,7 +120,7 @@ def _settings() -> SimpleNamespace:
 @pytest.mark.parametrize(
     ("dense_collection", "hybrid_collection", "message"),
     [
-        ("industrial_manual_chunks", "phase7-hybrid", "protected Phase 3--6"),
+        ("industrial_manual_chunks", "phase7-hybrid", "protected historical"),
         ("same", "same", "must differ"),
     ],
 )
@@ -155,7 +155,7 @@ def test_index_once_preserves_dense_then_hybrid_order_per_document() -> None:
     def hybrid_indexer(client, chunks, **kwargs):
         calls.append(("hybrid", tuple(chunk.chunk_id for chunk in chunks)))
 
-    service = Phase7IndexingService(
+    service = CorpusIndexingService(
         client=object(),
         settings=_settings(),
         dense_model=object(),
@@ -197,7 +197,7 @@ def test_protected_collection_guard_requires_frozen_99_point_archives() -> None:
             return SimpleNamespace(count=self.counts[collection_name])
 
     client = Client()
-    service = Phase7IndexingService(
+    service = CorpusIndexingService(
         client=client,
         settings=_settings(),
         dense_model=object(),
@@ -236,7 +236,7 @@ def test_index_verification_checks_total_and_each_document_chunk_set() -> None:
         calls.append((collection_name, document_id))
         return {chunk.chunk_id for chunk in chunks_by_document[document_id]}
 
-    service = Phase7IndexingService(
+    service = CorpusIndexingService(
         client=Client(),
         settings=_settings(),
         dense_model=object(),

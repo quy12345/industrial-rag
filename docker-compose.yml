@@ -13,7 +13,6 @@ services:
     environment:
       QDRANT_URL: http://qdrant
       EMBEDDING_CACHE_DIR: /models/fastembed
-      RETRIEVAL_PROFILE: phase7
     depends_on:
       - qdrant
     volumes:

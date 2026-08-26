@@ -23,7 +23,7 @@ from app.application.generation_prompt import (
     build_correction_text,
 )
 from app.application.query_service import QueryService
-from app.application.reranking_service import PHASE7_CANDIDATE_TEXT_FORMAT
+from app.application.reranking_service import CANDIDATE_TEXT_FORMAT
 from app.composition.retrieval import (
     LazyQueryRetriever,
     build_query_retriever,
@@ -32,7 +32,7 @@ from app.composition.retrieval import (
 from app.config import Settings
 from app.domain.evidence import EvidenceGate
 from app.domain.generation import GeneratedAnswer
-from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.infrastructure.corpus_artifacts import (
     chunk_set_metadata,
     load_frozen_chunks,
@@ -105,11 +105,11 @@ def main() -> int:
     validate_frozen_runtime(
         client,
         collection_names=(settings.qdrant_collection, settings.qdrant_hybrid_collection),
-        contract=PHASE7_RETRIEVAL_CONTRACT,
+        contract=ATV320_RETRIEVAL_CONTRACT,
     )
     service = QueryService(
         retriever=LazyQueryRetriever(
-            lambda: build_query_retriever(settings, contract=PHASE7_RETRIEVAL_CONTRACT)
+            lambda: build_query_retriever(settings, contract=ATV320_RETRIEVAL_CONTRACT)
         ),
         evidence_gate=EvidenceGate(score_threshold=settings.evidence_score_threshold),
         generator=LangChainStructuredGenerator(
@@ -127,14 +127,14 @@ def main() -> int:
         "dataset_sha256": full_dataset_hash,
         "selected_item_ids": [item.id for item in selected],
         "corpus": chunk_set_metadata(chunks),
-        "contract_chunk_ids_sha256": PHASE7_RETRIEVAL_CONTRACT.chunk_ids_sha256,
+        "contract_chunk_ids_sha256": ATV320_RETRIEVAL_CONTRACT.chunk_ids_sha256,
         "strategy": settings.retrieval_strategy,
         "rerank_enabled": settings.rerank_enabled,
         "dense_candidate_limit": settings.dense_candidate_limit,
         "sparse_candidate_limit": settings.sparse_candidate_limit,
-        "union_rrf_prune_limit": PHASE7_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
-        "query_expansion_profile": PHASE7_RETRIEVAL_CONTRACT.query_expansion_profile,
-        "candidate_text_format": PHASE7_CANDIDATE_TEXT_FORMAT,
+        "union_rrf_prune_limit": ATV320_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
+        "query_expansion_profile": ATV320_RETRIEVAL_CONTRACT.query_expansion_profile,
+        "candidate_text_format": CANDIDATE_TEXT_FORMAT,
         "generation_provider": settings.generation_provider,
         "generation_model": settings.generation_model,
         "generation_configuration": _generation_configuration(settings),
@@ -284,12 +284,12 @@ def _phase7_settings(settings: Settings) -> Settings:
 
     return settings.model_copy(
         update={
-            "qdrant_collection": PHASE7_RETRIEVAL_CONTRACT.dense_collection,
-            "qdrant_hybrid_collection": PHASE7_RETRIEVAL_CONTRACT.hybrid_collection,
-            "bm25_avg_len": PHASE7_RETRIEVAL_CONTRACT.bm25_avg_len,
-            "dense_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit,
-            "sparse_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit,
-            "rrf_k": PHASE7_RETRIEVAL_CONTRACT.rrf_k,
+            "qdrant_collection": ATV320_RETRIEVAL_CONTRACT.dense_collection,
+            "qdrant_hybrid_collection": ATV320_RETRIEVAL_CONTRACT.hybrid_collection,
+            "bm25_avg_len": ATV320_RETRIEVAL_CONTRACT.bm25_avg_len,
+            "dense_candidate_limit": ATV320_RETRIEVAL_CONTRACT.dense_candidate_limit,
+            "sparse_candidate_limit": ATV320_RETRIEVAL_CONTRACT.sparse_candidate_limit,
+            "rrf_k": ATV320_RETRIEVAL_CONTRACT.rrf_k,
             "retrieval_strategy": "union",
             "rerank_enabled": True,
             "rerank_deduplicate_content": True,
@@ -366,8 +366,8 @@ def _source_identity() -> dict[str, Any]:
 
 
 def _runtime_profile() -> dict[str, Any]:
-    contract = PHASE7_RETRIEVAL_CONTRACT
-    profile = contract.phase7_fusion_profile
+    contract = ATV320_RETRIEVAL_CONTRACT
+    profile = contract.fusion_profile
     return {
         "dense_candidate_limit": contract.dense_candidate_limit,
         "sparse_candidate_limit": contract.sparse_candidate_limit,

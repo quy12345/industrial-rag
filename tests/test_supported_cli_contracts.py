@@ -84,7 +84,7 @@ def _offline_environment() -> dict[str, str]:
         "API_AUTH_KEY",
         "GEMINI_API_KEY",
         "OPENAI_API_KEY",
-        "PHASE7_BASE_COMMIT",
+        "BASELINE_COMMIT",
     ):
         environment.pop(name, None)
     environment["PYTHONUTF8"] = "1"

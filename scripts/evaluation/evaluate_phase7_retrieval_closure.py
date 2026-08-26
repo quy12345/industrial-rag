@@ -9,10 +9,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.application.reranking_service import PHASE7_CANDIDATE_TEXT_FORMAT
+from app.application.reranking_service import CANDIDATE_TEXT_FORMAT
 from app.composition.retrieval import build_query_retriever
 from app.config import Settings
-from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
 from evaluation.e2e import FACT_EVALUATOR_ID
 from evaluation.phase7_dataset import (
@@ -55,7 +55,7 @@ def main() -> int:
     validation = validate_phase7_datasets(calibration, test, chunks)
     selected = [item for item in calibration if item.answerable]
     settings = _phase7_settings(Settings())
-    retriever = build_query_retriever(settings, contract=PHASE7_RETRIEVAL_CONTRACT)
+    retriever = build_query_retriever(settings, contract=ATV320_RETRIEVAL_CONTRACT)
 
     rows: list[dict[str, Any]] = []
     for item in selected:
@@ -93,18 +93,18 @@ def main() -> int:
     overall = aggregate_closure_rows(rows)
     per_language = aggregate_closure_rows_by_language(rows)
     runtime_identity = {
-        "dense_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit,
-        "sparse_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit,
-        "rrf_k": PHASE7_RETRIEVAL_CONTRACT.rrf_k,
-        "rrf_prune_limit": PHASE7_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
-        "phase7_fusion_profile": (
+        "dense_candidate_limit": ATV320_RETRIEVAL_CONTRACT.dense_candidate_limit,
+        "sparse_candidate_limit": ATV320_RETRIEVAL_CONTRACT.sparse_candidate_limit,
+        "rrf_k": ATV320_RETRIEVAL_CONTRACT.rrf_k,
+        "rrf_prune_limit": ATV320_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
+        "fusion_profile": (
             None
-            if PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile is None
-            else PHASE7_RETRIEVAL_CONTRACT.phase7_fusion_profile.name
+            if ATV320_RETRIEVAL_CONTRACT.fusion_profile is None
+            else ATV320_RETRIEVAL_CONTRACT.fusion_profile.name
         ),
-        "query_expansion_profile": PHASE7_RETRIEVAL_CONTRACT.query_expansion_profile,
-        "reranker": PHASE7_RETRIEVAL_CONTRACT.rerank_model,
-        "candidate_text_format": PHASE7_CANDIDATE_TEXT_FORMAT,
+        "query_expansion_profile": ATV320_RETRIEVAL_CONTRACT.query_expansion_profile,
+        "reranker": ATV320_RETRIEVAL_CONTRACT.rerank_model,
+        "candidate_text_format": CANDIDATE_TEXT_FORMAT,
     }
     source_identity = _source_identity()
     payload = {
@@ -196,12 +196,12 @@ def _failure_class(candidate_rank: int | None, final_rank: int | None) -> str:
 def _phase7_settings(settings: Settings) -> Settings:
     return settings.model_copy(
         update={
-            "qdrant_collection": PHASE7_RETRIEVAL_CONTRACT.dense_collection,
-            "qdrant_hybrid_collection": PHASE7_RETRIEVAL_CONTRACT.hybrid_collection,
-            "bm25_avg_len": PHASE7_RETRIEVAL_CONTRACT.bm25_avg_len,
-            "dense_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.dense_candidate_limit,
-            "sparse_candidate_limit": PHASE7_RETRIEVAL_CONTRACT.sparse_candidate_limit,
-            "rrf_k": PHASE7_RETRIEVAL_CONTRACT.rrf_k,
+            "qdrant_collection": ATV320_RETRIEVAL_CONTRACT.dense_collection,
+            "qdrant_hybrid_collection": ATV320_RETRIEVAL_CONTRACT.hybrid_collection,
+            "bm25_avg_len": ATV320_RETRIEVAL_CONTRACT.bm25_avg_len,
+            "dense_candidate_limit": ATV320_RETRIEVAL_CONTRACT.dense_candidate_limit,
+            "sparse_candidate_limit": ATV320_RETRIEVAL_CONTRACT.sparse_candidate_limit,
+            "rrf_k": ATV320_RETRIEVAL_CONTRACT.rrf_k,
             "retrieval_strategy": "union",
             "rerank_enabled": True,
             "rerank_deduplicate_content": True,

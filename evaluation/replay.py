@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 from app.domain.policies.fusion import (
-    Phase7OptimizationError,
+    FusionPolicyError,
     PostRerankConfidenceMode,
     apply_role_aware_rank_fusion,
 )
@@ -128,7 +128,7 @@ def replay_role_prior(
             rrf_rank_multiplier=rrf_rank_multiplier,
             rank_offset=rank_offset,
         )
-    except Phase7OptimizationError as exc:
+    except FusionPolicyError as exc:
         raise Phase7ReplayError(str(exc)) from exc
 
 

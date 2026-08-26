@@ -1,4 +1,4 @@
-"""Preview, freeze, and safely index the two ATV320 Phase 7 manuals.
+"""Preview, freeze, and safely index the two active ATV320 manuals.
 
 This explicit integration command is intentionally separate from the Phase 3--6
 collections.  It refuses their collection names before it creates or writes anything.
@@ -12,18 +12,18 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from app.application.indexing_service import (
+    CorpusIndexingService,
     IndexingSafetyError,
-    Phase7IndexingService,
     validate_chunk_preview,
     validate_collection_targets,
 )
 from app.config import get_settings
 from app.domain.documents import IngestionError
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.errors import RetrievalError
 from app.infrastructure.corpus_artifacts import (
-    PHASE7_CORPUS_VERSION,
-    PHASE7_DENSE_COLLECTION,
-    PHASE7_HYBRID_COLLECTION,
+    ATV320_DENSE_COLLECTION,
+    ATV320_HYBRID_COLLECTION,
     PROTECTED_COLLECTIONS,
     chunk_set_metadata,
     file_sha256,
@@ -49,7 +49,7 @@ DEFAULT_INPUTS = (
     Path("data/raw/ATV320_Installation_manual_EN_NVE41289_09.pdf"),
     Path("data/raw/ATV320_Programming_Manual_EN_NVE41295_06.pdf"),
 )
-PHASE7_PAGE_BATCH_SIZE = 64
+FROZEN_PAGE_BATCH_SIZE = 64
 
 
 def main() -> int:
@@ -114,7 +114,7 @@ def main() -> int:
             avg_len=bm25_avg_len,
         )
         client = create_qdrant_client(settings)
-        indexing_service = Phase7IndexingService(
+        indexing_service = CorpusIndexingService(
             client=client,
             settings=settings,
             dense_model=dense_model,
@@ -154,11 +154,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--page-batch-size",
         type=_positive_int,
-        default=PHASE7_PAGE_BATCH_SIZE,
+        default=FROZEN_PAGE_BATCH_SIZE,
     )
     parser.add_argument("--chunker", choices=("hierarchical", "hybrid"), default="hybrid")
-    parser.add_argument("--dense-collection", default=PHASE7_DENSE_COLLECTION)
-    parser.add_argument("--hybrid-collection", default=PHASE7_HYBRID_COLLECTION)
+    parser.add_argument("--dense-collection", default=ATV320_DENSE_COLLECTION)
+    parser.add_argument("--hybrid-collection", default=ATV320_HYBRID_COLLECTION)
     parser.add_argument(
         "--chunks-output", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl")
     )
@@ -192,7 +192,7 @@ def _write_manifest(args, chunks_by_document, all_chunks, *, bm25_avg_len, dense
         )
     payload = {
         "schema_version": 1,
-        "corpus_version": PHASE7_CORPUS_VERSION,
+        "corpus_version": ATV320_RETRIEVAL_CONTRACT.contract_id,
         "documents": sorted(document_entries, key=lambda item: item["filename"]),
         "total_chunk_count": len(all_chunks),
         "chunk_set": chunk_set_metadata(all_chunks),

@@ -13,12 +13,12 @@ from app.errors import RetrievalError
 PostRerankConfidenceMode = Literal["strong_only", "strong_and_weak"]
 
 
-class Phase7OptimizationError(ValueError):
-    """Raised when a bounded Phase 7 optimisation profile is invalid."""
+class FusionPolicyError(ValueError):
+    """Raised when a bounded rank-fusion profile is invalid."""
 
 
 @dataclass(frozen=True)
-class Phase7FusionProfile:
+class FusionProfile:
     """Bounded weighted-RRF and post-rerank document-role configuration."""
 
     name: str
@@ -38,7 +38,7 @@ class Phase7FusionProfile:
 
     def __post_init__(self) -> None:
         if not self.name.strip():
-            raise ValueError("Phase 7 fusion profile name must not be blank.")
+            raise ValueError("Fusion profile name must not be blank.")
         if self.rrf_k <= 0 or self.max_candidates <= 0:
             raise ValueError("RRF k and candidate budget must be greater than zero.")
         if self.dense_weight <= 0 or self.sparse_weight <= 0:
@@ -63,7 +63,7 @@ class Phase7FusionProfile:
             raise ValueError("Component reserves must not be negative.")
 
 
-PHASE7_CALIBRATION_FUSION_PROFILE = Phase7FusionProfile(
+ATV320_FUSION_PROFILE = FusionProfile(
     name=(
         "weighted_rrf_k40_s1.25_frole0.1_prole0.5_offset40_"
         "strong_and_weak_d5_s24_relation_list_v1"
@@ -79,42 +79,6 @@ PHASE7_CALIBRATION_FUSION_PROFILE = Phase7FusionProfile(
     post_rerank_confidence_mode="strong_and_weak",
     relation_list_completeness_enabled=True,
 )
-
-
-def phase7_fusion_profile_grid() -> tuple[Phase7FusionProfile, ...]:
-    """Return the finite provider-free Phase 7.4 weighted-RRF grid."""
-
-    profiles: list[Phase7FusionProfile] = []
-    for rrf_k in (20, 40, 60, 80):
-        for sparse_weight in (1.0, 1.25, 1.5):
-            for fusion_role_multiplier in (0.0, 0.05, 0.10):
-                for dense_reserve, sparse_reserve in ((5, 24), (7, 24), (7, 26), (10, 26)):
-                    profiles.append(
-                        Phase7FusionProfile(
-                            name=(
-                                f"weighted_rrf_k{rrf_k}_s{sparse_weight:g}_frole"
-                                f"{fusion_role_multiplier:g}_d{dense_reserve}_s{sparse_reserve}"
-                            ),
-                            rrf_k=rrf_k,
-                            dense_weight=1.0,
-                            sparse_weight=sparse_weight,
-                            fusion_role_multiplier=fusion_role_multiplier,
-                            dense_reserve=dense_reserve,
-                            sparse_reserve=sparse_reserve,
-                        )
-                    )
-    return tuple(profiles)
-
-
-def phase7_profile_from_mapping(value: dict[str, object]) -> Phase7FusionProfile:
-    """Load a profile while accepting the historical Phase 7.4 artifact field."""
-
-    normalized = dict(value)
-    legacy_multiplier = normalized.pop("role_multiplier", None)
-    if legacy_multiplier is not None and "fusion_role_multiplier" not in normalized:
-        normalized["fusion_role_multiplier"] = legacy_multiplier
-    return Phase7FusionProfile(**normalized)  # type: ignore[arg-type]
-
 
 def fuse_rrf(
     dense_candidates: Sequence[RetrievalCandidate],
@@ -171,7 +135,7 @@ def fuse_weighted_rrf(
     dense_candidates: list[RetrievalCandidate],
     sparse_candidates: list[RetrievalCandidate],
     *,
-    profile: Phase7FusionProfile,
+    profile: FusionProfile,
     query_role: QueryRole,
 ) -> list[RetrievalCandidate]:
     """Fuse one-based component ranks without combining incomparable raw scores."""
@@ -179,7 +143,7 @@ def fuse_weighted_rrf(
     merged: dict[str, RetrievalCandidate] = {}
     for candidate in dense_candidates:
         if candidate.dense_rank is None:
-            raise Phase7OptimizationError(
+            raise FusionPolicyError(
                 "Dense weighted-RRF candidate has no one-based dense rank."
             )
         merged[candidate.chunk_id] = candidate.model_copy(
@@ -187,7 +151,7 @@ def fuse_weighted_rrf(
         )
     for candidate in sparse_candidates:
         if candidate.sparse_rank is None:
-            raise Phase7OptimizationError(
+            raise FusionPolicyError(
                 "Sparse weighted-RRF candidate has no one-based sparse rank."
             )
         contribution = profile.sparse_weight / (profile.rrf_k + candidate.sparse_rank)
@@ -226,7 +190,7 @@ def select_coverage_preserving_candidates(
     dense_candidates: list[RetrievalCandidate],
     sparse_candidates: list[RetrievalCandidate],
     *,
-    profile: Phase7FusionProfile,
+    profile: FusionProfile,
     query_role: QueryRole,
 ) -> list[RetrievalCandidate]:
     """Keep bounded component reserves, then fill remaining slots by weighted RRF."""
@@ -239,7 +203,7 @@ def select_coverage_preserving_candidates(
         candidate.chunk_id for candidate in sparse_candidates[: profile.sparse_reserve]
     )
     if len(mandatory_ids) > profile.max_candidates:
-        raise Phase7OptimizationError(
+        raise FusionPolicyError(
             "Coverage-preserving reserves exceed the fixed reranker candidate budget."
         )
     mandatory = [candidate for candidate in fused if candidate.chunk_id in mandatory_ids]
@@ -276,13 +240,13 @@ def apply_role_aware_rank_fusion(
     if not candidates:
         return list(candidates)
     if rank_offset <= 0:
-        raise Phase7OptimizationError("Role-aware rank offset must be greater than zero.")
+        raise FusionPolicyError("Role-aware rank offset must be greater than zero.")
     if not 0 <= role_multiplier <= 0.50:
-        raise Phase7OptimizationError("Role-aware multiplier must be in the range [0, 0.50].")
+        raise FusionPolicyError("Role-aware multiplier must be in the range [0, 0.50].")
     if not 0 <= rrf_rank_multiplier <= 2.0:
-        raise Phase7OptimizationError("Post-rerank RRF multiplier must be in the range [0, 2.0].")
+        raise FusionPolicyError("Post-rerank RRF multiplier must be in the range [0, 2.0].")
     if confidence_mode not in ("strong_only", "strong_and_weak"):
-        raise Phase7OptimizationError("Unsupported post-rerank confidence mode.")
+        raise FusionPolicyError("Unsupported post-rerank confidence mode.")
     role_enabled = (
         query_role != "neutral"
         and role_multiplier > 0
@@ -297,7 +261,7 @@ def apply_role_aware_rank_fusion(
     ordered_input = sorted(candidates, key=lambda item: (item.rerank_rank or 2**31, item.chunk_id))
     for candidate in ordered_input:
         if candidate.rerank_rank is None:
-            raise Phase7OptimizationError("Role-aware rank fusion requires one-based rerank ranks.")
+            raise FusionPolicyError("Role-aware rank fusion requires one-based rerank ranks.")
         base_score = 1 / (rank_offset + candidate.rerank_rank)
         document_role = candidate.metadata.get("document_role")
         role_prior = 0.0
@@ -307,7 +271,7 @@ def apply_role_aware_rank_fusion(
             matching_role_rank = role_rank
             role_prior = role_multiplier / (rank_offset + role_rank)
         if rrf_rank_multiplier > 0 and candidate.rrf_rank is None:
-            raise Phase7OptimizationError(
+            raise FusionPolicyError(
                 "Post-rerank RRF fusion requires one-based pre-rerank RRF ranks."
             )
         rrf_rank_prior = (

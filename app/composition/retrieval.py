@@ -1,4 +1,4 @@
-"""Canonical construction of the frozen Phase 7 retrieval runtime."""
+"""Canonical construction of the frozen ATV320 retrieval runtime."""
 
 from __future__ import annotations
 
@@ -233,12 +233,12 @@ def build_union_rerank_runtime(
             deduplicate_content=settings.rerank_deduplicate_content,
             document_contexts=contract.document_context_by_id,
             sparse_query_transform=(
-                _expand_phase7_query
+                _expand_query
                 if contract.query_expansion_profile == QUERY_EXPANSION_PROFILE
                 else None
             ),
             union_rrf_prune_limit=contract.union_rrf_prune_limit,
-            phase7_fusion_profile=contract.phase7_fusion_profile,
+            fusion_profile=contract.fusion_profile,
         )
         return pipeline, _runtime_metadata(settings, contract, dense_dimension=dimension)
     except RetrievalUnavailableError:
@@ -269,7 +269,7 @@ def _runtime_metadata(
 ) -> dict[str, Any]:
     """Describe the exact runtime that was constructed without reading artifacts."""
 
-    profile = contract.phase7_fusion_profile
+    profile = contract.fusion_profile
     return {
         "collections": {
             "dense_v1": settings.qdrant_collection,
@@ -290,7 +290,7 @@ def _runtime_metadata(
         "deduplicate_content": settings.rerank_deduplicate_content,
         "query_expansion_profile": contract.query_expansion_profile,
         "union_rrf_prune_limit": contract.union_rrf_prune_limit,
-        "phase7_fusion_profile": (
+        "fusion_profile": (
             None
             if profile is None
             else {
@@ -313,7 +313,7 @@ def _runtime_metadata(
     }
 
 
-def _expand_phase7_query(question: str) -> str:
+def _expand_query(question: str) -> str:
     """Apply the frozen lexical profile to sparse retrieval only."""
 
     expanded, _ = augment_vietnamese_technical_query(question)

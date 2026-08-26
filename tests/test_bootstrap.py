@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app import bootstrap
 from app.config import Settings
-from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 
 
 class FakeLazyRetriever:
@@ -24,7 +24,7 @@ def test_build_query_service_uses_one_resolved_graph_and_keeps_retrieval_lazy(mo
 
     def resolve(settings):
         events.append(("resolve", settings))
-        return resolved, PHASE7_RETRIEVAL_CONTRACT
+        return resolved, ATV320_RETRIEVAL_CONTRACT
 
     def build_retriever(settings, *, contract):
         events.append(("build_retriever", settings, contract))
@@ -62,7 +62,7 @@ def test_build_query_service_uses_one_resolved_graph_and_keeps_retrieval_lazy(mo
     assert events[-1] == (
         "build_retriever",
         resolved,
-        PHASE7_RETRIEVAL_CONTRACT,
+        ATV320_RETRIEVAL_CONTRACT,
     )
 
 
@@ -86,9 +86,8 @@ def test_get_query_service_caches_one_service_for_cached_settings(monkeypatch) -
         bootstrap.get_query_service.cache_clear()
 
 
-def test_readiness_checker_is_lazy_and_uses_the_frozen_phase7_contract(monkeypatch) -> None:
+def test_readiness_checker_is_lazy_and_uses_the_frozen_atv320_contract(monkeypatch) -> None:
     settings = Settings()
-    monkeypatch.setattr(settings, "retrieval_profile", "phase6")
     fake_client = object()
     calls: list[object] = []
     monkeypatch.setattr(
@@ -119,5 +118,5 @@ def test_readiness_checker_is_lazy_and_uses_the_frozen_phase7_contract(monkeypat
             "industrial_manual_phase7_dense_v1",
             "industrial_manual_phase7_hybrid_v1",
         ),
-        PHASE7_RETRIEVAL_CONTRACT,
+        ATV320_RETRIEVAL_CONTRACT,
     )

@@ -11,11 +11,11 @@ from app.contracts.query import QueryRequest, QueryResponse
 from app.domain.evidence import EvidenceDuplicateGroup, EvidenceGate
 from app.domain.generation import GeneratedAnswer, GenerationResult, TokenUsage
 from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate
-from app.domain.retrieval_contracts import PHASE7_RETRIEVAL_CONTRACT
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.main import app
 
-INSTALLATION_DOCUMENT_ID = PHASE7_RETRIEVAL_CONTRACT.document_ids[0]
-PROGRAMMING_DOCUMENT_ID = PHASE7_RETRIEVAL_CONTRACT.document_ids[1]
+INSTALLATION_DOCUMENT_ID = ATV320_RETRIEVAL_CONTRACT.document_ids[0]
+PROGRAMMING_DOCUMENT_ID = ATV320_RETRIEVAL_CONTRACT.document_ids[1]
 
 
 def _candidate(

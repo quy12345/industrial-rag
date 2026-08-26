@@ -1,4 +1,4 @@
-"""Application service for safe Phase 7 corpus indexing."""
+"""Application service for safe active-corpus indexing."""
 
 from __future__ import annotations
 
@@ -74,9 +74,9 @@ def validate_collection_targets(
     """Reject protected or overlapping collection targets before external access."""
 
     if dense_collection in protected_collections or hybrid_collection in protected_collections:
-        raise IndexingSafetyError("Phase 7 refuses protected Phase 3--6 collection names.")
+        raise IndexingSafetyError("Active indexing refuses protected historical collections.")
     if dense_collection == hybrid_collection:
-        raise IndexingSafetyError("Phase 7 dense and hybrid collection names must differ.")
+        raise IndexingSafetyError("Dense and hybrid collection names must differ.")
 
 
 def validate_chunk_preview(
@@ -102,7 +102,7 @@ def validate_chunk_preview(
 
 
 @dataclass(frozen=True)
-class Phase7IndexingService:
+class CorpusIndexingService:
     """Coordinate injected dense/hybrid mutation and verification operations."""
 
     client: Any
