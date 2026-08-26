@@ -2,7 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-08-24
-- Scope: R08 baseline for the R09-R14 surface-simplification sequence
+- Scope: R08 baseline for the R09-R13 compatibility-removal sequence
+
+> Historical note: ADR-006 supersedes source identity v2 and the phase-named command paths recorded
+> here. This ADR remains the provenance record for the compatibility hard cut.
 
 ## Context
 
@@ -45,9 +48,9 @@ app/evaluation_e2e.py           b8be722d43bc34c8bec00dfc2574d0a6341ab738
 ```
 
 R08 verified these values by reconstructing Git blob IDs directly from file bytes. R12A then moved
-the implementation to `evaluation/e2e.py` and `scripts/evaluation/evaluate_phase7_e2e.py`; Git
-history retains the two exact blobs above without copying obsolete implementations into the active
-tree.
+the scoring implementation to `evaluation/e2e.py` and the command into the evaluation script
+package; Git history retains the two exact blobs above without copying obsolete implementations
+into the active tree.
 
 Source-identity v2 hashes the selected canonical behavior owners for evaluation, query
 orchestration, retrieval composition and contracts, ranking policies, evidence/citation policies,

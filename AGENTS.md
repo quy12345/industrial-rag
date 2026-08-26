@@ -19,16 +19,18 @@ Do not rewrite the project from scratch.
 Do not change retrieval algorithms, models, thresholds, collections or
 evaluation data during a behavior-preserving refactor.
 
-The user approved `R00 — Phase 7-only baseline` on 2026-08-21. R00 retired
-`data/raw/manual.pdf` and the Phase 6 corpus from the active product surface.
+The user approved `R00 — Phase 7-only baseline` on 2026-08-21. R00 retired the former
+data/raw/manual.pdf file and the Phase 6 corpus from the active product surface.
 The repository implementation completed this narrowly scoped transition on
 2026-08-22. R01–R07 subsequently completed Round 1 on 2026-08-24. This completion does not authorize
 retrieval tuning, Phase 7 data changes, re-indexing, deletion of legacy Qdrant collections, or an
 automatic start of Round 2.
 
-The separately approved surface-simplification sequence has completed R08–R13. R12 removed the
+The separately approved surface-simplification sequence has completed R08–R17. R12 removed the
 legacy root `app.*` facades after versioning E2E provenance. R13 removed all eight top-level CLI
-shims; supported commands run directly through `scripts.operations` or `scripts.evaluation`.
+shims. R14–R17 then removed milestone naming from active runtime and commands, reduced evaluation to
+its current contracts, and consolidated documentation. Supported commands run directly through
+`scripts.operations` or `scripts.evaluation`.
 
 ## 2. Working language
 
@@ -49,18 +51,15 @@ shims; supported commands run directly through `scripts.operations` or `scripts.
 
 * `app/` contains the production modular monolith: API, application, composition, domain and
   infrastructure layers. R12 removed the old root compatibility facades; use canonical owners.
-* `evaluation/` owns offline evaluation schemas, replay and metrics.
+* `evaluation/` owns the current offline dataset, retrieval and E2E evaluation contracts.
 * `scripts/` contains thin supported adapters and explicit historical archives; read
   `scripts/README.md` before using integration commands.
 * `tests/` must remain offline and use fake models or in-memory Qdrant.
 
-The current directory structure is the completed Round 1 architecture. Further structural moves
-require a separately approved module or Round 2 plan.
-
-The pre-R00 Round 1 audit, target architecture and completion record are indexed in
-`docs/portfolio-cleanup/00-index.md`. The implementation sequence is proposed
-and recorded in `docs/portfolio-cleanup/03-round-1-roadmap.md`. Pre-R00 observations remain as
-historical audit evidence rather than descriptions of current ownership.
+The current directory structure is the completed Round 1 architecture plus the approved R08-R17
+surface simplification. Further structural moves require a separately approved module or Round 2
+plan. Read `docs/ARCHITECTURE.md` for current ownership, `docs/OPERATIONS.md` for commands and
+troubleshooting, and `docs/PROJECT_JOURNEY.md` for historical engineering evidence.
 
 ## 4. Frozen baseline
 
@@ -93,7 +92,7 @@ This corpus is not an active product or evaluation target. Preserve its
 collections and historical evidence. Its unsupported tools live under
 `scripts/archive/phase6/`; do not use it for new development or portfolio claims.
 
-### Phase 7 active Compose/demo contract
+### ATV320 active Compose/demo contract
 
 * Document IDs:
 
@@ -117,13 +116,13 @@ collections and historical evidence. Its unsupported tools live under
   industrial_manual_phase7_hybrid_v1
   ```
 
-* The immutable runtime profile is defined by
-  `PHASE7_RETRIEVAL_CONTRACT` and `PHASE7_CALIBRATION_FUSION_PROFILE`.
+* The immutable product behavior is defined by
+  `ATV320_RETRIEVAL_CONTRACT` and `ATV320_FUSION_PROFILE`.
 
-`Settings`, `.env.example` and Docker Compose select `phase7` for active API
-and local runtime use. `Settings` rejects `phase6`; historical identity exists
-only in the archive and destructive-write guards. Do not partially override a
-frozen profile or combine values from the two contracts.
+The active contract ID is `atv320-2025-04-v1`; `Settings`, `.env.example`, and Docker Compose do not
+offer a retrieval-profile selector. The `phase7` text retained in collection names, frozen paths,
+artifact IDs, and archives is physical or historical identity. Do not partially override the frozen
+contract or combine values from the two corpus contracts.
 
 Never change chunks, expected evidence, qrels or expected answers to improve
 a metric.
@@ -278,7 +277,7 @@ decision.
 
 Historical documents may be consolidated after their unique facts have moved to a canonical owner.
 Git history remains the source for superseded implementation detail; do not copy repeated material
-into a new `docs/history/` tree.
+into a new documentation-history tree.
 
 Documentation must describe code that actually exists. Do not document planned behavior as if it
 has already been implemented. When recording a bug, use the compact sequence `Symptom -> Root cause

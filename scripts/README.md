@@ -1,80 +1,67 @@
-# Script lifecycle and supported entry points
+# Script lifecycle
 
-The script tree separates current adapters from historical provenance. A file being retained does
-not imply that it is supported or safe to execute.
+The script tree contains thin supported command adapters and explicit historical archives. A file
+retained for provenance is not necessarily importable or safe to execute.
 
-## `operations`
-
-`scripts/operations/` owns current operational implementations:
-
-- corpus audit;
-- guarded Phase 7 indexing;
-- ingestion preview;
-- bounded query smoke;
-- read-only query-runtime validation.
-
-Invoke these commands through `python -m scripts.operations.<command>`. R13A removed the old
-top-level operational shims so this package is both the implementation owner and the supported
-entry point. Reusable domain or infrastructure behavior belongs under `app`, not inside these
-adapters.
-
-## `evaluation`
-
-`scripts/evaluation/` owns supported offline/integration evaluation adapters:
-
-- Phase 7 dataset validation;
-- provider-free retrieval-closure execution;
-- the approval-gated Phase 7 E2E evaluator.
-
-Their reusable schemas and metrics live in `evaluation/`. Supported script implementations must not
-import private helpers from another script implementation. Invoke them through
-`python -m scripts.evaluation.<command>`; R13B removed the old top-level evaluation shims.
-
-## Phase 7 E2E command
-
-`scripts/evaluation/evaluate_phase7_e2e.py` owns both the implementation and supported module path.
-The former `scripts.evaluate_phase7_e2e` shim was removed with the other evaluation shims in R13B.
-
-R12A introduced artifact schema v6 and source-identity v2 so current artifacts hash canonical
-application, domain, infrastructure, and evaluation owners. Historical v5 artifacts remain
-immutable, and their checkpoints fail closed under the new identity.
-
-R12B removed the old root `app.*` facades. Supported commands import canonical owners only;
-archived workflows remain provenance and are not guaranteed to import under the current tree.
-
-This evaluator can call a real provider. Do not execute it without separate provider/data-egress
-approval. Held-out execution remains governance-sensitive, and exposed held-out v2 must not be used
-for tuning.
-
-## `archive`
-
-`scripts/archive/phase6/` preserves the retired single-manual development workflow.
-`scripts/archive/phase7/` preserves completed construction, migration, calibration, diagnostics,
-benchmark, and readiness workflows.
-
-Archive policy:
-
-- source is retained for provenance rather than deleted;
-- old top-level module paths are intentionally unavailable;
-- archived tools are unsupported and excluded from current runbooks;
-- archive code may read real data, initialize models, call providers, mutate Qdrant, or overwrite
-  artifacts when invoked, so it must not be run casually;
-- no silent compatibility shim redirects an archived command into current behavior.
-
-Read the phase-specific archive README before inspecting or executing historical code.
-
-## Supported command inventory
+## Supported inventory
 
 ```text
-scripts.operations.audit_phase7_corpus
-scripts.operations.index_phase7_corpus
+scripts.operations.audit_corpus
+scripts.operations.index_corpus
 scripts.operations.ingest_preview
 scripts.operations.query_smoke
 scripts.operations.validate_query_runtime
-scripts.evaluation.validate_phase7_dataset
-scripts.evaluation.evaluate_phase7_retrieval_closure
-scripts.evaluation.evaluate_phase7_e2e
+scripts.evaluation.validate_dataset
+scripts.evaluation.evaluate_retrieval
+scripts.evaluation.evaluate_e2e
 ```
 
-No Python command module remains directly under `scripts/`. The inventory, removed paths, and import
-boundaries are enforced by offline architecture tests.
+There are no supported command modules directly under `scripts/`, and the former phase-named module
+paths intentionally raise `ModuleNotFoundError`. Use `python -m <module> --help` to inspect the
+current parser contract.
+
+## Operations
+
+`scripts/operations/` owns five current adapters:
+
+- audit frozen corpus identity;
+- preview or explicitly index the two-manual corpus;
+- preview ingestion output;
+- run a bounded query smoke check;
+- validate the configured query runtime.
+
+Reusable indexing, retrieval, and artifact behavior belongs in `app/`. These commands may initialize
+Docling or retrieval models, access Qdrant, and write files. `index_corpus` can write Qdrant unless
+`--preview-only` is supplied. See [Operations](../docs/OPERATIONS.md) before using them.
+
+## Evaluation
+
+`scripts/evaluation/` owns three current adapters:
+
+- validate frozen dataset splits;
+- evaluate retrieval and write the versioned retrieval artifact;
+- run approval-gated end-to-end generation evaluation.
+
+Reusable current contracts live in `evaluation/dataset.py`, `evaluation/retrieval.py`, and
+`evaluation/e2e.py`. Supported command implementations do not import private helpers from another
+command. E2E evaluation can call a real provider and must not run without explicit provider and data-
+egress approval. Exposed held-out v2 is regression evidence, not tuning data.
+
+## Archive
+
+`scripts/archive/phase6/` preserves the retired single-manual development workflow.
+`scripts/archive/phase7/` preserves completed dataset construction, migration, calibration,
+diagnostics, benchmark, replay, and readiness workflows.
+
+Archive policy:
+
+- source is retained for provenance, not support;
+- archived imports may no longer resolve against the current tree;
+- no compatibility shim redirects an old command to current behavior;
+- archived tools may read sensitive data, initialize models, call providers, mutate Qdrant, or
+  overwrite artifacts;
+- reconstruct the recorded Git revision if an explicitly approved historical reproduction is ever
+  required.
+
+The `phase6` and `phase7` directory labels remain historical identities. Active commands and reusable
+runtime symbols use semantic names or the concrete ATV320 product identity instead.

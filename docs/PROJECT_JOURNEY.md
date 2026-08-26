@@ -1,129 +1,175 @@
-# Industrial Technical Manual RAG — engineering journey
+# Engineering journey
 
-This is a reconstruction from repository history and measured artifacts. It distinguishes historical
-measurements from current contracts rather than rewriting old results.
+This document preserves the project's compact development narrative and its bug-to-fix evidence.
+It does not replace current architecture or operational instructions; see
+[ARCHITECTURE.md](ARCHITECTURE.md) and [OPERATIONS.md](OPERATIONS.md).
 
-## The problem
+Historical measurements below describe the exact artifacts that produced them. They are not claims
+about a new run, and the exposed held-out v2 split remains regression-only evidence.
 
-The project answers factual questions from technical manuals while keeping retrieval evidence,
-citations, and abstention explicit. A useful answer is not enough: the system must show which chunk
-supports it, avoid inventing unsupported sources, and be reproducible when a document is re-indexed.
+## Milestones
 
-## Evolution by phase
-
-| Phase | Key commit | Engineering decision |
+| Milestone | Representative commit | Durable outcome |
 |---|---|---|
-| 1 | `b5549b8` | Established FastAPI health, settings, pytest/Ruff, Compose, and CI. |
-| 2 | `71da1aa` | Added Docling parsing, structure-aware chunks, PDF batches, and atomic JSONL. |
-| 3A | `7677913` | Added multilingual MiniLM dense embeddings and Qdrant dense search. |
-| 3A.1 | `01df8f6` | Made chunk IDs content-stable, point IDs UUIDv5, and re-indexing safe. |
-| 3A.2 | `43bf976` | Hardened direct-evidence qrels/evaluation and separated API/ingestion Docker dependencies. |
-| 4 | `51ead18` | Added BM25 sparse vectors and client-side RRF in a separate v2 collection. |
-| 4.1 | `9718926` | Audited candidate pools instead of assuming hybrid was best. |
-| 5 | `07c074b` | Compared three Jina reranking pools with strict model-output validation. |
-| 6 | `e3b3704` | Added query API, evidence gate, structured generation, citation validation, abstention, and Gemini/OpenAI routing. |
-| 7 | `8267c4b` and later commits | Added a real industrial corpus, calibration closure, exposed regression evaluation, and runtime hardening. |
-| Round 1 | R00–R07 module history | Preserved behavior while establishing modular ownership, thin adapters, evaluation isolation, and an explicit script lifecycle. |
+| Project foundation | `b5549b8` | FastAPI health, settings, tests, Ruff, Compose, and CI |
+| Structured ingestion | `71da1aa` | Docling parsing, page batching, structure-aware chunks, atomic JSONL |
+| Dense retrieval | `7677913` | Multilingual MiniLM embeddings and Qdrant dense search |
+| Stable identity | `01df8f6` | Content-stable chunk IDs, UUIDv5 point IDs, safer re-indexing |
+| Direct-evidence evaluation | `43bf976` | Qrels tied to exact evidence chunks instead of pages |
+| Sparse and fusion retrieval | `51ead18`, `9718926` | BM25 vectors, rank-only RRF, and candidate-pool audit |
+| Cross-encoder reranking | `07c074b` | Bounded union reranking and strict output validation |
+| Grounded query API | `e3b3704` | Evidence gate, provider ports, citation validation, correction, abstention |
+| ATV320 corpus | `8267c4b` and later commits | Two-manual corpus, frozen evaluation data, retrieval closure, regression artifacts |
+| Round 1 cleanup | R00-R07 commits | Modular ownership, configuration/composition boundaries, thin adapters, archives |
+| Surface simplification | R08-R13 commits | Canonical imports and direct supported command owners; legacy facades removed |
+| Reproducible ingestion | `d88a2b2` | Locked transitive document stack and recovered exact 2,753-chunk identity |
+| Active naming cleanup | `e94b862` to `39ddc13` | Generic runtime names, ATV320 contract, current evaluation package, phase-free CLI paths |
 
-## Phase 7 checkpoint
+## Why the architecture evolved
 
-Phase 7 does not overwrite the 99-chunk development corpus. It indexes 2,753 frozen chunks from
-two ATV320 manuals in `industrial_manual_phase7_dense_v1` and
-`industrial_manual_phase7_hybrid_v1`; their stable-ID hash is
-`2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
-The first 20-row calibration exposed two evaluation lessons before the 45-row held-out set was run:
-English evidence phrases cannot score Vietnamese generated answers, and one logical evidence block
-can have multiple exact duplicate chunk IDs. Dataset v2 therefore separates reviewed answer facts
-from qrel-validation phrases and expands only exact-content equivalents. All 42 answerable rows were
-then source-reviewed, all 65 records approved, and the final v2 hashes frozen. A later explicitly
-approved one-shot held-out-v2 run produced a sanitized historical result. Repository exposure means
-that split is now regression evidence, not an unseen benchmark and never a tuning input.
+Dense retrieval was a useful starting point, but direct evidence established the first meaningful
+evaluation contract: a page match is not the same as retrieving the chunk that supports an answer.
+Stable chunk identity then connected parsing, Qdrant payloads, qrels, citations, and regression
+artifacts.
 
-Dataset-v2 calibration improved direct retrieval over v1 but exposed two separate problems. Strict
-contiguous phrase scoring marked calibration 002/008 wrong despite complete answer-fact token
-coverage, while 004/005/006/010 were absent from the 20/20 candidate pool. Phase 7.4 therefore keeps
-strict phrase accuracy only as a diagnostic and introduces deterministic typed fact scoring. A
-sanitized rescore of the same provider outputs changes 6/12 strict matches to 8/12 deterministic
-matches without editing expected phrases or qrels.
+Sparse retrieval improved exact technical terms, while dense retrieval contributed evidence sparse
+search missed. Raw scores were not merged because cosine and BM25 scales are incomparable; rank-only
+reciprocal-rank fusion preserved their ordering signals. Candidate audit showed that reranking cannot
+recover evidence absent from its input pool, which led to a bounded dense/sparse union before the
+cross-encoder.
 
-The retrieval closure does not widen the cross-encoder to 80 candidates. It retrieves dense@60 and
-expanded sparse@40, augments only query terms through a fixed bilingual technical glossary, then uses
-weighted rank-only RRF `k=40`, dense@5/sparse@24 coverage reserves, and a soft query-role prior within
-the same 30-candidate budget. Canonical Python 3.11 calibration reaches candidate recall 12/12,
-Hit@5 11/12, MRR@5 0.875 and zero wrong-document top-1 results. It remains `PARTIAL`: calibration 010
-is rank 6 and wrong-document candidates still occupy 0.267 of final top-5 slots. Any fresh provider
-E2E run requires explicit data-egress approval. The completed held-out-v2 workflow is archived and
-is not a supported rerunnable command.
-
-## Round 1 portfolio cleanup
-
-R00 retired `manual.pdf` and the Phase 6 corpus from the active product surface without deleting its
-collections or historical tools. R01–R07 then added characterization coverage, consolidated runtime
-configuration/composition, clarified ingestion/indexing and retrieval/reranking boundaries, isolated
-grounded query orchestration, thinned FastAPI/CLI/Streamlit adapters, and moved offline evaluation to
-its canonical package.
-
-Completed research and calibration workflows were archived rather than deleted. A later
-simplification pass versioned E2E provenance, moved scoring to its canonical evaluation owner, and
-removed the obsolete root `app.*` facade layer; Git history retains the original source anchors.
-R13 then removed all eight command shims, leaving `scripts.operations` and `scripts.evaluation` as
-the only supported command owners. The cleanup did not tune algorithms, modify frozen data, re-index
-Qdrant, call a provider, or claim new benchmark results.
-
-## What changed in the architecture
-
-The first retrieval design was dense-only. Its important correction was that relevance must be a
-stable direct-evidence chunk ID, never merely a matching page. This made Hit@k and MRR meaningful
-and let later sparse, RRF, and reranker strategies be compared against the same frozen input.
-
-Qdrant stores vectors plus trusted payload, not generated answers. The payload keeps chunk ID,
-document ID, filename, pages, headings, content type, and text. Deterministic UUIDv5 point IDs make
-the index repeatable; safe indexing embeds/upserts first and only then removes stale points for the
-same document. That is why a failed re-index does not erase another document or the prior corpus.
-
-Phase 4 did not merge raw cosine and BM25 scores: their scales are incomparable. It stored sparse
-and dense vectors in a separate collection and used rank-only reciprocal-rank fusion. Candidate-pool
-audit then found sparse was stronger for exact terms but dense contributed evidence absent from sparse.
-
-Phase 5 therefore tested sparse, RRF-hybrid, and dense∪sparse rather than declaring hybrid a default.
-The union reranker was best on the frozen development set: Hit@5 `0.767`, MRR@5 `0.546`, and
-candidate recall `0.933`, with 3/3 critical bilingual intents in top 5. Its CPU p95 was about
-11.9 seconds, so the metric result is not a production latency claim.
-
-Phase 6 reused that retrieval behavior in the public query API. The safety order is fixed:
+The query layer added a fixed safety order:
 
 ```text
-retrieve → rerank → evidence gate → generate → validate source IDs → build trusted citations
+retrieve -> rerank -> select evidence -> evidence gate -> generate
+         -> validate source labels -> build trusted citations or abstain
 ```
 
-The LLM receives labeled evidence but never controls citation metadata. One correction retry can
-repair invalid source labels without retrieval drift; a second failure becomes a safe abstention.
-Gemini uses its OpenAI-compatible endpoint and OpenAI uses Responses, but both pass through the same
-schema/evidence/citation contract.
+The provider can reference supplied source labels, but it cannot invent trusted citation metadata.
+The application reconstructs citations from retrieved chunks and fails safely after one invalid
+citation-correction attempt.
 
-## Lessons useful in an interview
+The ATV320 corpus later expanded the system to two real manuals and 2,753 frozen chunks. Historical
+calibration artifacts remain useful evidence, but completed research commands were archived rather
+than treated as permanent product APIs. Round 1 then separated production, evaluation, and scripts;
+the later naming cleanup removed phase terminology from active semantics without migrating frozen
+data or physical Qdrant collections.
 
-- Evaluation design is part of the product. Same-page matching inflated early retrieval metrics;
-  direct qrels fixed that correctness bug.
-- Candidate recall and ranking quality answer different questions. A reranker cannot recover a chunk
-  absent from its candidate pool.
-- Stable identities are the bridge between ingestion, Qdrant, qrels, citations, and regression tests.
-- Dependency split matters operationally: the API image has retrieval+LLM dependencies but no Docling;
-  ingestion is on-demand and heavy.
-- A citation ID can be valid yet not semantically support every claim. Phase 6 guarantees the first;
-  Phase 7 measured the second, while the exposed split remains regression-only evidence.
+## Historical evaluation checkpoint
 
-## Known limits and next decision points
+The frozen calibration retrieval artifact reports candidate recall `12/12`, Hit@5 `11/12`, MRR@5
+`0.875`, and zero wrong-document top-1 results for its recorded source identity. It also records the
+remaining weakness: one relevant result at rank 6 and wrong-document candidates in the final top 5.
+These values are historical artifact evidence, not a fresh run performed by this documentation
+change.
 
-The 30-query Vietnamese research-paper corpus is development/regression evidence only. The Jina model
-is CC-BY-NC-4.0 and slow on CPU, so it is suitable for the current non-commercial demo but unresolved
-for commercial deployment. OCR, multi-page-table continuity, calibrated abstention, semantic citation
-coverage, authentication/rate limiting, provider privacy approval, and a representative industrial
-corpus remain open work. Any future benchmark must use a newly governed dataset and must stay outside
-the Round 1 structural-refactoring history.
+The one-shot held-out-v2 workflow was executed only after explicit approval and was then archived.
+Because its payload and results now exist in the repository, it is exposed regression evidence and
+must not guide new tuning.
 
-## Refactor bug ledger
+## Bug and correction ledger
 
-| Symptom | Root cause | Fix | Proof | Commit/artifact |
-|---|---|---|---|---|
-| The supported provider-free retrieval evaluator failed while building provenance before it could write a report. | Its source hash list still named three root compatibility modules removed in R12. | Point provenance at the canonical evaluator, query-analysis policy, and retrieval composition owners, and expose one deterministic source-identity helper. | An offline test hashes every declared path twice and requires the same result without Qdrant or model access. | `fix: repair retrieval evaluation provenance` |
+Each entry uses the same review format: **Symptom -> Root cause -> Fix -> Proof -> Commit/artifact**.
+
+### Same-page qrels inflated retrieval quality
+
+**Symptom** -> A result could count as correct while returning an unrelated chunk from the right
+page. **Root cause** -> Early qrels used page identity as a proxy for evidence. **Fix** -> Freeze exact
+direct-evidence chunk IDs and score only those IDs. **Proof** -> Deterministic qrel tests distinguish
+same-page distractors from relevant chunks. **Commit/artifact** -> `43bf976` and the frozen direct
+qrels.
+
+### Sparse evidence disappeared before reranking
+
+**Symptom** -> Exact technical evidence found by sparse search did not always reach the reranker.
+**Root cause** -> A fused cutoff could demote a candidate unique to one retrieval channel. **Fix** ->
+Audit candidate pools, preserve bounded dense/sparse coverage, and rerank the explicit union.
+**Proof** -> Golden candidate-order and coverage-policy tests plus the recorded retrieval calibration.
+**Commit/artifact** -> `9718926`, `07c074b`, and the retrieval-closure artifact.
+
+### Answers could outlive weak evidence or invalid citations
+
+**Symptom** -> Generation alone could produce a fluent answer with insufficient support or unknown
+source labels. **Root cause** -> Evidence sufficiency, structured generation, and citation trust were
+not separate decisions. **Fix** -> Gate before generation, validate every returned source ID, allow one
+correction attempt, then abstain. **Proof** -> Query-service tests cover blocked generation, corrected
+citations, repeated invalid labels, and safe abstention. **Commit/artifact** -> `e3b3704` and current
+application characterization tests.
+
+### Configuration and source identity drifted
+
+**Symptom** -> A diagnostic could appear comparable while using partially different runtime settings
+or source files. **Root cause** -> Frozen behavior was duplicated across environment selectors and
+artifact provenance lists. **Fix** -> Centralize the ATV320 retrieval/fusion contract, reject partial
+overrides, and version evaluation source identity. **Proof** -> Configuration, composition, and
+provenance tests fail closed on mismatches. **Commit/artifact** -> R02, ADR-005, E2E source identity
+v3.
+
+### Compatibility facades left stale imports
+
+**Symptom** -> Multiple `app.*` and top-level script paths appeared authoritative after ownership had
+moved. **Root cause** -> Temporary compatibility modules outlived their migration window. **Fix** ->
+Move consumers to canonical owners, version provenance, then hard-cut facades and command shims.
+**Proof** -> Architecture/import inventory tests require old paths to fail and prevent private
+cross-script imports. **Commit/artifact** -> R12-R13 and ADR-005.
+
+### Docling transitive drift changed nine chunk IDs
+
+**Symptom** -> A fresh run still produced 2,753 chunks but its ordered ID hash differed in nine
+positions. **Root cause** -> `docling` matched while a transitive `docling-core` version differed.
+**Fix** -> Lock the complete ingestion dependency set used by the frozen corpus. **Proof** -> A new
+preview reproduced both count `2753` and hash
+`2a972de9cfb551dd1d71dc9cb591d75071ad772d7d26519501539cad33e2f56d`.
+**Commit/artifact** -> `d88a2b2` and `artifacts/metrics/phase-7-corpus-manifest.json`.
+
+### Pip reported a hash mismatch during the ingestion build
+
+**Symptom** -> Docker failed with an expected/received wheel SHA-256 mismatch. **Root cause** -> A
+downloaded package payload was incomplete or inconsistent with the locked file; it was not evidence
+that repository pins should be relaxed. **Fix** -> Preserve hash checking and retry only the failed
+build/download cache path. **Proof** -> The rebuilt image reports the locked Docling stack and later
+reproduces the frozen chunk hash. **Commit/artifact** -> reproducible-ingestion build evidence and
+`d88a2b2`.
+
+### Compose rejected or misresolved the ingestion mount
+
+**Symptom** -> Compose returned `invalid spec: :/tmp/chunk-check`, or ingestion could not find the PDF.
+**Root cause** -> The PowerShell mount variable was empty in a new shell, while the container PDF path
+was `/data/raw` rather than a working-directory-relative path. **Fix** -> Initialize and verify the
+temporary directory, use a quoted volume specification, and use the container mount paths. **Proof**
+-> Preview mode completed and wrote its outputs outside the repository. **Commit/artifact** ->
+[OPERATIONS.md](OPERATIONS.md) reproduction recipe.
+
+### A warning copied a large manual excerpt into logs
+
+**Symptom** -> Docling's oversized-heading warning included a long technical-manual passage. **Root
+cause** -> A dependency formatted the full chunk object into its warning. **Fix** -> Sanitize known
+document warnings at the infrastructure boundary while preserving a concise warning and failure
+signals. **Proof** -> `tests/test_ingestion.py` verifies that manual content is absent while the
+warning type remains observable. **Commit/artifact** -> `d88a2b2`.
+
+### Equal chunk counts hid a non-reproducible corpus
+
+**Symptom** -> Baseline and fresh runs both reported 2,753 chunks, yet the stable-ID hashes differed.
+**Root cause** -> Count-only validation ignored content-boundary and metadata changes. **Fix** -> Treat
+document hashes, runtime versions, count, and ordered chunk-ID hash as one reproduction contract.
+**Proof** -> The final run matched all 2,753 IDs and the frozen hash exactly. **Commit/artifact** ->
+`d88a2b2` and the corpus manifest.
+
+### Retrieval evaluation hashed deleted source paths
+
+**Symptom** -> Evaluation provenance referred to three root modules removed during the canonical-owner
+migration. **Root cause** -> Source identity was not updated when compatibility facades were deleted.
+**Fix** -> Hash `evaluation/e2e.py`, `app/domain/policies/query_analysis.py`, and
+`app/composition/retrieval.py`, then require every mapped path to exist. **Proof** -> Offline tests
+verify path existence, deterministic hashes, and source identity v3. **Commit/artifact** -> `e3bcc4b`
+and the v7 E2E artifact contract.
+
+## Portfolio conclusions
+
+- Correct evaluation labels are as important as the retrieval implementation.
+- Candidate recall and ranking quality are separate failure modes.
+- Stable identities make refactoring and reproducible evidence possible.
+- Frozen product identity should be concrete (`ATV320`); reusable behavior should be generic.
+- Archives preserve provenance without expanding the supported product surface.
+- Documentation is now owned by a small set of living documents instead of per-step logs.

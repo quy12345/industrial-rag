@@ -4,6 +4,9 @@
 - Date: 2026-08-24
 - Scope: Round 1 portfolio cleanup
 
+> Historical note: ADR-006 supersedes the active evaluation inventory and command naming recorded
+> here. The dependency direction and archive-not-drop decision remain current.
+
 ## Context
 
 Evaluation schemas, research helpers, operational adapters, and one-off Phase 7 workflows had grown
@@ -25,9 +28,10 @@ evaluation -> public application/domain interfaces
 production -X-> evaluation or scripts
 ```
 
-Evaluation schemas, replay, candidate audits, and metric aggregation have canonical ownership in
-`evaluation/`. Current CLI implementations live in either `scripts/operations/` or
-`scripts/evaluation/`. R13 later removed the temporary top-level command shims.
+At Round 1 closure, evaluation schemas, replay, candidate audits, and metric aggregation moved out
+of production and into `evaluation/`. Current CLI implementations live in either
+`scripts/operations/` or `scripts/evaluation/`. R13 later removed the temporary top-level command
+shims, and ADR-006 later reduced active evaluation to its three current contracts.
 
 Completed research, migration, calibration, diagnostics, benchmark, and readiness workflows move to
 `scripts/archive/`. They are archived, not dropped, because their source explains historical
@@ -36,9 +40,9 @@ users to unsupported behavior.
 
 At Round 1 closure, two source-identity anchors remained in place:
 
-- `scripts/evaluate_phase7_e2e.py`, blob
+- historical Git path **scripts/evaluate_phase7_e2e.py**, blob
   `7ce4dc9c180fd675eb89e5c06844766b664c6b69`;
-- `app/evaluation_e2e.py`, blob
+- historical Git path **app/evaluation_e2e.py**, blob
   `b8be722d43bc34c8bec00dfc2574d0a6341ab738`.
 
 R12 later versioned E2E provenance, moved both implementations to canonical owners, and removed the
@@ -66,7 +70,7 @@ versioned migration and hard cut.
 
 ## Validation
 
-Architecture tests enforce production/evaluation direction, supported script inventory, thin shim
-identity, removed facades, and the absence of private cross-script imports. Full offline pytest,
+Architecture tests enforce production/evaluation direction, supported script inventory, removed
+facades, and the absence of private cross-script imports. Full offline pytest,
 Ruff, Compose configuration validation, local Markdown links, source pins, and frozen-data scope are
 checked at Round 1 closure.
