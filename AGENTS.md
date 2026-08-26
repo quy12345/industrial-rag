@@ -258,43 +258,31 @@ unclear, stop and ask the user.
 * Comments should explain why, not repeat what the code already states.
 * Temporary compatibility shims must have an explicit removal module.
 
-## 10. Module documentation
+## 10. Documentation ownership
 
-Every refactoring module must create or update exactly one learning document:
+Keep documentation concise by giving each kind of information one canonical owner:
 
-```text
-docs/modules/Rxx-<module-slug>.md
-```
+* `README.md` is the short project entry point and quickstart.
+* `docs/ARCHITECTURE.md` owns the current package structure, dependency direction, runtime flows,
+  public contracts and invariants.
+* `docs/OPERATIONS.md` owns supported commands, Docker workflows, validation and troubleshooting.
+* `docs/PROJECT_JOURNEY.md` owns the chronological engineering story and durable
+  symptom/root-cause/fix/proof records.
+* `docs/adr/` records accepted architecture decisions that remain relevant to future changes.
+* `scripts/README.md` owns the supported-command inventory and archive lifecycle.
 
-If a module is implemented through multiple slices, update the same document
-instead of creating multiple unrelated documents.
+Do not create a separate walkthrough, phase plan or fixed-template module document for each change.
+Update the canonical owner instead. A code change needs a documentation update only when it changes
+current architecture, supported operation, a durable engineering lesson or an accepted design
+decision.
 
-The document must contain:
+Historical documents may be consolidated after their unique facts have moved to a canonical owner.
+Git history remains the source for superseded implementation detail; do not copy repeated material
+into a new `docs/history/` tree.
 
-1. Goal and scope.
-2. Position in the system.
-3. Relevant background concepts.
-4. Input, output and contracts.
-5. Step-by-step data flow.
-6. Responsibilities of changed files.
-7. Important symbols and why they exist.
-8. Before-and-after structure.
-9. Design decisions and trade-offs.
-10. Tests and the behavior each test protects.
-11. Commands and expected results.
-12. Small usage example.
-13. Common failures and debugging.
-14. Current limitations.
-15. Self-check questions.
-16. Interview summary.
-17. Validation results and proposed commit.
-18. Status: `IN_PROGRESS` or `COMPLETE`.
-
-Documentation must describe the code that actually exists. Do not document
-planned behavior as if it has already been implemented.
-
-If the user asks for clarification, update the module document with the
-clarification instead of leaving the explanation only in chat.
+Documentation must describe code that actually exists. Do not document planned behavior as if it
+has already been implemented. When recording a bug, use the compact sequence `Symptom -> Root cause
+-> Fix -> Proof -> Commit/artifact` and avoid duplicating the full runbook.
 
 ## 11. Testing and evaluation
 
@@ -391,8 +379,7 @@ A module is complete only when:
 * relevant tests and checks pass;
 * no unrelated code was changed;
 * no hidden placeholder or silent fallback was introduced;
-* module documentation reflects the actual implementation;
-* documentation status is `COMPLETE`;
+* the appropriate canonical documentation reflects the actual implementation when needed;
 * a Conventional Commit is proposed;
 * the agent stops at `WAITING_FOR_USER_REVIEW`.
 
