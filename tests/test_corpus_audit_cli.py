@@ -1,4 +1,4 @@
-"""Offline contract tests for the supported Phase 7 corpus audit command."""
+"""Offline contract tests for the supported corpus audit command."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.operations import audit_phase7_corpus as audit_cli
+from scripts.operations import audit_corpus as audit_cli
 
 
 def test_corpus_audit_parser_preserves_cli_contract() -> None:
@@ -81,7 +81,7 @@ def test_corpus_audit_uses_fake_local_pdfs_and_writes_sanitized_metadata(
     assert [document["page_count"] for document in documents] == [4, 4]
     assert all(document["digital_text_layer"] is True for document in documents)
     assert all("sample_text" not in document for document in documents)
-    assert capsys.readouterr().out == f"Phase 7 corpus audit PASS: {output}\n"
+    assert capsys.readouterr().out == f"ATV320 corpus audit PASS: {output}\n"
 
 
 def test_corpus_audit_preserves_missing_pdf_argparse_error(
@@ -93,7 +93,7 @@ def test_corpus_audit_preserves_missing_pdf_argparse_error(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["audit_phase7_corpus.py", "--raw-dir", str(tmp_path)],
+        ["audit_corpus.py", "--raw-dir", str(tmp_path)],
     )
 
     with pytest.raises(SystemExit) as caught:

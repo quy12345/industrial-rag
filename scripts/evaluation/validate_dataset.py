@@ -1,4 +1,4 @@
-"""Validate Phase 7 calibration and held-out annotations against frozen chunks."""
+"""Validate active calibration and held-out annotations against frozen chunks."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import argparse
 from pathlib import Path
 
 from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
-from evaluation.phase7_dataset import (
-    Phase7Error,
-    read_phase7_dataset,
-    validate_phase7_datasets,
+from evaluation.dataset import (
+    DatasetValidationError,
+    read_dataset,
+    validate_dataset_splits,
 )
 
 
@@ -30,15 +30,15 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
     try:
-        result = validate_phase7_datasets(
-            read_phase7_dataset(args.calibration),
-            read_phase7_dataset(args.test),
+        result = validate_dataset_splits(
+            read_dataset(args.calibration),
+            read_dataset(args.test),
             load_frozen_chunks(args.chunks),
         )
-    except Phase7Error as exc:
+    except DatasetValidationError as exc:
         parser.error(str(exc))
     write_json_atomic(args.output, result)
-    print(f"Phase 7 dataset validation PASS: {args.output}")
+    print(f"ATV320 dataset validation PASS: {args.output}")
     return 0
 
 

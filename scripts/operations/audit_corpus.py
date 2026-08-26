@@ -95,7 +95,7 @@ def main() -> int:
             "copyright_note": "Technical metadata only; no substantial vendor text is stored.",
         },
     )
-    print(f"Phase 7 corpus audit PASS: {args.output}")
+    print(f"ATV320 corpus audit PASS: {args.output}")
     return 0
 
 

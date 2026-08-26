@@ -1,4 +1,4 @@
-"""Offline tests for deterministic Phase 7 lexical query augmentation."""
+"""Offline tests for deterministic ATV320 lexical query augmentation."""
 
 from __future__ import annotations
 

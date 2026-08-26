@@ -1,4 +1,4 @@
-"""Frozen-corpus and offline dataset contracts for Phase 7.
+"""Frozen-corpus and offline dataset contracts for the active evaluation suite.
 
 This module is deliberately offline.  It validates annotations against an already
 frozen JSONL chunk export and never talks to a model, provider, or Qdrant server.
@@ -54,8 +54,8 @@ PhraseMatchMode = Literal["all", "any"]
 AnswerFactType = Literal["text", "numeric_unit", "identifier"]
 
 
-class Phase7Error(ValueError):
-    """Raised when Phase 7 frozen inputs do not satisfy their contract."""
+class DatasetValidationError(ValueError):
+    """Raised when ATV320 frozen inputs do not satisfy their contract."""
 
 
 class ExpectedAnswerFact(BaseModel):
@@ -149,7 +149,7 @@ class ExpectedAnswerFact(BaseModel):
         return self
 
 
-class Phase7Source(BaseModel):
+class CorpusSource(BaseModel):
     """Redistribution-safe source metadata; raw vendor content is never stored here."""
 
     model_config = ConfigDict(extra="forbid")
@@ -194,21 +194,23 @@ class Phase7Source(BaseModel):
         return normalized
 
 
-def validate_source_records(records: Sequence[Phase7Source]) -> None:
+def validate_source_records(records: Sequence[CorpusSource]) -> None:
     """Require one unique installation and programming source manifest entry."""
 
     if len(records) != 2:
-        raise Phase7Error("Phase 7 source manifest requires exactly two ATV320 manuals.")
+        raise DatasetValidationError("ATV320 source manifest requires exactly two ATV320 manuals.")
     filenames = [record.filename for record in records]
     if len(set(filenames)) != len(filenames):
-        raise Phase7Error("Phase 7 source manifest contains duplicate filenames.")
+        raise DatasetValidationError("ATV320 source manifest contains duplicate filenames.")
     roles = {record.document_role for record in records}
     if roles != {"installation", "programming"}:
-        raise Phase7Error("Phase 7 source manifest requires installation and programming roles.")
+        raise DatasetValidationError(
+            "ATV320 source manifest requires installation and programming roles."
+        )
 
 
-class Phase7DatasetItem(BaseModel):
-    """One answerable or deliberately unsupported Phase 7 question."""
+class EvaluationItem(BaseModel):
+    """One answerable or deliberately unsupported ATV320 question."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -296,52 +298,54 @@ def chunk_ids_sha256(chunks: Iterable[DocumentChunk]) -> str:
     return str(chunk_set_metadata(chunks)["chunk_ids_sha256"])
 
 
-def read_phase7_dataset(path: Path) -> list[Phase7DatasetItem]:
+def read_dataset(path: Path) -> list[EvaluationItem]:
     """Read strict JSONL and reject malformed or duplicated records."""
 
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except OSError as exc:
-        raise Phase7Error(f"Unable to read Phase 7 dataset {path}: {exc}") from exc
-    records: list[Phase7DatasetItem] = []
+        raise DatasetValidationError(f"Unable to read ATV320 dataset {path}: {exc}") from exc
+    records: list[EvaluationItem] = []
     seen_ids: set[str] = set()
     for line_number, line in enumerate(lines, start=1):
         if not line.strip():
-            raise Phase7Error(f"Blank dataset record on line {line_number}.")
+            raise DatasetValidationError(f"Blank dataset record on line {line_number}.")
         try:
-            record = Phase7DatasetItem.model_validate_json(line)
+            record = EvaluationItem.model_validate_json(line)
         except ValidationError as exc:
-            raise Phase7Error(f"Invalid dataset record on line {line_number}: {exc}") from exc
+            raise DatasetValidationError(
+                f"Invalid dataset record on line {line_number}: {exc}"
+            ) from exc
         if record.id in seen_ids:
-            raise Phase7Error(f"Duplicate dataset ID on line {line_number}: {record.id}")
+            raise DatasetValidationError(f"Duplicate dataset ID on line {line_number}: {record.id}")
         seen_ids.add(record.id)
         records.append(record)
     if not records:
-        raise Phase7Error(f"Phase 7 dataset is empty: {path}")
+        raise DatasetValidationError(f"ATV320 dataset is empty: {path}")
     return records
 
 
-def validate_phase7_datasets(
-    calibration: Sequence[Phase7DatasetItem],
-    test: Sequence[Phase7DatasetItem],
+def validate_dataset_splits(
+    calibration: Sequence[EvaluationItem],
+    test: Sequence[EvaluationItem],
     chunks: Sequence[DocumentChunk],
 ) -> dict[str, Any]:
     """Validate immutable annotation rules against the frozen corpus."""
 
-    calibration_validation = validate_phase7_dataset(
+    calibration_validation = validate_dataset(
         calibration, chunks, kind="calibration"
     )
-    test_validation = validate_phase7_dataset(test, chunks, kind="test")
+    test_validation = validate_dataset(test, chunks, kind="test")
     calibration_ids = {item.id for item in calibration}
     duplicate_ids = calibration_ids.intersection(item.id for item in test)
     if duplicate_ids:
-        raise Phase7Error(f"Calibration/test IDs overlap: {sorted(duplicate_ids)}")
+        raise DatasetValidationError(f"Calibration/test IDs overlap: {sorted(duplicate_ids)}")
     calibration_questions = {_normalized_question(item.question) for item in calibration}
     duplicated_questions = calibration_questions.intersection(
         _normalized_question(item.question) for item in test
     )
     if duplicated_questions:
-        raise Phase7Error("Calibration/test questions have normalized exact duplicates.")
+        raise DatasetValidationError("Calibration/test questions have normalized exact duplicates.")
 
     return {
         "calibration": calibration_validation["dataset"],
@@ -364,8 +368,8 @@ def validate_phase7_datasets(
     }
 
 
-def validate_phase7_dataset(
-    items: Sequence[Phase7DatasetItem],
+def validate_dataset(
+    items: Sequence[EvaluationItem],
     chunks: Sequence[DocumentChunk],
     *,
     kind: DatasetKind,
@@ -392,15 +396,23 @@ def validate_phase7_dataset(
         for chunk_id in item.relevant_chunk_ids:
             chunk = by_id.get(chunk_id)
             if chunk is None:
-                raise Phase7Error(f"{item.id} references missing frozen chunk ID: {chunk_id}")
+                raise DatasetValidationError(
+                    f"{item.id} references missing frozen chunk ID: {chunk_id}"
+                )
             if chunk.document_id not in item.expected_document_ids:
-                raise Phase7Error(f"{item.id} qrel {chunk_id} belongs to an unexpected document")
+                raise DatasetValidationError(
+                    f"{item.id} qrel {chunk_id} belongs to an unexpected document"
+                )
             relevant.append(chunk)
         for phrase in item.expected_phrases:
             if not any(phrase_matches(chunk.text, phrase) for chunk in relevant):
-                raise Phase7Error(f"{item.id} expected phrase is absent from direct-evidence qrels")
+                raise DatasetValidationError(
+                    f"{item.id} expected phrase is absent from direct-evidence qrels"
+                )
         if not any(set(item.expected_pages).intersection(chunk.page_numbers) for chunk in relevant):
-            raise Phase7Error(f"{item.id} expected_pages do not intersect direct-evidence qrels")
+            raise DatasetValidationError(
+                f"{item.id} expected_pages do not intersect direct-evidence qrels"
+            )
 
     return {
         "dataset_kind": kind,
@@ -418,7 +430,7 @@ def validate_phase7_dataset(
     }
 
 
-def dataset_sha256(items: Sequence[Phase7DatasetItem]) -> str:
+def dataset_sha256(items: Sequence[EvaluationItem]) -> str:
     """Hash canonical records, independent of JSONL line ending differences."""
 
     canonical = "\n".join(
@@ -451,11 +463,11 @@ def build_exact_content_equivalence(
 
 
 def expand_exact_equivalent_qrels(
-    item: Phase7DatasetItem,
+    item: EvaluationItem,
     *,
     chunks_by_id: dict[str, DocumentChunk],
     equivalence: dict[str, tuple[str, ...]],
-) -> Phase7DatasetItem:
+) -> EvaluationItem:
     """Add only same-document, exact-content equivalents to an item's qrels."""
 
     if not item.answerable:
@@ -480,7 +492,7 @@ def expand_exact_equivalent_qrels(
 
 
 def _validate_dataset_shape(
-    items: Sequence[Phase7DatasetItem],
+    items: Sequence[EvaluationItem],
     *,
     kind: DatasetKind,
     expected_answerable: int,
@@ -488,14 +500,16 @@ def _validate_dataset_shape(
 ) -> None:
     counts = Counter(item.answerable for item in items)
     if counts[True] != expected_answerable or counts[False] != expected_unanswerable:
-        raise Phase7Error(
+        raise DatasetValidationError(
             f"{kind} requires {expected_answerable} answerable and {expected_unanswerable} "
             f"unanswerable items; found {counts[True]} and {counts[False]}."
         )
     if kind == "test":
         vi_to_en = sum(item.scenario == "vi_to_en" and item.answerable for item in items)
         if vi_to_en < 10:
-            raise Phase7Error("Held-out test requires at least 10 answerable vi_to_en questions.")
+            raise DatasetValidationError(
+                "Held-out test requires at least 10 answerable vi_to_en questions."
+            )
         answerable_types = Counter(item.question_type for item in items if item.answerable)
         required = {
             "installation",
@@ -507,10 +521,10 @@ def _validate_dataset_shape(
         }
         missing = sorted(required - set(answerable_types))
         if missing:
-            raise Phase7Error(f"Held-out test misses required question types: {missing}")
+            raise DatasetValidationError(f"Held-out test misses required question types: {missing}")
 
 
-def _dataset_summary(items: Sequence[Phase7DatasetItem]) -> dict[str, Any]:
+def _dataset_summary(items: Sequence[EvaluationItem]) -> dict[str, Any]:
     return {
         "total": len(items),
         "answerable": sum(item.answerable for item in items),

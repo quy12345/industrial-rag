@@ -1,4 +1,4 @@
-"""Offline tests for Phase 7.4.1 bounded role-aware retrieval optimisation."""
+"""Offline tests for bounded role-aware retrieval fusion."""
 
 from __future__ import annotations
 

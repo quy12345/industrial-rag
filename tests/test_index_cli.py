@@ -1,4 +1,4 @@
-"""Offline characterization of the supported Phase 7 indexing command."""
+"""Offline characterization of the supported corpus indexing command."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from app.infrastructure.corpus_artifacts import (
     ATV320_DENSE_COLLECTION,
     ATV320_HYBRID_COLLECTION,
 )
-from scripts.operations import index_phase7_corpus as index_cli
+from scripts.operations import index_corpus as index_cli
 
 PROJECT_ROOT = Path(__file__).parents[1]
 

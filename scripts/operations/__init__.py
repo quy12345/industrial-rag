@@ -1,1 +1,1 @@
-"""Supported Phase 7 operational commands."""
+"""Supported ATV320 operational commands."""

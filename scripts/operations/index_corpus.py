@@ -85,7 +85,7 @@ def main() -> int:
             _write_manifest(
                 args, chunks_by_document, all_chunks, bm25_avg_len=None, dense_dimension=None
             )
-            print(f"Phase 7 ingestion preview PASS: {args.chunks_output}")
+            print(f"ATV320 ingestion preview PASS: {args.chunks_output}")
             return 0
 
         settings = get_settings().model_copy(
@@ -142,9 +142,9 @@ def main() -> int:
             dense_dimension=dense_dimension,
         )
     except (IngestionError, RetrievalError, OSError, ValueError) as exc:
-        print(f"Phase 7 corpus indexing FAILED: {exc}")
+        print(f"ATV320 corpus indexing FAILED: {exc}")
         return 1
-    print(f"Phase 7 corpus indexing PASS: {args.manifest_output}")
+    print(f"ATV320 corpus indexing PASS: {args.manifest_output}")
     return 0
 
 

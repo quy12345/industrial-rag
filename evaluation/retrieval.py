@@ -48,11 +48,11 @@ def percentile_nearest_rank(values: Sequence[float], percentile: int) -> float:
     return ordered[index]
 
 
-def aggregate_closure_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def aggregate_retrieval_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate retrieval, contamination, context, and latency metrics."""
 
     if not rows:
-        raise ValueError("Retrieval closure requires at least one row.")
+        raise ValueError("Retrieval evaluation requires at least one row.")
     candidate_ranks = [row["candidate_direct_evidence_rank"] for row in rows]
     final_ranks = [row["final_direct_evidence_rank"] for row in rows]
     rerank_values = [float(row["rerank_ms"]) for row in rows]
@@ -81,7 +81,7 @@ def aggregate_closure_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def aggregate_closure_rows_by_language(
+def aggregate_retrieval_rows_by_language(
     rows: list[dict[str, Any]],
 ) -> dict[str, dict[str, float | int]]:
     """Aggregate closure coverage and contamination for each language."""

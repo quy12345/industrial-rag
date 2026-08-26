@@ -1,4 +1,4 @@
-"""Offline, direct-evidence scoring for the frozen Phase 7 end-to-end suite.
+"""Offline, direct-evidence scoring for the frozen ATV320 end-to-end suite.
 
 This module scores a completed :class:`~app.application.query_service.QueryExecution`.  It
 never initializes Qdrant, an embedding model, reranker, or generation provider;
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.application.query_service import QueryExecution
-from evaluation.phase7_dataset import ExpectedAnswerFact, Phase7DatasetItem
+from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
 from evaluation.retrieval import direct_evidence_rank, percentile_nearest_rank, phrase_matches
 
 FACT_EVALUATOR_ID = "phase7_deterministic_typed_facts_v2"
@@ -38,7 +38,7 @@ class _TextMatch:
     polarity: str
 
 
-def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -> dict[str, Any]:
+def score_query_execution(item: EvaluationItem, execution: QueryExecution) -> dict[str, Any]:
     """Create one sanitized, deterministic record for an end-to-end execution.
 
     Retrieval relevance is based exclusively on stable qrel chunk IDs.  A page,
@@ -186,15 +186,15 @@ def score_phase7_execution(item: Phase7DatasetItem, execution: QueryExecution) -
     return record
 
 
-def aggregate_phase7_records(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def aggregate_query_records(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate retrieval, answer, citation, abstention, and latency metrics."""
 
     if not records:
-        raise ValueError("Phase 7 evaluation requires at least one result record.")
+        raise ValueError("ATV320 evaluation requires at least one result record.")
     answerable = [record for record in records if record["answerable"]]
     unanswerable = [record for record in records if not record["answerable"]]
     if not answerable or not unanswerable:
-        raise ValueError("Phase 7 evaluation requires answerable and unanswerable records.")
+        raise ValueError("ATV320 evaluation requires answerable and unanswerable records.")
     return {
         "query_count": len(records),
         "answerable_count": len(answerable),
@@ -214,7 +214,7 @@ def aggregate_phase7_records(records: Sequence[dict[str, Any]]) -> dict[str, Any
     }
 
 
-def evaluate_phase7_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
+def evaluate_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
     """Evaluate the documented release gates without tuning their thresholds."""
 
     abstention = metrics["abstention"]
@@ -451,7 +451,7 @@ def _group_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _answer_fact_results(item: Phase7DatasetItem, answer: str) -> list[dict[str, Any]]:
+def _answer_fact_results(item: EvaluationItem, answer: str) -> list[dict[str, Any]]:
     if not item.expected_answer_facts:
         raise ValueError(f"Answerable item {item.id} has no reviewed expected_answer_facts.")
     return [score_expected_answer_fact(fact, answer) for fact in item.expected_answer_facts]

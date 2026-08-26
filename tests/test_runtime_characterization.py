@@ -1,4 +1,4 @@
-"""Cross-stage characterization of the active Phase 7 query contract."""
+"""Cross-stage characterization of the active ATV320 query contract."""
 
 from __future__ import annotations
 
@@ -195,7 +195,7 @@ def test_retrieval_candidate_rejects_non_positive_one_based_ranks(field_name: st
     assert caught.value.errors()[0]["type"] == "greater_than_equal"
 
 
-def test_golden_phase7_query_execution_preserves_all_stage_boundaries() -> None:
+def test_golden_atv320_query_execution_preserves_all_stage_boundaries() -> None:
     events: list[str] = []
     duplicate_text = "Disconnect all power before wiring terminal X1."
     programming_copy = _candidate(

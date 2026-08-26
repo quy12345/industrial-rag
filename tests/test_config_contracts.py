@@ -1,4 +1,4 @@
-"""Characterization for canonical settings and the frozen Phase 7 contract."""
+"""Characterization for canonical settings and the frozen ATV320 contract."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def test_empty_environment_value_keeps_the_canonical_default(monkeypatch) -> Non
     assert Settings(_env_file=None).qdrant_url == "http://localhost"
 
 
-def test_phase7_contract_snapshot_is_exact_and_immutable() -> None:
+def test_contract_snapshot_is_exact_and_immutable() -> None:
     assert asdict(ATV320_RETRIEVAL_CONTRACT) == {
         "contract_id": "atv320-2025-04-v1",
         "document_id": INSTALLATION_DOCUMENT_ID,

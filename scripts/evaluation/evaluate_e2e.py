@@ -1,4 +1,4 @@
-"""Run the approved Phase 7 end-to-end evaluation against separate collections.
+"""Run the approved ATV320 end-to-end evaluation against separate collections.
 
 The output is intentionally sanitized: it records IDs, ranks, aggregate quality,
 latency, and token counts, but never questions, manual text, prompts, answers, or
@@ -41,34 +41,34 @@ from app.infrastructure.corpus_artifacts import (
 )
 from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
 from app.infrastructure.qdrant.client import create_qdrant_client
+from evaluation.dataset import (
+    dataset_sha256,
+    read_dataset,
+    validate_dataset,
+)
 from evaluation.e2e import (
     FACT_EVALUATOR_ID,
-    aggregate_phase7_records,
-    evaluate_phase7_quality_gates,
-    score_phase7_execution,
-)
-from evaluation.phase7_dataset import (
-    dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_dataset,
+    aggregate_query_records,
+    evaluate_quality_gates,
+    score_query_execution,
 )
 
 CALIBRATION_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS"
 HELDOUT_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 HELDOUT PROVIDER EGRESS"
 HELDOUT_GOVERNANCE_BLOCK = (
-    "Phase 7 held-out execution is BLOCKED_GOVERNANCE because historical tracked documentation "
+    "ATV320 held-out execution is BLOCKED_GOVERNANCE because historical tracked documentation "
     "and calibration tooling exposed the current split."
 )
 ACTIVE_CALIBRATION_PATH = Path("data/eval/phase7/calibration-v3.jsonl")
 ACTIVE_MANIFEST_PATH = Path("artifacts/metrics/phase-7-evaluation-manifest-v3.json")
-ARTIFACT_SCHEMA_VERSION = 6
-SOURCE_IDENTITY_VERSION = 2
+ARTIFACT_SCHEMA_VERSION = 7
+SOURCE_IDENTITY_VERSION = 3
 SOURCE_IDENTITY_PATHS = {
     "citation_policy": Path("app/domain/citations.py"),
-    "dataset_contract": Path("evaluation/phase7_dataset.py"),
+    "dataset_contract": Path("evaluation/dataset.py"),
     "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
     "evaluator": Path("evaluation/e2e.py"),
-    "evaluation_command": Path("scripts/evaluation/evaluate_phase7_e2e.py"),
+    "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "evidence_policy": Path("app/domain/evidence.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
     "generation_adapter": Path("app/infrastructure/generation/langchain_structured.py"),
@@ -100,7 +100,7 @@ def main() -> int:
     if args.max_queries is not None:
         selected = selected[: args.max_queries]
 
-    settings = _phase7_settings(Settings())
+    settings = _runtime_settings(Settings())
     client = create_qdrant_client(settings)
     validate_frozen_runtime(
         client,
@@ -155,19 +155,19 @@ def main() -> int:
                 document_id=None,
                 top_k=args.top_k,
             )
-            record = score_phase7_execution(item, execution)
+            record = score_query_execution(item, execution)
         except Exception as exc:
             _write_checkpoint(args.checkpoint, identity, records)
-            raise RuntimeError(f"Phase 7 execution failed for dataset item {item.id}.") from exc
+            raise RuntimeError(f"ATV320 execution failed for dataset item {item.id}.") from exc
         records.append(record)
         _write_checkpoint(args.checkpoint, identity, records)
 
     if len(records) != len(selected):
         raise RuntimeError("Checkpoint result count does not match the selected dataset.")
     complete_evaluation = len(selected) == len(dataset)
-    overall = aggregate_phase7_records(records) if complete_evaluation else None
+    overall = aggregate_query_records(records) if complete_evaluation else None
     quality_gates = (
-        evaluate_phase7_quality_gates(overall)
+        evaluate_quality_gates(overall)
         if overall is not None
         else {
             "overall_pass": False,
@@ -200,11 +200,11 @@ def main() -> int:
     write_json_atomic(args.output, output)
     quality_passed = bool(output["quality_gates"]["overall_pass"])
     if not complete_evaluation:
-        print(f"Phase 7 {args.dataset} partial diagnostic completed: {args.output}")
+        print(f"ATV320 {args.dataset} partial diagnostic completed: {args.output}")
         return 0
     quality_status = "PASS" if quality_passed else "FAIL"
     print(
-        f"Phase 7 {args.dataset} E2E evaluation completed; "
+        f"ATV320 {args.dataset} E2E evaluation completed; "
         f"quality gates {quality_status}: {args.output}"
     )
     return 0 if quality_passed else 2
@@ -242,11 +242,11 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--item-id and --max-queries are mutually exclusive")
     if args.output is None:
         args.output = Path(
-            f"artifacts/metrics/phase-7-{args.dataset}-e2e-v6.json"
+            f"artifacts/metrics/atv320-{args.dataset}-e2e-v7.json"
         )
     if args.checkpoint is None:
         args.checkpoint = Path(
-            f"artifacts/metrics/phase-7-{args.dataset}-e2e-v6-checkpoint.jsonl"
+            f"artifacts/metrics/atv320-{args.dataset}-e2e-v7-checkpoint.jsonl"
         )
     return args
 
@@ -257,7 +257,7 @@ def _validate_execution_approval(args: argparse.Namespace) -> None:
     else:
         raise SystemExit(HELDOUT_GOVERNANCE_BLOCK)
     if args.provider_approval_token != expected:
-        raise SystemExit("Phase 7 provider approval token is missing or invalid for this dataset.")
+        raise SystemExit("ATV320 provider approval token is missing or invalid for this dataset.")
 
 
 def _load_selected_dataset(
@@ -266,10 +266,10 @@ def _load_selected_dataset(
     """Load exactly one approved split; calibration never touches the held-out path."""
 
     dataset_path = args.calibration if args.dataset == "calibration" else args.test
-    dataset = read_phase7_dataset(dataset_path)
-    validation = validate_phase7_dataset(dataset, chunks, kind=args.dataset)
+    dataset = read_dataset(dataset_path)
+    validation = validate_dataset(dataset, chunks, kind=args.dataset)
     if any(item.review_status != "approved" for item in dataset):
-        raise SystemExit("Phase 7 evaluation requires an explicitly approved dataset.")
+        raise SystemExit("ATV320 evaluation requires an explicitly approved dataset.")
     manifest = _validate_evaluation_manifest(
         args.manifest,
         chunks,
@@ -279,8 +279,8 @@ def _load_selected_dataset(
     return dataset, validation, manifest
 
 
-def _phase7_settings(settings: Settings) -> Settings:
-    """Make the fixed Phase 7 runtime selection explicit and artifact-independent."""
+def _runtime_settings(settings: Settings) -> Settings:
+    """Make the fixed ATV320 runtime selection explicit and artifact-independent."""
 
     return settings.model_copy(
         update={
@@ -307,17 +307,17 @@ def _validate_evaluation_manifest(
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Unable to load Phase 7 evaluation manifest: {path}") from exc
+        raise RuntimeError(f"Unable to load ATV320 evaluation manifest: {path}") from exc
     dataset_key = (
         "calibration_dataset_sha256" if kind == "calibration" else "test_dataset_sha256"
     )
     expected = {"corpus": chunk_set_metadata(chunks), dataset_key: dataset_sha256(dataset)}
     for key, value in expected.items():
         if manifest.get(key) != value:
-            raise RuntimeError(f"Phase 7 evaluation manifest mismatch: {key}")
+            raise RuntimeError(f"ATV320 evaluation manifest mismatch: {key}")
     sealed_hash = manifest.get("test_dataset_sha256")
     if not isinstance(sealed_hash, str) or len(sealed_hash) != 64:
-        raise RuntimeError("Phase 7 manifest has no valid sealed test dataset hash.")
+        raise RuntimeError("ATV320 manifest has no valid sealed test dataset hash.")
     return manifest
 
 
@@ -354,7 +354,7 @@ def _generation_configuration(settings: Settings) -> dict[str, Any]:
 
 
 def _source_identity() -> dict[str, Any]:
-    """Hash canonical behavior owners under the explicit v2 provenance schema."""
+    """Hash canonical behavior owners under the explicit v3 provenance schema."""
 
     return {
         "version": SOURCE_IDENTITY_VERSION,
@@ -412,11 +412,11 @@ def _load_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any
         header = json.loads(lines[0])
         records = [json.loads(line) for line in lines[1:]]
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Malformed Phase 7 checkpoint: {path}") from exc
+        raise RuntimeError(f"Malformed ATV320 checkpoint: {path}") from exc
     if header != {"run_identity": identity}:
-        raise RuntimeError("Existing Phase 7 checkpoint belongs to a different frozen run.")
+        raise RuntimeError("Existing ATV320 checkpoint belongs to a different frozen run.")
     if len({record.get("id") for record in records}) != len(records):
-        raise RuntimeError("Existing Phase 7 checkpoint has duplicate item IDs.")
+        raise RuntimeError("Existing ATV320 checkpoint has duplicate item IDs.")
     return records
 
 

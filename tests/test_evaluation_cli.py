@@ -1,4 +1,4 @@
-"""Offline contract tests for supported Phase 7 evaluation commands."""
+"""Offline contract tests for supported evaluation commands."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from evaluation.phase7_dataset import Phase7Error
-from scripts.evaluation import validate_phase7_dataset as validation_cli
+from evaluation.dataset import DatasetValidationError
+from scripts.evaluation import validate_dataset as validation_cli
 
 
 def test_dataset_validation_parser_preserves_cli_contract() -> None:
@@ -45,13 +45,13 @@ def test_dataset_validation_cli_coordinates_injected_offline_helpers(
     )
     monkeypatch.setattr(
         validation_cli,
-        "read_phase7_dataset",
+        "read_dataset",
         lambda path: reads.append(path) or (calibration if path == args.calibration else test),
     )
     monkeypatch.setattr(validation_cli, "load_frozen_chunks", lambda path: chunks)
     monkeypatch.setattr(
         validation_cli,
-        "validate_phase7_datasets",
+        "validate_dataset_splits",
         lambda actual_calibration, actual_test, actual_chunks: (
             report
             if (actual_calibration, actual_test, actual_chunks) == (calibration, test, chunks)
@@ -67,22 +67,22 @@ def test_dataset_validation_cli_coordinates_injected_offline_helpers(
     assert validation_cli.main() == 0
     assert reads == [args.calibration, args.test]
     assert written == [(args.output, report)]
-    assert capsys.readouterr().out == "Phase 7 dataset validation PASS: report.json\n"
+    assert capsys.readouterr().out == "ATV320 dataset validation PASS: report.json\n"
 
 
 def test_dataset_validation_cli_preserves_argparse_error_mapping(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["validate_phase7_dataset.py"])
+    monkeypatch.setattr(sys, "argv", ["validate_dataset.py"])
     monkeypatch.setattr(
         validation_cli,
-        "read_phase7_dataset",
-        lambda path: (_ for _ in ()).throw(Phase7Error("invalid annotations")),
+        "read_dataset",
+        lambda path: (_ for _ in ()).throw(DatasetValidationError("invalid annotations")),
     )
 
     with pytest.raises(SystemExit) as caught:
         validation_cli.main()
 
     assert caught.value.code == 2
-    assert "validate_phase7_dataset.py: error: invalid annotations" in capsys.readouterr().err
+    assert "validate_dataset.py: error: invalid annotations" in capsys.readouterr().err

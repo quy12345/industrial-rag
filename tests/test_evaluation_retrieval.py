@@ -1,4 +1,4 @@
-"""Offline aggregation tests for the provider-free Phase 7.4 closure."""
+"""Offline metric tests for the provider-free retrieval evaluator."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from evaluation.retrieval import (
-    aggregate_closure_rows,
+    aggregate_retrieval_rows,
     direct_evidence_rank,
     percentile_nearest_rank,
     phrase_matches,
 )
-from scripts.evaluation import evaluate_phase7_retrieval_closure
+from scripts.evaluation import evaluate_retrieval
 
 
 def _row(identifier: str, rank: int | None, *, wrong_document: bool = False) -> dict:
@@ -32,8 +32,8 @@ def _row(identifier: str, rank: int | None, *, wrong_document: bool = False) -> 
     }
 
 
-def test_closure_aggregation_reports_recall_ranks_contamination_and_latency() -> None:
-    metrics = aggregate_closure_rows([_row("a", 1), _row("b", None, wrong_document=True)])
+def test_retrieval_aggregation_reports_recall_ranks_contamination_and_latency() -> None:
+    metrics = aggregate_retrieval_rows([_row("a", 1), _row("b", None, wrong_document=True)])
     assert metrics["candidate_recall"] == 0.5
     assert metrics["hit_rate_at_5"] == 0.5
     assert metrics["mrr_at_5"] == 0.5
@@ -44,9 +44,9 @@ def test_closure_aggregation_reports_recall_ranks_contamination_and_latency() ->
     assert metrics["rerank_latency_ms"]["p95"] == 100.0
 
 
-def test_closure_aggregation_rejects_empty_input() -> None:
+def test_retrieval_aggregation_rejects_empty_input() -> None:
     with pytest.raises(ValueError, match="at least one"):
-        aggregate_closure_rows([])
+        aggregate_retrieval_rows([])
 
 
 def test_retrieval_metric_primitives_are_deterministic() -> None:
@@ -61,8 +61,10 @@ def test_retrieval_metric_primitives_are_deterministic() -> None:
 def test_retrieval_evaluator_hashes_existing_canonical_behavior_owners() -> None:
     expected = {
         name: hashlib.sha256(path.read_bytes()).hexdigest()
-        for name, path in evaluate_phase7_retrieval_closure.SOURCE_IDENTITY_PATHS.items()
+        for name, path in evaluate_retrieval.SOURCE_IDENTITY_PATHS.items()
     }
 
-    assert expected == evaluate_phase7_retrieval_closure._source_identity()
-    assert expected == evaluate_phase7_retrieval_closure._source_identity()
+    assert expected == evaluate_retrieval._source_identity()
+    assert expected == evaluate_retrieval._source_identity()
+    assert evaluate_retrieval.ARTIFACT_SCHEMA_VERSION == 2
+    assert evaluate_retrieval.DEFAULT_OUTPUT.name == "atv320-retrieval-evaluation-v2.json"

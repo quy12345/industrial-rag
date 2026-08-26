@@ -290,7 +290,7 @@ def test_content_identity_has_one_domain_owner() -> None:
     for module in (
         "app.application.reranking_service",
         "app.domain.evidence",
-        "evaluation.phase7_dataset",
+        "evaluation.dataset",
     ):
         assert "app.domain.content_identity" in graph[module]
         assert "app.content_identity" not in graph[module]
@@ -299,7 +299,7 @@ def test_content_identity_has_one_domain_owner() -> None:
 def test_supported_ingestion_commands_use_canonical_owners() -> None:
     for path in (
         APP_ROOT.parent / "scripts" / "operations" / "ingest_preview.py",
-        APP_ROOT.parent / "scripts" / "operations" / "index_phase7_corpus.py",
+        APP_ROOT.parent / "scripts" / "operations" / "index_corpus.py",
     ):
         imports = _local_imports(path)
         assert "app.infrastructure.ingestion.pipeline" in imports
@@ -481,7 +481,7 @@ def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
     assert not (APP_ROOT / "evaluation_e2e.py").exists()
     evaluator = graph["evaluation.e2e"]
     assert "app.application.query_service" in evaluator
-    assert "evaluation.phase7_dataset" in evaluator
+    assert "evaluation.dataset" in evaluator
     assert "evaluation.retrieval" in evaluator
     assert not {
         dependency
@@ -490,7 +490,7 @@ def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
     }
 
     canonical_cli = (
-        APP_ROOT.parent / "scripts" / "evaluation" / "evaluate_phase7_e2e.py"
+        APP_ROOT.parent / "scripts" / "evaluation" / "evaluate_e2e.py"
     )
     cli_imports = _local_imports(canonical_cli)
     assert "evaluation.e2e" in cli_imports
@@ -500,12 +500,18 @@ def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
         dependency for dependency in cli_imports if dependency in REMOVED_COMPATIBILITY_MODULES
     }
 
-    assert not (APP_ROOT.parent / "scripts" / "evaluate_phase7_e2e.py").exists()
+    assert not (APP_ROOT.parent / "scripts" / "evaluate_e2e.py").exists()
 
 
 def test_historical_evaluation_helpers_are_outside_the_active_package() -> None:
     repository_root = APP_ROOT.parent
 
+    assert {path.name for path in EVALUATION_ROOT.glob("*.py")} == {
+        "__init__.py",
+        "dataset.py",
+        "e2e.py",
+        "retrieval.py",
+    }
     assert not (EVALUATION_ROOT / "candidate_audit.py").exists()
     assert not (EVALUATION_ROOT / "reranking.py").exists()
     assert not (EVALUATION_ROOT / "replay.py").exists()
@@ -516,15 +522,15 @@ def test_historical_evaluation_helpers_are_outside_the_active_package() -> None:
     assert (repository_root / "scripts/archive/phase7/replay.py").is_file()
 
 
-def test_phase7_dataset_and_corpus_artifact_ownership_are_separate() -> None:
+def test_dataset_and_corpus_artifact_ownership_are_separate() -> None:
     graph = _import_graph()
 
-    assert "evaluation.retrieval" in graph["evaluation.phase7_dataset"]
-    assert "app.domain.documents" in graph["evaluation.phase7_dataset"]
-    assert "app.infrastructure.corpus_artifacts" in graph["evaluation.phase7_dataset"]
-    assert "app.evaluation" not in graph["evaluation.phase7_dataset"]
-    assert "app.models" not in graph["evaluation.phase7_dataset"]
-    assert "app.phase7" not in graph["evaluation.phase7_dataset"]
+    assert "evaluation.retrieval" in graph["evaluation.dataset"]
+    assert "app.domain.documents" in graph["evaluation.dataset"]
+    assert "app.infrastructure.corpus_artifacts" in graph["evaluation.dataset"]
+    assert "app.evaluation" not in graph["evaluation.dataset"]
+    assert "app.models" not in graph["evaluation.dataset"]
+    assert "app.phase7" not in graph["evaluation.dataset"]
     assert "app.domain.retrieval_contracts" in graph["app.infrastructure.corpus_artifacts"]
     assert "app.domain.documents" in graph["app.infrastructure.corpus_artifacts"]
     assert not {
@@ -534,9 +540,9 @@ def test_phase7_dataset_and_corpus_artifact_ownership_are_separate() -> None:
     }
 
 
-def test_supported_indexing_command_does_not_import_phase7_dataset_facade() -> None:
+def test_supported_indexing_command_does_not_import_dataset_facade() -> None:
     imports = _local_imports(
-        APP_ROOT.parent / "scripts" / "operations" / "index_phase7_corpus.py"
+        APP_ROOT.parent / "scripts" / "operations" / "index_corpus.py"
     )
 
     assert "app.infrastructure.corpus_artifacts" in imports
@@ -551,16 +557,16 @@ def test_supported_indexing_command_does_not_import_phase7_dataset_facade() -> N
 
 def test_dataset_validation_cli_uses_canonical_evaluation_interfaces() -> None:
     canonical_path = (
-        APP_ROOT.parent / "scripts" / "evaluation" / "validate_phase7_dataset.py"
+        APP_ROOT.parent / "scripts" / "evaluation" / "validate_dataset.py"
     )
     imports = _local_imports(canonical_path)
 
     assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
+    assert "evaluation.dataset" in imports
     assert "app.evaluation" not in imports
     assert "app.phase7" not in imports
 
-    assert not (APP_ROOT.parent / "scripts" / "validate_phase7_dataset.py").exists()
+    assert not (APP_ROOT.parent / "scripts" / "validate_dataset.py").exists()
 
 
 def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
@@ -568,7 +574,7 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
         APP_ROOT.parent
         / "scripts"
         / "evaluation"
-        / "evaluate_phase7_retrieval_closure.py"
+        / "evaluate_retrieval.py"
     )
     imports = _local_imports(canonical_path)
 
@@ -576,7 +582,7 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
     assert "app.composition.retrieval" in imports
     assert "app.domain.retrieval_contracts" in imports
     assert "app.infrastructure.corpus_artifacts" in imports
-    assert "evaluation.phase7_dataset" in imports
+    assert "evaluation.dataset" in imports
     assert "evaluation.retrieval" in imports
     assert "app.evaluation" not in imports
     assert "app.phase7" not in imports
@@ -584,7 +590,7 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
     assert "app.retrieval_runtime" not in imports
 
     assert not (
-        APP_ROOT.parent / "scripts" / "evaluate_phase7_retrieval_closure.py"
+        APP_ROOT.parent / "scripts" / "evaluate_retrieval.py"
     ).exists()
 
 
@@ -601,11 +607,45 @@ def test_supported_script_surface_is_explicit_and_has_no_private_cross_imports()
             }
 
 
+def test_active_python_surface_has_no_phase_number_identifiers_or_filenames() -> None:
+    roots = (
+        APP_ROOT,
+        EVALUATION_ROOT,
+        APP_ROOT.parent / "scripts" / "operations",
+        APP_ROOT.parent / "scripts" / "evaluation",
+    )
+    paths = [path for root in roots for path in root.rglob("*.py")]
+    filename_violations = {
+        str(path.relative_to(APP_ROOT.parent))
+        for path in paths
+        if "phase7" in path.name
+    }
+    identifier_violations: set[tuple[str, str]] = set()
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                names.append(node.name)
+            elif isinstance(node, ast.Name):
+                names.append(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.append(node.attr)
+            elif isinstance(node, ast.arg):
+                names.append(node.arg)
+            for name in names:
+                if "phase7" in name.casefold():
+                    identifier_violations.add((str(path.relative_to(APP_ROOT.parent)), name))
+
+    assert filename_violations == set()
+    assert identifier_violations == set()
+
+
 def test_supported_retrieval_commands_use_canonical_composition_and_adapters() -> None:
     scripts_root = APP_ROOT.parent / "scripts" / "operations"
     validate_imports = _local_imports(scripts_root / "validate_query_runtime.py")
     query_imports = _local_imports(scripts_root / "query_smoke.py")
-    index_imports = _local_imports(scripts_root / "index_phase7_corpus.py")
+    index_imports = _local_imports(scripts_root / "index_corpus.py")
 
     assert "app.composition.retrieval" in validate_imports
     assert "app.domain.retrieval_contracts" in validate_imports
@@ -620,16 +660,16 @@ def test_supported_retrieval_commands_use_canonical_composition_and_adapters() -
 
 
 def test_corpus_audit_cli_uses_canonical_artifact_infrastructure() -> None:
-    canonical_path = APP_ROOT.parent / "scripts" / "operations" / "audit_phase7_corpus.py"
+    canonical_path = APP_ROOT.parent / "scripts" / "operations" / "audit_corpus.py"
     imports = _local_imports(canonical_path)
 
     assert imports == {"app.infrastructure.corpus_artifacts"}
     assert "app.phase7" not in imports
 
-    assert not (APP_ROOT.parent / "scripts" / "audit_phase7_corpus.py").exists()
+    assert not (APP_ROOT.parent / "scripts" / "audit_corpus.py").exists()
 
 
-def test_phase7_archive_is_preserved_but_not_part_of_the_supported_surface() -> None:
+def test_archive_is_preserved_but_not_part_of_the_supported_surface() -> None:
     archive_root = APP_ROOT.parent / "scripts" / "archive" / "phase7"
     archived_scripts = {path.name for path in archive_root.glob("*.py")}
 

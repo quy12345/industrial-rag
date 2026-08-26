@@ -1,4 +1,4 @@
-"""Run provider-free Phase 7.4 retrieval and local reranker calibration closure."""
+"""Run the provider-free ATV320 retrieval and local reranker evaluation."""
 
 from __future__ import annotations
 
@@ -14,23 +14,28 @@ from app.composition.retrieval import build_query_retriever
 from app.config import Settings
 from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
-from evaluation.e2e import FACT_EVALUATOR_ID
-from evaluation.phase7_dataset import (
+from evaluation.dataset import (
     dataset_sha256,
-    read_phase7_dataset,
-    validate_phase7_datasets,
+    read_dataset,
+    validate_dataset_splits,
 )
 from evaluation.retrieval import (
-    aggregate_closure_rows,
-    aggregate_closure_rows_by_language,
+    aggregate_retrieval_rows,
+    aggregate_retrieval_rows_by_language,
     direct_evidence_rank,
 )
 
 SOURCE_IDENTITY_PATHS = {
-    "evaluator": Path("evaluation/e2e.py"),
-    "query_expansion": Path("app/domain/policies/query_analysis.py"),
-    "retrieval_runtime": Path("app/composition/retrieval.py"),
+    "dataset_contract": Path("evaluation/dataset.py"),
+    "fusion_policy": Path("app/domain/policies/fusion.py"),
+    "query_analysis_policy": Path("app/domain/policies/query_analysis.py"),
+    "reranking_service": Path("app/application/reranking_service.py"),
+    "retrieval_composition": Path("app/composition/retrieval.py"),
+    "retrieval_contract": Path("app/domain/retrieval_contracts.py"),
+    "retrieval_metrics": Path("evaluation/retrieval.py"),
 }
+ARTIFACT_SCHEMA_VERSION = 2
+DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-retrieval-evaluation-v2.json")
 
 
 def main() -> int:
@@ -45,16 +50,16 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("artifacts/metrics/phase-7-retrieval-closure-v1.json"),
+        default=DEFAULT_OUTPUT,
     )
     args = parser.parse_args()
 
-    calibration = read_phase7_dataset(args.calibration)
-    test = read_phase7_dataset(args.test)
+    calibration = read_dataset(args.calibration)
+    test = read_dataset(args.test)
     chunks = load_frozen_chunks(args.chunks)
-    validation = validate_phase7_datasets(calibration, test, chunks)
+    validation = validate_dataset_splits(calibration, test, chunks)
     selected = [item for item in calibration if item.answerable]
-    settings = _phase7_settings(Settings())
+    settings = _runtime_settings(Settings())
     retriever = build_query_retriever(settings, contract=ATV320_RETRIEVAL_CONTRACT)
 
     rows: list[dict[str, Any]] = []
@@ -90,8 +95,8 @@ def main() -> int:
             }
         )
 
-    overall = aggregate_closure_rows(rows)
-    per_language = aggregate_closure_rows_by_language(rows)
+    overall = aggregate_retrieval_rows(rows)
+    per_language = aggregate_retrieval_rows_by_language(rows)
     runtime_identity = {
         "dense_candidate_limit": ATV320_RETRIEVAL_CONTRACT.dense_candidate_limit,
         "sparse_candidate_limit": ATV320_RETRIEVAL_CONTRACT.sparse_candidate_limit,
@@ -108,19 +113,16 @@ def main() -> int:
     }
     source_identity = _source_identity()
     payload = {
-        "schema_version": 1,
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
         "timestamp": datetime.now(UTC).isoformat(),
         "scope": "approved answerable calibration rows only",
         "calibration_dataset_sha256": dataset_sha256(calibration),
         "held_out_dataset_sha256": dataset_sha256(test),
         "corpus": validation["corpus"],
         "runtime": runtime_identity,
-        "frozen_identity": {
+        "source_identity": {
             "runtime_configuration_sha256": _json_sha256(runtime_identity),
-            "fact_evaluator_id": FACT_EVALUATOR_ID,
-            "evaluator_source_sha256": source_identity["evaluator"],
-            "query_expansion_source_sha256": source_identity["query_expansion"],
-            "retrieval_runtime_source_sha256": source_identity["retrieval_runtime"],
+            "files": source_identity,
         },
         "overall": overall,
         "per_language": per_language,
@@ -157,7 +159,7 @@ def main() -> int:
     write_json_atomic(args.output, payload)
     passed = all(payload["quality_gates"].values())
     status = "PASS" if passed else "FAIL"
-    print(f"Phase 7.4 provider-free retrieval closure {status}: {args.output}")
+    print(f"ATV320 provider-free retrieval evaluation {status}: {args.output}")
     return 0 if passed else 2
 
 
@@ -193,7 +195,7 @@ def _failure_class(candidate_rank: int | None, final_rank: int | None) -> str:
     return "hit"
 
 
-def _phase7_settings(settings: Settings) -> Settings:
+def _runtime_settings(settings: Settings) -> Settings:
     return settings.model_copy(
         update={
             "qdrant_collection": ATV320_RETRIEVAL_CONTRACT.dense_collection,

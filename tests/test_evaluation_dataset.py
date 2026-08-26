@@ -1,4 +1,4 @@
-"""Offline validation of Phase 7 corpus and held-out annotation contracts."""
+"""Offline validation of active corpus and annotation contracts."""
 
 from __future__ import annotations
 
@@ -8,16 +8,16 @@ import pytest
 
 from app.domain.documents import DocumentChunk
 from app.infrastructure import corpus_artifacts
-from evaluation.phase7_dataset import (
+from evaluation.dataset import (
+    CorpusSource,
+    DatasetValidationError,
+    EvaluationItem,
     ExpectedAnswerFact,
-    Phase7DatasetItem,
-    Phase7Error,
-    Phase7Source,
     build_exact_content_equivalence,
     dataset_sha256,
     expand_exact_equivalent_qrels,
-    read_phase7_dataset,
-    validate_phase7_datasets,
+    read_dataset,
+    validate_dataset_splits,
     validate_source_records,
 )
 
@@ -36,9 +36,9 @@ def _chunk(identifier: str, document_id: str, text: str, page: int) -> DocumentC
 
 def _answerable(
     index: int, *, language: str = "vi", question_type: str = "installation"
-) -> Phase7DatasetItem:
+) -> EvaluationItem:
     document_id = "installation" if index % 2 else "programming"
-    return Phase7DatasetItem(
+    return EvaluationItem(
         id=f"item-{index}",
         question=f"Question {index}",
         language=language,
@@ -56,8 +56,8 @@ def _answerable(
     )
 
 
-def _unanswerable(index: int, *, language: str = "en") -> Phase7DatasetItem:
-    return Phase7DatasetItem(
+def _unanswerable(index: int, *, language: str = "en") -> EvaluationItem:
+    return EvaluationItem(
         id=f"item-{index}",
         question=f"Unsupported question {index}",
         language=language,
@@ -73,7 +73,7 @@ def _unanswerable(index: int, *, language: str = "en") -> Phase7DatasetItem:
     )
 
 
-def _valid_sets() -> tuple[list[Phase7DatasetItem], list[Phase7DatasetItem], list[DocumentChunk]]:
+def _valid_sets() -> tuple[list[EvaluationItem], list[EvaluationItem], list[DocumentChunk]]:
     calibration = [_answerable(index) for index in range(1, 13)] + [
         _unanswerable(index) for index in range(13, 21)
     ]
@@ -107,9 +107,9 @@ def _valid_sets() -> tuple[list[Phase7DatasetItem], list[Phase7DatasetItem], lis
     return calibration, test, chunks
 
 
-def test_valid_phase7_sets_have_deterministic_hashes() -> None:
+def test_valid_dataset_splits_have_deterministic_hashes() -> None:
     calibration, test, chunks = _valid_sets()
-    result = validate_phase7_datasets(calibration, test, chunks)
+    result = validate_dataset_splits(calibration, test, chunks)
     assert result["calibration"]["answerable"] == 12
     assert result["test"]["unanswerable"] == 15
     assert result["test"]["by_scenario"]["vi_to_en"] >= 10
@@ -123,7 +123,7 @@ def test_approved_answerable_requires_reviewed_answer_facts() -> None:
     )
     assert draft.expected_answer_facts == []
     with pytest.raises(ValueError, match="approved answerable items require"):
-        Phase7DatasetItem.model_validate(
+        EvaluationItem.model_validate(
             draft.model_dump() | {"review_status": "approved"}
         )
 
@@ -135,11 +135,11 @@ def test_answer_facts_reject_duplicate_ids_and_aliases() -> None:
         {"id": "range", "aliases": ["b"]},
     ]
     with pytest.raises(ValueError, match="unique IDs"):
-        Phase7DatasetItem.model_validate(item)
+        EvaluationItem.model_validate(item)
 
     item["expected_answer_facts"] = [{"id": "range", "aliases": ["a", "a"]}]
     with pytest.raises(ValueError, match="duplicate aliases"):
-        Phase7DatasetItem.model_validate(item)
+        EvaluationItem.model_validate(item)
 
 
 def test_typed_answer_fact_schema_rejects_incomplete_or_mixed_contracts() -> None:
@@ -171,33 +171,33 @@ def test_typed_answer_fact_schema_rejects_incomplete_or_mixed_contracts() -> Non
         )
 
 
-def test_phase7_rejects_missing_qrel_wrong_document_and_absent_phrase() -> None:
+def test_rejects_missing_qrel_wrong_document_and_absent_phrase() -> None:
     calibration, test, chunks = _valid_sets()
     calibration[0] = calibration[0].model_copy(update={"relevant_chunk_ids": ["missing"]})
-    with pytest.raises(Phase7Error, match="missing frozen chunk"):
-        validate_phase7_datasets(calibration, test, chunks)
+    with pytest.raises(DatasetValidationError, match="missing frozen chunk"):
+        validate_dataset_splits(calibration, test, chunks)
 
     calibration, test, chunks = _valid_sets()
     calibration[0] = calibration[0].model_copy(update={"expected_document_ids": ["wrong"]})
-    with pytest.raises(Phase7Error, match="unexpected document"):
-        validate_phase7_datasets(calibration, test, chunks)
+    with pytest.raises(DatasetValidationError, match="unexpected document"):
+        validate_dataset_splits(calibration, test, chunks)
 
     calibration, test, chunks = _valid_sets()
     calibration[0] = calibration[0].model_copy(update={"expected_phrases": ["not in chunk"]})
-    with pytest.raises(Phase7Error, match="expected phrase"):
-        validate_phase7_datasets(calibration, test, chunks)
+    with pytest.raises(DatasetValidationError, match="expected phrase"):
+        validate_dataset_splits(calibration, test, chunks)
 
 
-def test_phase7_rejects_overlap_and_invalid_unanswerable_qrels() -> None:
+def test_rejects_overlap_and_invalid_unanswerable_qrels() -> None:
     calibration, test, chunks = _valid_sets()
     test[0] = test[0].model_copy(update={"id": calibration[0].id})
-    with pytest.raises(Phase7Error, match="IDs overlap"):
-        validate_phase7_datasets(calibration, test, chunks)
+    with pytest.raises(DatasetValidationError, match="IDs overlap"):
+        validate_dataset_splits(calibration, test, chunks)
 
     invalid = _unanswerable(99).model_dump()
     invalid["relevant_chunk_ids"] = ["chunk"]
     with pytest.raises(ValueError, match="unanswerable items cannot contain qrels"):
-        Phase7DatasetItem.model_validate(invalid)
+        EvaluationItem.model_validate(invalid)
 
 
 def test_qrel_closure_adds_only_same_document_exact_content() -> None:
@@ -223,13 +223,13 @@ def test_qrel_closure_adds_only_same_document_exact_content() -> None:
 def test_dataset_loader_rejects_bad_json_and_duplicate_ids(tmp_path: Path) -> None:
     path = tmp_path / "dataset.jsonl"
     path.write_text('{"id": "bad"}\n', encoding="utf-8")
-    with pytest.raises(Phase7Error, match="Invalid dataset record"):
-        read_phase7_dataset(path)
+    with pytest.raises(DatasetValidationError, match="Invalid dataset record"):
+        read_dataset(path)
 
     item = _unanswerable(1).model_dump_json()
     path.write_text(f"{item}\n{item}\n", encoding="utf-8")
-    with pytest.raises(Phase7Error, match="Duplicate dataset ID"):
-        read_phase7_dataset(path)
+    with pytest.raises(DatasetValidationError, match="Duplicate dataset ID"):
+        read_dataset(path)
 
 
 def test_file_hash_is_streamed_and_deterministic(tmp_path: Path) -> None:
@@ -256,7 +256,7 @@ def test_artifact_writers_preserve_utf8_order_newlines_and_cleanup(tmp_path: Pat
 
 
 def test_source_manifest_contract_requires_unique_installation_and_programming() -> None:
-    installation = Phase7Source(
+    installation = CorpusSource(
         filename="installation.pdf",
         manufacturer="Schneider Electric",
         title="Installation",
@@ -275,5 +275,5 @@ def test_source_manifest_contract_requires_unique_installation_and_programming()
         update={"filename": "programming.pdf", "document_role": "programming"}
     )
     validate_source_records([installation, programming])
-    with pytest.raises(Phase7Error, match="duplicate filenames"):
+    with pytest.raises(DatasetValidationError, match="duplicate filenames"):
         validate_source_records([installation, installation])

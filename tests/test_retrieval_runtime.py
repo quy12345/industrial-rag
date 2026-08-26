@@ -1,4 +1,4 @@
-"""Offline tests for lazy Phase 7 retrieval composition and frozen identity."""
+"""Offline tests for lazy ATV320 retrieval composition and frozen identity."""
 
 from __future__ import annotations
 
