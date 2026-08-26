@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 
-from evaluation.retrieval_closure import aggregate_closure_rows
+from evaluation.retrieval import (
+    aggregate_closure_rows,
+    direct_evidence_rank,
+    percentile_nearest_rank,
+    phrase_matches,
+)
 from scripts.evaluation import evaluate_phase7_retrieval_closure
 
 
@@ -41,6 +47,15 @@ def test_closure_aggregation_reports_recall_ranks_contamination_and_latency() ->
 def test_closure_aggregation_rejects_empty_input() -> None:
     with pytest.raises(ValueError, match="at least one"):
         aggregate_closure_rows([])
+
+
+def test_retrieval_metric_primitives_are_deterministic() -> None:
+    results = [SimpleNamespace(chunk_id="a"), SimpleNamespace(chunk_id="b")]
+
+    assert direct_evidence_rank(results, {"b"}) == 2
+    assert direct_evidence_rank(results, {"missing"}) is None
+    assert phrase_matches("Cafe\u0301\n menu", "CAF\u00c9 menu")
+    assert percentile_nearest_rank([30.0, 10.0, 20.0], 95) == 30.0
 
 
 def test_retrieval_evaluator_hashes_existing_canonical_behavior_owners() -> None:

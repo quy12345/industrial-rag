@@ -20,10 +20,10 @@ from evaluation.phase7_dataset import (
     read_phase7_dataset,
     validate_phase7_datasets,
 )
-from evaluation.retrieval import direct_evidence_rank
-from evaluation.retrieval_closure import (
+from evaluation.retrieval import (
     aggregate_closure_rows,
     aggregate_closure_rows_by_language,
+    direct_evidence_rank,
 )
 
 SOURCE_IDENTITY_PATHS = {

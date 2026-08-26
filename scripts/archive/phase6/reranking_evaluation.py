@@ -1,4 +1,4 @@
-"""Offline diagnostics for candidate coverage and final reranked ordering."""
+"""Archived Phase 6 diagnostics for candidate coverage and reranked ordering."""
 
 from __future__ import annotations
 

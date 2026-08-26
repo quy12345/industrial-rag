@@ -472,10 +472,7 @@ def test_runtime_composes_canonical_reranking_service_not_evaluation_facade() ->
 def test_retrieval_evaluation_is_owned_outside_production_package() -> None:
     graph = _import_graph()
 
-    assert "app.domain.documents" in graph["evaluation.retrieval"]
-    assert "app.infrastructure.corpus_artifacts" in graph["evaluation.retrieval"]
-    assert "app.models" not in graph["evaluation.retrieval"]
-    assert "app.evaluation" not in graph["evaluation.retrieval"]
+    assert graph["evaluation.retrieval"] == set()
 
 
 def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
@@ -506,26 +503,17 @@ def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
     assert not (APP_ROOT.parent / "scripts" / "evaluate_phase7_e2e.py").exists()
 
 
-def test_candidate_audit_is_owned_outside_production_package() -> None:
-    graph = _import_graph()
+def test_historical_evaluation_helpers_are_outside_the_active_package() -> None:
+    repository_root = APP_ROOT.parent
 
-    assert not (APP_ROOT / "candidate_audit.py").exists()
-    assert "app.domain.retrieval" in graph["evaluation.candidate_audit"]
-    assert "evaluation.retrieval" in graph["evaluation.candidate_audit"]
-    assert "app.evaluation" not in graph["evaluation.candidate_audit"]
-
-
-def test_sanitized_replay_is_owned_outside_production_package() -> None:
-    graph = _import_graph()
-
-    assert not (APP_ROOT / "phase7_replay.py").exists()
-    assert "app.domain.retrieval" in graph["evaluation.replay"]
-    assert "app.domain.policies.fusion" in graph["evaluation.replay"]
-    assert "app.domain.policies.query_roles" in graph["evaluation.replay"]
-    assert "app.domain.policies.ranking" not in graph["evaluation.replay"]
-    assert "app.models" not in graph["evaluation.replay"]
-    assert "app.phase7_optimization" not in graph["evaluation.replay"]
-    assert "app.phase7_replay" not in graph["evaluation.replay"]
+    assert not (EVALUATION_ROOT / "candidate_audit.py").exists()
+    assert not (EVALUATION_ROOT / "reranking.py").exists()
+    assert not (EVALUATION_ROOT / "replay.py").exists()
+    assert not (EVALUATION_ROOT / "retrieval_closure.py").exists()
+    assert (repository_root / "scripts/archive/phase6/candidate_audit.py").is_file()
+    assert (repository_root / "scripts/archive/phase6/reranking_evaluation.py").is_file()
+    assert (repository_root / "scripts/archive/phase6/retrieval_evaluation.py").is_file()
+    assert (repository_root / "scripts/archive/phase7/replay.py").is_file()
 
 
 def test_phase7_dataset_and_corpus_artifact_ownership_are_separate() -> None:
@@ -569,7 +557,6 @@ def test_dataset_validation_cli_uses_canonical_evaluation_interfaces() -> None:
 
     assert "app.infrastructure.corpus_artifacts" in imports
     assert "evaluation.phase7_dataset" in imports
-    assert "evaluation.retrieval" in imports
     assert "app.evaluation" not in imports
     assert "app.phase7" not in imports
 
@@ -591,7 +578,6 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
     assert "app.infrastructure.corpus_artifacts" in imports
     assert "evaluation.phase7_dataset" in imports
     assert "evaluation.retrieval" in imports
-    assert "evaluation.retrieval_closure" in imports
     assert "app.evaluation" not in imports
     assert "app.phase7" not in imports
     assert "app.reranking" not in imports

@@ -1,1 +1,1 @@
-"""Offline evaluation schemas, metrics, scoring, and replay utilities."""
+"""Offline dataset validation, retrieval metrics, and end-to-end scoring."""

@@ -1,190 +1,18 @@
-"""Typed, dependency-free helpers for dense retrieval evaluation."""
+"""Deterministic metrics for the active frozen-corpus retrieval evaluation."""
 
 from __future__ import annotations
 
-import json
 import math
 import unicodedata
-from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
-from pathlib import Path
-from time import perf_counter
-from typing import Any, Literal, Protocol
-
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-
-from app.domain.documents import DocumentChunk
-from app.infrastructure.corpus_artifacts import CorpusArtifactError
-from app.infrastructure.corpus_artifacts import chunk_set_metadata as chunk_set_metadata
-from app.infrastructure.corpus_artifacts import load_frozen_chunks as _load_frozen_chunks
-
-EvaluationLanguage = Literal["vi", "en"]
-DocumentLanguage = Literal["vi", "en"]
-RetrievalScenario = Literal["monolingual", "cross_lingual"]
-EvaluationCategory = Literal[
-    "exact_technical_term",
-    "semantic_paraphrase",
-    "numeric_unit",
-    "heading_dependent",
-    "table_related",
-    "known_failure",
-]
-
-
-class EvaluationError(ValueError):
-    """Raised when an evaluation dataset or frozen chunk set is invalid."""
-
-
-class EvaluationCase(BaseModel):
-    """One manually verified retrieval-development query and its qrels."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    language: EvaluationLanguage
-    question: str
-    relevant_chunk_ids: list[str] = Field(min_length=1)
-    expected_phrases: list[str] = Field(min_length=1)
-    expected_pages: list[int] = Field(min_length=1)
-    category: EvaluationCategory
-    critical: bool = False
-    document_id: str = "manual-77d5dae4c2c5"
-    document_language: DocumentLanguage = "vi"
-    retrieval_scenario: RetrievalScenario | None = None
-    notes: str | None = None
-
-    @field_validator("id", "question", "document_id")
-    @classmethod
-    def require_non_empty_text(cls, value: str) -> str:
-        """Reject blank identity and query fields."""
-
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("must not be empty")
-        return normalized
-
-    @field_validator("relevant_chunk_ids", "expected_phrases")
-    @classmethod
-    def require_non_empty_values(cls, values: list[str]) -> list[str]:
-        """Normalize list members and reject blank qrel evidence."""
-
-        normalized = [value.strip() for value in values]
-        if any(not value for value in normalized):
-            raise ValueError("must not contain blank values")
-        if len(set(normalized)) != len(normalized):
-            raise ValueError("must not contain duplicate values")
-        return normalized
-
-    @field_validator("expected_pages")
-    @classmethod
-    def require_positive_unique_pages(cls, values: list[int]) -> list[int]:
-        """Keep page diagnostics deterministic and valid."""
-
-        if any(value <= 0 for value in values):
-            raise ValueError("must contain only positive page numbers")
-        return sorted(set(values))
-
-    def model_post_init(self, __context: Any) -> None:
-        """Derive the scenario from query and evidence languages when omitted."""
-
-        expected = "monolingual" if self.language == self.document_language else "cross_lingual"
-        if self.retrieval_scenario is None:
-            self.retrieval_scenario = expected
-        elif self.retrieval_scenario != expected:
-            raise ValueError(
-                "retrieval_scenario must match language/document_language "
-                f"({self.language!r} -> {self.document_language!r})"
-            )
+from collections import Counter, defaultdict
+from collections.abc import Sequence
+from typing import Any, Protocol
 
 
 class RetrievedLike(Protocol):
-    """Minimum retrieval result fields used by the evaluator."""
+    """Minimum result identity required by direct-evidence metrics."""
 
     chunk_id: str
-    document_id: str
-    text: str
-    page_numbers: Sequence[int]
-    headings: Sequence[str]
-    score: float
-
-
-def load_evaluation_cases(path: Path) -> list[EvaluationCase]:
-    """Load strict JSONL evaluation cases and reject duplicate IDs."""
-
-    records: list[EvaluationCase] = []
-    seen_ids: set[str] = set()
-    try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        raise EvaluationError(f"Unable to read evaluation dataset {path}: {exc}") from exc
-
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
-            raise EvaluationError(f"Blank evaluation record on line {line_number}.")
-        try:
-            raw_record = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise EvaluationError(f"Invalid JSON on line {line_number}: {exc}") from exc
-        try:
-            record = EvaluationCase.model_validate(raw_record)
-        except ValidationError as exc:
-            raise EvaluationError(
-                f"Invalid evaluation record on line {line_number}: {exc}"
-            ) from exc
-        if record.id in seen_ids:
-            raise EvaluationError(f"Duplicate evaluation ID on line {line_number}: {record.id}")
-        seen_ids.add(record.id)
-        records.append(record)
-
-    if not records:
-        raise EvaluationError(f"Evaluation dataset is empty: {path}")
-    return records
-
-
-def load_frozen_chunks(path: Path) -> list[DocumentChunk]:
-    """Load frozen chunks while preserving the evaluation error contract."""
-
-    try:
-        return _load_frozen_chunks(path)
-    except CorpusArtifactError as exc:
-        raise EvaluationError(str(exc)) from exc
-
-
-def validate_cases_against_chunks(
-    cases: Iterable[EvaluationCase],
-    chunks: Iterable[DocumentChunk],
-) -> None:
-    """Require every qrel phrase and page diagnostic to match frozen evidence."""
-
-    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
-    for case in cases:
-        relevant_chunks: list[DocumentChunk] = []
-        for chunk_id in case.relevant_chunk_ids:
-            chunk = chunks_by_id.get(chunk_id)
-            if chunk is None:
-                raise EvaluationError(
-                    f"Evaluation case {case.id} references missing frozen chunk ID: {chunk_id}"
-                )
-            if chunk.document_id != case.document_id:
-                raise EvaluationError(
-                    f"Evaluation case {case.id} qrel {chunk_id} belongs to {chunk.document_id}, "
-                    f"not {case.document_id}"
-                )
-            relevant_chunks.append(chunk)
-
-        for phrase in case.expected_phrases:
-            if not any(phrase_matches(chunk.text, phrase) for chunk in relevant_chunks):
-                raise EvaluationError(
-                    f"Evaluation case {case.id} expected phrase is absent from its qrels: "
-                    f"{phrase!r}"
-                )
-
-        expected_pages = set(case.expected_pages)
-        if not any(expected_pages.intersection(chunk.page_numbers) for chunk in relevant_chunks):
-            raise EvaluationError(
-                f"Evaluation case {case.id} expected pages do not match its qrels: "
-                f"{case.expected_pages}"
-            )
 
 
 def phrase_matches(text: str, expected_phrase: str) -> bool:
@@ -208,165 +36,89 @@ def direct_evidence_rank(
     )
 
 
-def diagnostic_phrase_rank(results: Sequence[RetrievedLike], phrases: Sequence[str]) -> int | None:
-    """Return a phrase diagnostic rank; it never affects retrieval metrics."""
-
-    return next(
-        (
-            rank
-            for rank, result in enumerate(results, start=1)
-            if any(phrase_matches(result.text, phrase) for phrase in phrases)
-        ),
-        None,
-    )
-
-
-def diagnostic_page_rank(results: Sequence[RetrievedLike], expected_pages: set[int]) -> int | None:
-    """Return a page diagnostic rank; it never affects retrieval metrics."""
-
-    return next(
-        (
-            rank
-            for rank, result in enumerate(results, start=1)
-            if expected_pages.intersection(result.page_numbers)
-        ),
-        None,
-    )
-
-
-def evaluate_cases(
-    cases: Sequence[EvaluationCase],
-    search: Callable[[str, int, str], list[RetrievedLike]],
-    *,
-    candidate_limit: int,
-) -> dict[str, Any]:
-    """Measure direct-evidence retrieval after a caller-controlled warmup query."""
-
-    if candidate_limit < 5:
-        raise EvaluationError("Candidate limit must be at least 5 for Hit@5 and MRR@5.")
-    if not cases:
-        raise EvaluationError("Cannot evaluate an empty case list.")
-
-    rows: list[dict[str, Any]] = []
-    for case in cases:
-        started = perf_counter()
-        results = search(case.question, candidate_limit, case.document_id)
-        latency_ms = (perf_counter() - started) * 1000
-        direct_rank = direct_evidence_rank(results, set(case.relevant_chunk_ids))
-        phrase_rank = diagnostic_phrase_rank(results, case.expected_phrases)
-        page_rank = diagnostic_page_rank(results, set(case.expected_pages))
-        rows.append(
-            {
-                "id": case.id,
-                "language": case.language,
-                "document_language": case.document_language,
-                "retrieval_scenario": case.retrieval_scenario,
-                "category": case.category,
-                "critical": case.critical,
-                "question": case.question,
-                "document_id": case.document_id,
-                "relevant_chunk_ids": case.relevant_chunk_ids,
-                "expected_pages": case.expected_pages,
-                "direct_evidence_rank": direct_rank,
-                "diagnostic_phrase_rank": phrase_rank,
-                "diagnostic_page_rank": page_rank,
-                "latency_ms": latency_ms,
-                "retrieved": [
-                    _result_summary(result, rank) for rank, result in enumerate(results, start=1)
-                ],
-            }
-        )
-
-    return {
-        "candidate_limit": candidate_limit,
-        "overall": aggregate_rows(rows, candidate_limit=candidate_limit),
-        "per_language": _aggregate_groups(rows, "language", candidate_limit),
-        "per_retrieval_scenario": _aggregate_groups(rows, "retrieval_scenario", candidate_limit),
-        "per_category": _aggregate_groups(rows, "category", candidate_limit),
-        "critical_questions": [row for row in rows if row["critical"]],
-        "critical_metrics": aggregate_rows(
-            [row for row in rows if row["critical"]], candidate_limit=candidate_limit
-        )
-        if any(row["critical"] for row in rows)
-        else None,
-        "failure_cases": [
-            row
-            for row in rows
-            if row["direct_evidence_rank"] is None or row["direct_evidence_rank"] > 5
-        ],
-        "per_query": rows,
-    }
-
-
-def aggregate_rows(rows: Sequence[dict[str, Any]], *, candidate_limit: int) -> dict[str, Any]:
-    """Aggregate one-based direct-evidence ranks into explicit retrieval metrics."""
-
-    if not rows:
-        raise EvaluationError("Cannot aggregate an empty result set.")
-    ranks = [row["direct_evidence_rank"] for row in rows]
-    latencies = [float(row["latency_ms"]) for row in rows]
-    return {
-        "query_count": len(rows),
-        "hit_rate_at_1": _hit_rate(ranks, 1),
-        "hit_rate_at_3": _hit_rate(ranks, 3),
-        "hit_rate_at_5": _hit_rate(ranks, 5),
-        "hit_rate_at_candidate_limit": _hit_rate(ranks, candidate_limit),
-        "candidate_recall_at_candidate_limit": _hit_rate(ranks, candidate_limit),
-        "mrr_at_5": _mrr(ranks, 5),
-        "mrr_at_candidate_limit": _mrr(ranks, candidate_limit),
-        "average_latency_ms": sum(latencies) / len(latencies),
-        "p50_latency_ms": percentile_nearest_rank(latencies, 50),
-        "p95_latency_ms": percentile_nearest_rank(latencies, 95),
-    }
-
-
 def percentile_nearest_rank(values: Sequence[float], percentile: int) -> float:
     """Calculate a deterministic nearest-rank percentile for a non-empty sample."""
 
     if not values:
-        raise EvaluationError("Cannot calculate a percentile of an empty sample.")
+        raise ValueError("Cannot calculate a percentile of an empty sample.")
     if not 0 < percentile <= 100:
-        raise EvaluationError("Percentile must be in the range 1..100.")
+        raise ValueError("Percentile must be in the range 1..100.")
     ordered = sorted(float(value) for value in values)
     index = math.ceil((percentile / 100) * len(ordered)) - 1
     return ordered[index]
 
 
-def _aggregate_groups(
-    rows: Sequence[dict[str, Any]],
-    key: str,
-    candidate_limit: int,
-) -> dict[str, dict[str, Any]]:
+def aggregate_closure_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate retrieval, contamination, context, and latency metrics."""
+
+    if not rows:
+        raise ValueError("Retrieval closure requires at least one row.")
+    candidate_ranks = [row["candidate_direct_evidence_rank"] for row in rows]
+    final_ranks = [row["final_direct_evidence_rank"] for row in rows]
+    rerank_values = [float(row["rerank_ms"]) for row in rows]
+    retrieval_values = [float(row["retrieval_ms"]) for row in rows]
+    return {
+        "query_count": len(rows),
+        "candidate_recall": sum(rank is not None for rank in candidate_ranks) / len(rows),
+        "hit_rate_at_5": sum(rank is not None and rank <= 5 for rank in final_ranks)
+        / len(rows),
+        "mrr_at_5": sum(1 / rank if rank is not None and rank <= 5 else 0 for rank in final_ranks)
+        / len(rows),
+        "candidate_count_maximum": max(int(row["candidate_count"]) for row in rows),
+        "wrong_document_top1_rate": sum(bool(row["wrong_document_top1"]) for row in rows)
+        / len(rows),
+        "wrong_document_candidate_rate_at_5": sum(
+            int(row["wrong_document_candidate_count_at_5"]) for row in rows
+        )
+        / sum(min(int(row["final_candidate_count"]), 5) for row in rows),
+        "document_context_complete_rate": sum(
+            bool(row["document_context_complete"]) for row in rows
+        )
+        / len(rows),
+        "failure_classes": dict(sorted(Counter(row["failure_class"] for row in rows).items())),
+        "retrieval_latency_ms": _latency_summary(retrieval_values),
+        "rerank_latency_ms": _latency_summary(rerank_values),
+    }
+
+
+def aggregate_closure_rows_by_language(
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, float | int]]:
+    """Aggregate closure coverage and contamination for each language."""
+
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        groups[str(row[key])].append(row)
+        groups[str(row["language"])].append(row)
+    result: dict[str, dict[str, float | int]] = {}
+    for language, group in sorted(groups.items()):
+        total_top5 = sum(min(int(row["final_candidate_count"]), 5) for row in group)
+        result[language] = {
+            "query_count": len(group),
+            "candidate_recall": sum(
+                row["candidate_direct_evidence_rank"] is not None for row in group
+            )
+            / len(group),
+            "hit_rate_at_5": sum(
+                row["final_direct_evidence_rank"] is not None
+                and row["final_direct_evidence_rank"] <= 5
+                for row in group
+            )
+            / len(group),
+            "wrong_document_candidate_rate_at_5": sum(
+                int(row["wrong_document_candidate_count_at_5"]) for row in group
+            )
+            / total_top5,
+        }
+    return result
+
+
+def _latency_summary(values: list[float]) -> dict[str, float]:
     return {
-        name: aggregate_rows(group_rows, candidate_limit=candidate_limit)
-        for name, group_rows in sorted(groups.items())
+        "average": sum(values) / len(values),
+        "p50": percentile_nearest_rank(values, 50),
+        "p95": percentile_nearest_rank(values, 95),
+        "maximum": max(values),
     }
-
-
-def _result_summary(result: RetrievedLike, rank: int) -> dict[str, Any]:
-    """Keep report diagnostics compact and JSON serializable."""
-
-    return {
-        "rank": rank,
-        "chunk_id": result.chunk_id,
-        "document_id": result.document_id,
-        "score": float(result.score),
-        "page_numbers": list(result.page_numbers),
-        "headings": list(result.headings),
-    }
-
-
-def _hit_rate(ranks: Sequence[int | None], cutoff: int) -> float:
-    return sum(rank is not None and rank <= cutoff for rank in ranks) / len(ranks)
-
-
-def _mrr(ranks: Sequence[int | None], cutoff: int) -> float:
-    return sum(1 / rank if rank is not None and rank <= cutoff else 0.0 for rank in ranks) / len(
-        ranks
-    )
 
 
 def _normalize_text(value: str) -> str:

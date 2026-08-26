@@ -1,4 +1,4 @@
-"""Offline candidate-pool coverage diagnostics for historical evaluation."""
+"""Archived candidate-pool coverage diagnostics for the Phase 6 workflow."""
 
 from __future__ import annotations
 

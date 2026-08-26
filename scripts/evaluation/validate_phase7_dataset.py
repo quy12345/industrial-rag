@@ -5,13 +5,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from app.infrastructure.corpus_artifacts import write_json_atomic
+from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
 from evaluation.phase7_dataset import (
     Phase7Error,
     read_phase7_dataset,
     validate_phase7_datasets,
 )
-from evaluation.retrieval import load_frozen_chunks
 
 
 def _build_parser() -> argparse.ArgumentParser:

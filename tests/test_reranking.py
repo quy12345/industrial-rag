@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from app.application.reranking_service import (
     CANDIDATE_TEXT_FORMAT,
-    RerankExecution,
     RerankPipeline,
     build_candidate_pool,
     build_candidate_text,
@@ -26,11 +25,6 @@ from app.infrastructure.models.reranker import (
     FastEmbedCrossEncoder,
     fastembed_model_metadata,
 )
-from evaluation.reranking import (
-    classify_rerank_failure,
-    evaluate_reranked_cases,
-)
-from evaluation.retrieval import EvaluationCase
 
 
 class FakeCrossEncoder:
@@ -136,20 +130,6 @@ def _dense(chunk_id: str, score: float = 0.8, document_id: str = "manual-a") -> 
         headings=["Safety"],
         content_type="text",
         score=score,
-    )
-
-
-def _case(case_id: str = "case", relevant: str = "evidence", *, critical: bool = False):
-    return EvaluationCase(
-        id=case_id,
-        language="vi",
-        question=case_id,
-        relevant_chunk_ids=[relevant],
-        expected_phrases=["raw"],
-        expected_pages=[1],
-        category="semantic_paraphrase",
-        critical=critical,
-        document_id="manual-a",
     )
 
 
@@ -511,58 +491,6 @@ def test_pipeline_expands_sparse_query_then_rrf_prunes_before_fixed_rerank_budge
     assert all(candidate.rrf_rank is not None for candidate in pool.candidates)
     assert "query_expansion" in pool.stage_latency_ms
     assert "rrf_pruning" in pool.stage_latency_ms
-
-
-def test_evaluator_classifies_candidate_and_ordering_failures_with_stage_metrics() -> None:
-    cases = [
-        _case("hit", "hit"),
-        _case("top5-miss", "late"),
-        _case("top20-miss", "beyond"),
-        _case("candidate-miss", "absent", critical=True),
-    ]
-
-    def search(question, document_id):
-        case_id = next(case.id for case in cases if case.question == question)
-        if case_id == "hit":
-            before = [_candidate("hit", sparse_rank=1)]
-            after = [_candidate("hit", sparse_rank=1).model_copy(update={"rerank_rank": 1})]
-        elif case_id == "top5-miss":
-            before = [_candidate("late", sparse_rank=1)]
-            after = [_candidate(str(index), sparse_rank=index) for index in range(1, 6)] + [
-                _candidate("late", sparse_rank=6)
-            ]
-        elif case_id == "top20-miss":
-            before = [_candidate("beyond", sparse_rank=1)]
-            after = [_candidate(str(index), sparse_rank=index) for index in range(1, 21)] + [
-                _candidate("beyond", sparse_rank=21)
-            ]
-        else:
-            before = [_candidate("wrong", sparse_rank=1)]
-            after = before
-        return RerankExecution(before, after, {"rerank": 2.0, "total": 3.0})
-
-    report = evaluate_reranked_cases(cases, search, cutoff=20)
-    assert [row["failure_class"] for row in report["per_query"]] == [
-        "hit",
-        "reranker_miss_top5",
-        "reranker_miss_top20",
-        "candidate_miss",
-    ]
-    assert report["overall"]["candidate_recall"] == 0.75
-    assert report["overall"]["stage_latency_ms"]["total"]["p95"] == 3.0
-
-
-@pytest.mark.parametrize(
-    ("candidate_rank", "final_rank", "expected"),
-    [
-        (None, None, "candidate_miss"),
-        (1, 3, "hit"),
-        (1, 8, "reranker_miss_top5"),
-        (1, 21, "reranker_miss_top20"),
-    ],
-)
-def test_failure_classification(candidate_rank, final_rank, expected) -> None:
-    assert classify_rerank_failure(candidate_rank=candidate_rank, final_rank=final_rank) == expected
 
 
 def test_importing_module_does_not_construct_fastembed_model() -> None:

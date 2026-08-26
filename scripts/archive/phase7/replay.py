@@ -1,4 +1,4 @@
-"""Sanitized cross-encoder snapshot validation and deterministic rank-only replay."""
+"""Archived sanitized snapshot validation and deterministic rank-only replay."""
 
 from __future__ import annotations
 
