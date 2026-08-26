@@ -121,3 +121,9 @@ for commercial deployment. OCR, multi-page-table continuity, calibrated abstenti
 coverage, authentication/rate limiting, provider privacy approval, and a representative industrial
 corpus remain open work. Any future benchmark must use a newly governed dataset and must stay outside
 the Round 1 structural-refactoring history.
+
+## Refactor bug ledger
+
+| Symptom | Root cause | Fix | Proof | Commit/artifact |
+|---|---|---|---|---|
+| The supported provider-free retrieval evaluator failed while building provenance before it could write a report. | Its source hash list still named three root compatibility modules removed in R12. | Point provenance at the canonical evaluator, query-analysis policy, and retrieval composition owners, and expose one deterministic source-identity helper. | An offline test hashes every declared path twice and requires the same result without Qdrant or model access. | `fix: repair retrieval evaluation provenance` |

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from evaluation.retrieval_closure import aggregate_closure_rows
+from scripts.evaluation import evaluate_phase7_retrieval_closure
 
 
 def _row(identifier: str, rank: int | None, *, wrong_document: bool = False) -> dict:
@@ -38,3 +41,13 @@ def test_closure_aggregation_reports_recall_ranks_contamination_and_latency() ->
 def test_closure_aggregation_rejects_empty_input() -> None:
     with pytest.raises(ValueError, match="at least one"):
         aggregate_closure_rows([])
+
+
+def test_retrieval_evaluator_hashes_existing_canonical_behavior_owners() -> None:
+    expected = {
+        name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in evaluate_phase7_retrieval_closure.SOURCE_IDENTITY_PATHS.items()
+    }
+
+    assert expected == evaluate_phase7_retrieval_closure._source_identity()
+    assert expected == evaluate_phase7_retrieval_closure._source_identity()

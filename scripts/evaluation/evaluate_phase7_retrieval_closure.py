@@ -26,6 +26,12 @@ from evaluation.retrieval_closure import (
     aggregate_closure_rows_by_language,
 )
 
+SOURCE_IDENTITY_PATHS = {
+    "evaluator": Path("evaluation/e2e.py"),
+    "query_expansion": Path("app/domain/policies/query_analysis.py"),
+    "retrieval_runtime": Path("app/composition/retrieval.py"),
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -100,6 +106,7 @@ def main() -> int:
         "reranker": PHASE7_RETRIEVAL_CONTRACT.rerank_model,
         "candidate_text_format": PHASE7_CANDIDATE_TEXT_FORMAT,
     }
+    source_identity = _source_identity()
     payload = {
         "schema_version": 1,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -111,9 +118,9 @@ def main() -> int:
         "frozen_identity": {
             "runtime_configuration_sha256": _json_sha256(runtime_identity),
             "fact_evaluator_id": FACT_EVALUATOR_ID,
-            "evaluator_source_sha256": _file_sha256(Path("app/evaluation_e2e.py")),
-            "query_expansion_source_sha256": _file_sha256(Path("app/query_expansion.py")),
-            "retrieval_runtime_source_sha256": _file_sha256(Path("app/retrieval_runtime.py")),
+            "evaluator_source_sha256": source_identity["evaluator"],
+            "query_expansion_source_sha256": source_identity["query_expansion"],
+            "retrieval_runtime_source_sha256": source_identity["retrieval_runtime"],
         },
         "overall": overall,
         "per_language": per_language,
@@ -168,6 +175,12 @@ def _json_sha256(value: dict[str, Any]) -> str:
 
 def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _source_identity() -> dict[str, str]:
+    """Hash the canonical behavior owners used by this evaluator."""
+
+    return {name: _file_sha256(path) for name, path in SOURCE_IDENTITY_PATHS.items()}
 
 
 def _failure_class(candidate_rank: int | None, final_rank: int | None) -> str:
