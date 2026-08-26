@@ -49,6 +49,7 @@ DEFAULT_INPUTS = (
     Path("data/raw/ATV320_Installation_manual_EN_NVE41289_09.pdf"),
     Path("data/raw/ATV320_Programming_Manual_EN_NVE41295_06.pdf"),
 )
+PHASE7_PAGE_BATCH_SIZE = 64
 
 
 def main() -> int:
@@ -150,7 +151,11 @@ def main() -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="*", type=Path, default=list(DEFAULT_INPUTS))
-    parser.add_argument("--page-batch-size", type=_positive_int, default=16)
+    parser.add_argument(
+        "--page-batch-size",
+        type=_positive_int,
+        default=PHASE7_PAGE_BATCH_SIZE,
+    )
     parser.add_argument("--chunker", choices=("hierarchical", "hybrid"), default="hybrid")
     parser.add_argument("--dense-collection", default=PHASE7_DENSE_COLLECTION)
     parser.add_argument("--hybrid-collection", default=PHASE7_HYBRID_COLLECTION)

@@ -52,7 +52,7 @@ services:
       - qdrant
     volumes:
       - fastembed_cache:/models/fastembed
-      - ./data/raw:/data/raw:ro
+      - ./data/raw:/app/data/raw:ro
       - ./artifacts:/app/artifacts
 
   qdrant:

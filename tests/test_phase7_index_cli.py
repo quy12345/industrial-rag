@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,16 +20,71 @@ from app.infrastructure.corpus_artifacts import (
 )
 from scripts.operations import index_phase7_corpus as index_cli
 
+PROJECT_ROOT = Path(__file__).parents[1]
+
 
 def test_indexing_parser_preserves_supported_contract() -> None:
     args = index_cli._parser().parse_args([])
     assert args.inputs == list(index_cli.DEFAULT_INPUTS)
-    assert args.page_batch_size == 16
+    assert args.page_batch_size == index_cli.PHASE7_PAGE_BATCH_SIZE == 64
     assert args.chunker == "hybrid"
     assert args.dense_collection == PHASE7_DENSE_COLLECTION
     assert args.hybrid_collection == PHASE7_HYBRID_COLLECTION
     assert args.preview_only is False
     assert args.verify_reindex is False
+
+
+def test_runtime_dependencies_preserve_frozen_versions() -> None:
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+
+    retrieval_dependencies = {
+        dependency.replace(" ", "")
+        for dependency in project["optional-dependencies"]["retrieval"]
+    }
+    assert retrieval_dependencies == {
+        "qdrant-client[fastembed]>=1.19.0,<1.20.0",
+        "fastembed==0.8.0",
+        "onnxruntime==1.28.0",
+    }
+    ingestion_dependencies = {
+        "docling==2.117.0",
+        "docling-core==2.90.0",
+        "docling-ibm-models==3.13.3",
+        "docling-parse==7.10.0",
+        "huggingface-hub==1.26.0",
+        "pypdfium2==5.12.1",
+        "semchunk==3.2.5",
+        "tokenizers==0.22.2",
+        "transformers==5.14.1",
+    }
+    assert set(project["optional-dependencies"]["ingestion"]) == ingestion_dependencies
+    assert ingestion_dependencies | {"onnxruntime==1.28.0"} <= set(
+        project["optional-dependencies"]["dev"]
+    )
+
+
+def test_ingestion_compose_mount_matches_default_input_paths() -> None:
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "./data/raw:/app/data/raw:ro" in compose
+    assert "./data/raw:/data/raw:ro" not in compose
+
+
+def test_ingestion_build_uses_resumable_pip_and_shared_cache() -> None:
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert '"pip==26.2.1"' in dockerfile
+    assert dockerfile.count(
+        "--mount=type=cache,id=industrial-rag-pip,target=/root/.cache/pip,sharing=locked"
+    ) == 3
+    assert dockerfile.count("--retries 10") == 3
+    assert dockerfile.count("--resume-retries 10") == 2
+    assert dockerfile.count("--timeout 120") == 3
+    assert 'python -m pip install --no-cache-dir "pip==26.2.1"' not in dockerfile
+    assert 'pip install --no-cache-dir ".[retrieval]"' not in dockerfile
+    assert 'pip install --no-cache-dir ".[retrieval,ingestion,llm]"' not in dockerfile
 
 
 def _chunk(chunk_id: str, document_id: str, index: int) -> DocumentChunk:

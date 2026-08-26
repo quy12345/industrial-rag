@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,9 +12,37 @@ from docling.datamodel.base_models import ConversionStatus
 
 from app.domain import documents
 from app.domain.documents import DocumentChunk
+from app.infrastructure.ingestion import docling as docling_adapter
 from app.infrastructure.ingestion import pipeline as ingestion
 from app.infrastructure.ingestion.jsonl import write_chunks_jsonl
 from scripts.operations import ingest_preview
+
+
+def test_docling_chunk_warnings_do_not_echo_manual_content() -> None:
+    class Chunker:
+        @staticmethod
+        def chunk(*, dl_doc):
+            assert dl_doc == "document"
+            warnings.warn(
+                f"{docling_adapter._OVERSIZED_METADATA_WARNING_PREFIX} secret manual text",
+                UserWarning,
+                stacklevel=2,
+            )
+            warnings.warn("separate diagnostic", RuntimeWarning, stacklevel=2)
+            return iter(["chunk"])
+
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        chunks = docling_adapter._chunk_document(Chunker(), "document")
+
+    messages = [str(caught_warning.message) for caught_warning in caught_warnings]
+    assert chunks == ["chunk"]
+    assert messages == [
+        "separate diagnostic",
+        "Docling omitted oversized heading/caption metadata for 1 chunk(s); "
+        "chunk body text was retained.",
+    ]
+    assert "secret manual text" not in " ".join(messages)
 
 
 def test_importing_canonical_ingestion_does_not_load_docling_or_pdfium() -> None:

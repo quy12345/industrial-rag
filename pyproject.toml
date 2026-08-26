@@ -18,9 +18,18 @@ dependencies = [
 retrieval = [
     "qdrant-client[fastembed]>=1.19.0,<1.20.0",
     "fastembed==0.8.0",
+    "onnxruntime==1.28.0",
 ]
 ingestion = [
-    "docling>=2.117,<2.118",
+    "docling==2.117.0",
+    "docling-core==2.90.0",
+    "docling-ibm-models==3.13.3",
+    "docling-parse==7.10.0",
+    "huggingface-hub==1.26.0",
+    "pypdfium2==5.12.1",
+    "semchunk==3.2.5",
+    "tokenizers==0.22.2",
+    "transformers==5.14.1",
 ]
 llm = [
     "langchain-core>=1.5.1,<1.6.0",
@@ -33,7 +42,16 @@ ui = [
 dev = [
     "qdrant-client[fastembed]>=1.19.0,<1.20.0",
     "fastembed==0.8.0",
-    "docling>=2.117,<2.118",
+    "onnxruntime==1.28.0",
+    "docling==2.117.0",
+    "docling-core==2.90.0",
+    "docling-ibm-models==3.13.3",
+    "docling-parse==7.10.0",
+    "huggingface-hub==1.26.0",
+    "pypdfium2==5.12.1",
+    "semchunk==3.2.5",
+    "tokenizers==0.22.2",
+    "transformers==5.14.1",
     "langchain-core>=1.5.1,<1.6.0",
     "langchain-openai>=1.4.1,<1.5.0",
     "streamlit>=1.60,<1.61",

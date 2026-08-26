@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import gc
+import warnings
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
 from app.domain.documents import IngestionError
+
+_OVERSIZED_METADATA_WARNING_PREFIX = (
+    "Headers and captions for this chunk are longer than the total available size "
+    "for the chunk, so they will be ignored:"
+)
 
 
 def get_pdf_page_count(file_path: Path) -> int:
@@ -74,7 +80,7 @@ def convert_document(
         result = converter.convert(**convert_kwargs)
         validate_conversion_result(result, page_range)
         selected_chunker = HierarchicalChunker() if chunker == "hierarchical" else HybridChunker()
-        return list(selected_chunker.chunk(dl_doc=result.document))
+        return _chunk_document(selected_chunker, result.document)
     except IngestionError:
         raise
     except Exception as exc:
@@ -85,6 +91,37 @@ def convert_document(
     finally:
         del converter
         gc.collect()
+
+
+def _chunk_document(chunker: Any, document: Any) -> list[Any]:
+    """Chunk a document without echoing manual contents in Docling warnings."""
+
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        chunks = list(chunker.chunk(dl_doc=document))
+
+    oversized_metadata_count = 0
+    for caught_warning in caught_warnings:
+        if (
+            issubclass(caught_warning.category, UserWarning)
+            and str(caught_warning.message).startswith(_OVERSIZED_METADATA_WARNING_PREFIX)
+        ):
+            oversized_metadata_count += 1
+            continue
+        warnings.warn(
+            caught_warning.message,
+            caught_warning.category,
+            stacklevel=2,
+        )
+
+    if oversized_metadata_count:
+        warnings.warn(
+            "Docling omitted oversized heading/caption metadata for "
+            f"{oversized_metadata_count} chunk(s); chunk body text was retained.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return chunks
 
 
 def validate_conversion_result(result: Any, page_range: tuple[int, int] | None) -> None:
