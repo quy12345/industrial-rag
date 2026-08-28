@@ -19,8 +19,8 @@ Useful read-only checks:
 ```powershell
 docker compose ps
 docker compose logs api --tail 100
-Invoke-RestMethod http://localhost:8000/health/live
-Invoke-RestMethod http://localhost:8000/health/ready
+Invoke-RestMethod http://localhost:8000/api/v1/health
+Invoke-RestMethod http://localhost:8000/api/v1/ready
 ```
 
 ## Offline repository validation
@@ -54,6 +54,97 @@ Always inspect `--help` first. Commands are adapters; reusable logic is owned by
 Historical commands under `scripts/archive/` are unsupported provenance snapshots. Do not infer that
 they are safe because they remain in Git; some can mutate Qdrant, overwrite artifacts, or call a
 provider.
+
+## Approved held-out regression run
+
+Held-out v2 is exposed regression evidence, not an unseen benchmark. Run it only after the user has
+explicitly approved provider data egress and cost. The exact dataset-specific token prevents a
+calibration approval from authorizing held-out traffic accidentally. Confirm that the interpreter is
+Python 3.11 before running:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import sys; assert sys.version_info[:2] == (3, 11)"
+.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
+  --dataset heldout-v2 `
+  --provider-approval-token "APPROVE PHASE 7 HELDOUT PROVIDER EGRESS"
+```
+
+`heldout-v2` is the sealed private regression split. It is intentionally distinct from the public
+`test` split even though both contain 45 records. The command requires both its dataset and manifest
+to remain under `data/eval/phase7/private-heldout-v2/`, then validates their hash, the frozen corpus,
+collection identities, runtime source identity, and configured provider before completing.
+
+The current v8 command writes a resumable sanitized checkpoint to
+`artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and the final sanitized artifact to
+`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`. Existing v7 evidence remains immutable. Neither
+format contains raw questions, evidence, prompts, answers, or provider responses. Never use the
+result to tune the current runtime.
+
+## Optional Ragas semantic evaluation
+
+Semantic scoring runs in a separate Python 3.11 evaluator image. It contains retrieval, generation,
+Ragas, and the OpenAI-compatible SDK, but no Docling and no PDF mount. The default E2E mode is
+`none`, so normal runs neither import Ragas nor construct an OpenRouter judge.
+
+Build and verify only this smaller evaluator target:
+
+```powershell
+docker compose --progress=plain build evaluation
+docker compose run --rm --no-deps evaluation python -c "import sys; from importlib.metadata import version; assert sys.version_info[:2] == (3, 11); assert version('ragas') == '0.4.3'; assert version('openai') == '2.53.0'; assert version('langchain-community') == '0.3.31'; from ragas.metrics.collections import Faithfulness, AnswerRelevancy, ContextPrecisionWithoutReference; print('semantic imports OK')"
+docker compose run --rm --no-deps evaluation python -m scripts.evaluation.evaluate_e2e --help
+```
+
+Set `OPENROUTER_API_KEY=sk-or-v1-...` in the untracked `.env`; do not put the key in a command, log,
+artifact, or chat message. The base URL and model slugs are frozen in the evaluator rather than
+configurable through `.env`.
+
+Ragas uses OpenRouter model `openai/gpt-5.6-luna` with low reasoning effort for Faithfulness, Answer
+Relevancy, and Context Precision without reference. Answer Relevancy uses
+`openai/text-embedding-3-small`. Both request types are pinned to the OpenAI upstream, require full
+parameter support, and disable provider fallback. Requests set
+`store=false`, use a 60-second timeout with at most one retry, and do not use a persistent Ragas
+cache. The adapter also sets `RAGAS_DO_NOT_TRACK=true`; the approval token authorizes OpenRouter and
+its pinned OpenAI upstream, not Ragas usage telemetry. `store=false` prevents application-requested
+storage but does not promise zero retention; both OpenRouter and upstream data policies still apply.
+
+The evaluator pins `langchain-community==0.3.31` because Ragas 0.4.3 imports a legacy VertexAI
+module at package import time. Unbounded resolution to `langchain-community==0.4.2` breaks even this
+OpenAI-compatible evaluator before any metric runs. Keep this transitive pin until Ragas publishes
+and the project explicitly adopts a release with the corrected import.
+
+Semantic egress requires a second dataset-specific approval token. The generation token authorizes
+Gemini only; the judge token authorizes OpenRouter plus the pinned OpenAI upstream only. Run the same
+first five calibration items twice with separate outputs before any held-out execution:
+
+```powershell
+docker compose up -d qdrant
+docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
+  --dataset calibration `
+  --max-queries 5 `
+  --semantic-judge ragas `
+  --provider-approval-token "APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS" `
+  --judge-provider-approval-token "APPROVE ATV320 CALIBRATION OPENROUTER RAGAS EGRESS" `
+  --checkpoint artifacts/metrics/atv320-ragas-calibration-preflight-a-checkpoint.jsonl `
+  --output artifacts/metrics/atv320-ragas-calibration-preflight-a.json
+```
+
+Repeat with suffix `b`, then compare finite scores, EN/VI behavior, latency, and run-to-run variance.
+Review the same five non-held-out questions locally through the current demo for human sanity; do not
+copy raw question, answer, or evidence into logs or artifacts. Stop if Luna produces invalid
+structured output or clearly unreliable judgments. Do not fall back to a different model.
+
+After that review is accepted, the held-out command adds these arguments to the approved regression
+run shown above:
+
+```text
+--semantic-judge ragas
+--judge-provider-approval-token "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
+```
+
+V8 checkpoints fail closed if the schema, source identity, judge model, embedding model, metric
+configuration, or input policy differs. Only a fully answered item with all three finite semantic
+scores is checkpointed. Abstentions are recorded as not applicable and excluded from semantic
+denominators. Deterministic quality gates remain the only source of exit code `0` or `2`.
 
 ## Reproduce ingestion without indexing
 

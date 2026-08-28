@@ -54,6 +54,26 @@ services:
       - ./data/raw:/app/data/raw:ro
       - ./artifacts:/app/artifacts
 
+  evaluation:
+    image: industrial-rag-evaluation:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: evaluation
+    profiles: ["tools"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      QDRANT_URL: http://qdrant
+      EMBEDDING_CACHE_DIR: /models/fastembed
+    depends_on:
+      - qdrant
+    volumes:
+      - fastembed_cache:/models/fastembed
+      - ./data/eval:/app/data/eval:ro
+      - ./artifacts:/app/artifacts
+
   qdrant:
     image: qdrant/qdrant:v1.18.3
     ports:

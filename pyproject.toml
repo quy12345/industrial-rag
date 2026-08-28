@@ -35,6 +35,12 @@ llm = [
     "langchain-core>=1.5.1,<1.6.0",
     "langchain-openai>=1.4.1,<1.5.0",
 ]
+semantic-eval = [
+    "ragas==0.4.3",
+    "openai==2.53.0",
+    # Ragas 0.4.3 imports the legacy VertexAI module removed in 0.4.x.
+    "langchain-community==0.3.31",
+]
 ui = [
     "streamlit>=1.60,<1.61",
     "httpx>=0.27,<1.0",

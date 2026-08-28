@@ -46,8 +46,8 @@ docker compose up -d qdrant api ui
 ```
 
 - API documentation: <http://localhost:8000/docs>
-- API liveness: <http://localhost:8000/health/live>
-- API readiness: <http://localhost:8000/health/ready>
+- API liveness: <http://localhost:8000/api/v1/health>
+- API readiness: <http://localhost:8000/api/v1/ready>
 - Streamlit: <http://localhost:8501>
 
 The API does not silently create or replace collections. Follow
@@ -80,6 +80,36 @@ These repository checks do not call a provider, download a model, or write Qdran
 docker compose config --quiet
 git diff --check
 ```
+
+## Evaluation snapshot
+
+The latest sealed held-out-v2 regression run evaluated all 45 items against the unchanged frozen
+corpus. Generation used `gemini-3.5-flash-lite`; semantic evaluation used Ragas `0.4.3` with
+`openai/gpt-5.6-luna` through OpenRouter. Abstained responses were excluded from semantic averages
+instead of being scored as zero.
+
+| Evaluation signal | Result |
+| --- | ---: |
+| Candidate recall over 30 answerable items | 0.9000 |
+| Deterministic fact accuracy over 27 answered items | 0.7778 |
+| Abstention precision / recall | 0.8333 / 1.0000 |
+| Referentially valid citation IDs | 1.0000 |
+| Wrong-document citations | 2 |
+| Ragas Faithfulness | 1.0000 |
+| Ragas Answer Relevancy | 0.8204 |
+| Ragas Context Precision without reference | 0.9753 |
+| Semantic eligible / excluded / failed | 27 / 18 / 0 |
+
+The semantic run completed successfully, but the existing deterministic quality gate remained
+`FAIL` because candidate recall, fact accuracy, abstention precision, and wrong-document citation
+requirements were not all met. This distinction is intentional: Ragas measures whether an answer is
+supported by the supplied contexts and relevant to the question; it does not replace corpus qrels,
+expected facts, citation-document checks, or abstention tests. The sanitized local v8 artifact has
+SHA-256 `c975ef742c44bc73a2986ed622b3d26d7054b8d900214a955b5ce461a3bb260f`.
+
+See [Operations](docs/OPERATIONS.md) for the reproducible command and
+[Project Journey](docs/PROJECT_JOURNEY.md) for interpretation. Held-out v2 is exposed regression
+evidence and must not be used for further tuning.
 
 ## Frozen corpus identity
 

@@ -165,6 +165,36 @@ migration. **Root cause** -> Source identity was not updated when compatibility 
 verify path existence, deterministic hashes, and source identity v3. **Commit/artifact** -> `e3bcc4b`
 and the v7 E2E artifact contract.
 
+### Public test was mistaken for the sealed held-out-v2 split
+
+**Symptom** -> A fresh `--dataset test` run produced a different dataset hash and materially lower
+retrieval metrics than the historical held-out-v2 artifact. **Root cause** -> The current CLI exposed
+the public 45-row test split, while historical held-out v2 lived under a separate private root with a
+different sealed manifest; equal row counts hid the identity mismatch. **Fix** -> Add an explicit
+`heldout-v2` choice, require its dataset and manifest to remain under the private root, validate the
+sealed `c91cf3e0...` dataset hash, and use separate v7 output/checkpoint paths. **Proof** -> The fresh
+Python 3.11 v7 artifact matches all 45 historical per-query retrieval records exactly (canonical
+retrieval-record SHA-256 `889556304e1be22845cffabfd98ab629d1f04f27ad759c8888f49412a29a342f`).
+Generation metrics varied, while corpus identity and aggregate retrieval metrics remained identical.
+**Commit/artifact** -> `artifacts/metrics/atv320-heldout-v2-e2e-v7.json`; implementation is grouped
+under the Conventional Commit `feat: enable sealed heldout v2 regression runs`.
+
+### Ragas semantic evaluation needed gateway-specific async wiring
+
+**Symptom** -> The first semantic preflight rejected a synchronous OpenAI client, then OpenRouter
+reported no eligible Luna endpoint even though the OpenAI upstream was available. **Root cause** ->
+Ragas Collections metrics await their LLM and embedding clients, while OpenRouter's strict parameter
+routing did not advertise `max_completion_tokens` for that upstream. **Fix** -> Use `AsyncOpenAI`,
+make the embedding adapter asynchronous, send the supported `max_tokens` request parameter, and keep
+OpenAI-only routing with fallback disabled. **Proof** -> Two five-item EN/VI calibration runs and one
+45-item held-out-v2 run completed with Ragas `0.4.3`, Luna, and zero semantic failures. The held-out
+run scored Faithfulness `1.0`, Answer Relevancy `0.8204`, and Context Precision without reference
+`0.9753` across 27 eligible answers; 18 abstentions were excluded rather than scored as zero.
+Dataset, corpus, runtime profile, and every candidate/rerank/evidence boundary matched v7. The
+artifact SHA-256 is `c975ef742c44bc73a2986ed622b3d26d7054b8d900214a955b5ce461a3bb260f`.
+**Commit/artifact** -> `artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; proposed Conventional Commit
+`feat: add reproducible ragas semantic evaluation`.
+
 ## Portfolio conclusions
 
 - Correct evaluation labels are as important as the retrieval implementation.

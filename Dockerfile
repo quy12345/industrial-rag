@@ -41,6 +41,23 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
+FROM retrieval-runtime AS evaluation
+
+# Semantic evaluation is intentionally isolated from both production and Docling.
+RUN --mount=type=cache,id=industrial-rag-pip,target=/root/.cache/pip,sharing=locked \
+    pip install \
+    --retries 10 \
+    --resume-retries 10 \
+    --timeout 120 \
+    ".[retrieval,llm,semantic-eval]"
+
+COPY scripts ./scripts
+
+USER appuser
+
+CMD ["python", "-m", "scripts.evaluation.evaluate_e2e", "--help"]
+
+
 FROM python:3.11-slim AS ui
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

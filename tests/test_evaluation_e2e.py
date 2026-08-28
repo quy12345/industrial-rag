@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -455,7 +456,7 @@ def test_document_contamination_metrics_and_gate_are_explicit() -> None:
     assert gates["gates"]["wrong_document_citations"]["passed"] is False
 
 
-def test_v6_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
+def test_v8_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -467,13 +468,34 @@ def test_v6_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
         ],
     )
     args = evaluate_e2e._parse_args()
-    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 7
-    assert args.output.name == "atv320-calibration-e2e-v7.json"
-    assert args.checkpoint.name == "atv320-calibration-e2e-v7-checkpoint.jsonl"
+    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 8
+    assert args.output.name == "atv320-calibration-e2e-v8.json"
+    assert args.checkpoint.name == "atv320-calibration-e2e-v8-checkpoint.jsonl"
+    assert args.semantic_judge == "none"
     settings = evaluate_e2e._runtime_settings(evaluate_e2e.Settings())
     assert settings.rerank_deduplicate_content is True
     assert settings.dense_candidate_limit == 60
     assert settings.sparse_candidate_limit == 40
+
+
+def test_heldout_v2_cli_uses_private_sealed_paths(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "heldout-v2",
+            "--provider-approval-token",
+            evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        ],
+    )
+
+    args = evaluate_e2e._parse_args()
+
+    assert args.heldout_v2 == evaluate_e2e.PRIVATE_HELDOUT_DATASET_PATH
+    assert args.manifest == evaluate_e2e.PRIVATE_HELDOUT_MANIFEST_PATH
+    assert args.output.name == "atv320-heldout-v2-e2e-v8.json"
+    assert args.checkpoint.name == "atv320-heldout-v2-e2e-v8-checkpoint.jsonl"
 
 
 def test_provider_execution_requires_dataset_specific_approval() -> None:
@@ -487,13 +509,25 @@ def test_provider_execution_requires_dataset_specific_approval() -> None:
             provider_approval_token=evaluate_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
         )
     )
-    with pytest.raises(SystemExit, match="BLOCKED_GOVERNANCE"):
+    with pytest.raises(SystemExit, match="missing or invalid"):
         evaluate_e2e._validate_execution_approval(
             SimpleNamespace(
                 dataset="test",
-                provider_approval_token=evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+                provider_approval_token=evaluate_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
             )
         )
+    evaluate_e2e._validate_execution_approval(
+        SimpleNamespace(
+            dataset="test",
+            provider_approval_token=evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        )
+    )
+    evaluate_e2e._validate_execution_approval(
+        SimpleNamespace(
+            dataset="heldout-v2",
+            provider_approval_token=evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        )
+    )
 
 
 def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
@@ -515,7 +549,9 @@ def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
     monkeypatch.setattr(
         evaluate_e2e,
         "_validate_evaluation_manifest",
-        lambda path, chunks, dataset, *, kind: {"test_dataset_sha256": "a" * 64},
+        lambda path, chunks, dataset, *, dataset_key: {
+            "test_dataset_sha256": "a" * 64
+        },
     )
     args = SimpleNamespace(
         dataset="calibration",
@@ -527,6 +563,98 @@ def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
     assert dataset == [approved]
     assert validation == {"kind": "calibration"}
     assert opened == ["active-calibration"]
+
+
+def test_heldout_v2_loader_uses_only_private_sealed_inputs(
+    monkeypatch, tmp_path
+) -> None:
+    private_root = tmp_path / "private-heldout-v2"
+    dataset_path = private_root / "heldout-v2.jsonl"
+    manifest_path = private_root / "heldout-v2-manifest.json"
+    approved = SimpleNamespace(review_status="approved")
+    observed = {}
+
+    def fake_read_dataset(path):
+        observed["dataset_path"] = path
+        return [approved]
+
+    def fake_validate_dataset(dataset, chunks, *, kind):
+        observed["kind"] = kind
+        return {"kind": kind}
+
+    monkeypatch.setattr(evaluate_e2e, "PRIVATE_HELDOUT_ROOT", private_root)
+    monkeypatch.setattr(evaluate_e2e, "read_dataset", fake_read_dataset)
+    monkeypatch.setattr(evaluate_e2e, "validate_dataset", fake_validate_dataset)
+    monkeypatch.setattr(
+        evaluate_e2e,
+        "_validate_evaluation_manifest",
+        lambda path, chunks, dataset, *, dataset_key: observed.update(
+            manifest_path=path,
+            dataset_key=dataset_key,
+        )
+        or {"heldout_dataset_sha256": "a" * 64},
+    )
+    args = SimpleNamespace(
+        dataset="heldout-v2",
+        heldout_v2=dataset_path,
+        manifest=manifest_path,
+    )
+
+    dataset, validation, manifest = evaluate_e2e._load_selected_dataset(args, [])
+
+    assert dataset == [approved]
+    assert validation == {"kind": "test"}
+    assert manifest == {"heldout_dataset_sha256": "a" * 64}
+    assert observed == {
+        "dataset_path": dataset_path,
+        "kind": "test",
+        "manifest_path": manifest_path,
+        "dataset_key": "heldout_dataset_sha256",
+    }
+
+
+def test_heldout_v2_loader_rejects_inputs_outside_private_root(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        evaluate_e2e, "PRIVATE_HELDOUT_ROOT", tmp_path / "private-heldout-v2"
+    )
+    args = SimpleNamespace(
+        dataset="heldout-v2",
+        heldout_v2=tmp_path / "public-test.jsonl",
+        manifest=tmp_path / "manifest.json",
+    )
+
+    with pytest.raises(SystemExit, match="must remain under"):
+        evaluate_e2e._load_selected_dataset(args, [])
+
+
+def test_heldout_v2_manifest_requires_its_sealed_dataset_hash(
+    monkeypatch, tmp_path
+) -> None:
+    manifest_path = tmp_path / "heldout-v2-manifest.json"
+    corpus = {"chunk_count": 2753, "chunk_ids_sha256": "c" * 64}
+    dataset_hash = "d" * 64
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "corpus": corpus,
+                "heldout_dataset_sha256": dataset_hash,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(evaluate_e2e, "chunk_set_metadata", lambda chunks: corpus)
+    monkeypatch.setattr(evaluate_e2e, "dataset_sha256", lambda dataset: dataset_hash)
+
+    manifest = evaluate_e2e._validate_evaluation_manifest(
+        manifest_path,
+        [],
+        [],
+        dataset_key="heldout_dataset_sha256",
+    )
+
+    assert manifest["heldout_dataset_sha256"] == dataset_hash
 
 
 def test_item_id_is_calibration_only(monkeypatch) -> None:

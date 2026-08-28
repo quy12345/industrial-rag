@@ -72,19 +72,20 @@ def test_ingestion_compose_mount_matches_default_input_paths() -> None:
     assert "./data/raw:/data/raw:ro" not in compose
 
 
-def test_ingestion_build_uses_resumable_pip_and_shared_cache() -> None:
+def test_tool_builds_use_resumable_pip_and_shared_cache() -> None:
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert '"pip==26.2.1"' in dockerfile
     assert dockerfile.count(
         "--mount=type=cache,id=industrial-rag-pip,target=/root/.cache/pip,sharing=locked"
-    ) == 3
-    assert dockerfile.count("--retries 10") == 3
-    assert dockerfile.count("--resume-retries 10") == 2
-    assert dockerfile.count("--timeout 120") == 3
+    ) == 4
+    assert dockerfile.count("--retries 10") == 4
+    assert dockerfile.count("--resume-retries 10") == 3
+    assert dockerfile.count("--timeout 120") == 4
     assert 'python -m pip install --no-cache-dir "pip==26.2.1"' not in dockerfile
     assert 'pip install --no-cache-dir ".[retrieval]"' not in dockerfile
     assert 'pip install --no-cache-dir ".[retrieval,ingestion,llm]"' not in dockerfile
+    assert 'pip install --no-cache-dir ".[retrieval,llm,semantic-eval]"' not in dockerfile
 
 
 def _chunk(chunk_id: str, document_id: str, index: int) -> DocumentChunk:

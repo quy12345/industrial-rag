@@ -28,6 +28,7 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
     "reranker_adapter": Path("app/infrastructure/models/reranker.py"),
     "reranking_service": Path("app/application/reranking_service.py"),
     "retrieval_metrics": Path("evaluation/retrieval.py"),
+    "semantic_evaluator": Path("evaluation/semantic.py"),
     "retrieval_composition": Path("app/composition/retrieval.py"),
     "retrieval_contract": Path("app/domain/retrieval_contracts.py"),
     "search_adapters": Path("app/infrastructure/qdrant/search.py"),
@@ -35,8 +36,8 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
 }
 
 
-def test_e2e_source_identity_v3_hashes_canonical_behavior_owners() -> None:
-    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 3
+def test_e2e_source_identity_v4_hashes_canonical_behavior_owners() -> None:
+    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 4
     assert evaluate_e2e.SOURCE_IDENTITY_PATHS == CANONICAL_SOURCE_IDENTITY_PATHS
 
     expected_files = {
@@ -45,7 +46,7 @@ def test_e2e_source_identity_v3_hashes_canonical_behavior_owners() -> None:
     }
 
     assert evaluate_e2e._source_identity() == {
-        "version": 3,
+        "version": 4,
         "files": expected_files,
         "system_prompt_sha256": (
             "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"
@@ -53,8 +54,8 @@ def test_e2e_source_identity_v3_hashes_canonical_behavior_owners() -> None:
     }
 
 
-def test_v2_checkpoint_fails_closed_under_source_identity_v3(tmp_path: Path) -> None:
-    checkpoint = tmp_path / "legacy-v2-checkpoint.jsonl"
+def test_v7_checkpoint_fails_closed_under_source_identity_v4(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "legacy-v7-checkpoint.jsonl"
     legacy_identity = {
         "source_identity": {
             "prompt": "legacy",

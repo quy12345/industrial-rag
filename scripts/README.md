@@ -42,10 +42,16 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
 - evaluate retrieval and write the versioned retrieval artifact;
 - run approval-gated end-to-end generation evaluation.
 
-Reusable current contracts live in `evaluation/dataset.py`, `evaluation/retrieval.py`, and
-`evaluation/e2e.py`. Supported command implementations do not import private helpers from another
-command. E2E evaluation can call a real provider and must not run without explicit provider and data-
-egress approval. Exposed held-out v2 is regression evidence, not tuning data.
+Reusable current contracts live in `evaluation/dataset.py`, `evaluation/retrieval.py`,
+`evaluation/e2e.py`, and `evaluation/semantic.py`. Supported command implementations do not import
+private helpers from another command. E2E evaluation can call a real provider and must not run
+without explicit provider and data-egress approval. Its optional `--semantic-judge ragas` mode uses
+the separate evaluator image and requires an independent OpenRouter approval token; the default
+`none` mode does not import Ragas. The OpenRouter gateway is pinned to OpenAI upstream endpoints with
+provider fallback disabled. The `test` choice is the public regression split; `heldout-v2` is a
+separate sealed private split with path and manifest containment checks. Exposed held-out v2 is
+regression evidence, not tuning data. See [Operations](../docs/OPERATIONS.md) for the two-run
+calibration preflight and sanitized v8 artifact contract.
 
 ## Archive
 
