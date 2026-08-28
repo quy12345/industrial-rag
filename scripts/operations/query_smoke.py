@@ -13,7 +13,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from app.bootstrap import get_query_service
+from app.application.query_service import QueryService
 from app.config import get_settings
 from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.errors import QueryPipelineError
@@ -76,7 +76,7 @@ def main() -> int:
         print(f"ATV320 real smoke NOT RUN: API key unavailable. Artifact: {args.output}")
         return 0
 
-    service = get_query_service()
+    service = _get_query_service()
     all_passed = True
     for scenario_id, question, document_id, expected_abstained in SCENARIOS:
         row: dict[str, Any] = {
@@ -127,6 +127,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser
+
+
+def _get_query_service() -> QueryService:
+    from app.bootstrap import get_query_service
+
+    return get_query_service()
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:

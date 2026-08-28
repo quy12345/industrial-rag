@@ -27,11 +27,6 @@ from app.application.generation_prompt import (
 )
 from app.application.query_service import QueryExecution, QueryService
 from app.application.reranking_service import CANDIDATE_TEXT_FORMAT
-from app.composition.retrieval import (
-    LazyQueryRetriever,
-    build_query_retriever,
-    validate_frozen_runtime,
-)
 from app.config import Settings
 from app.domain.evidence import EvidenceGate
 from app.domain.generation import GeneratedAnswer
@@ -43,7 +38,6 @@ from app.infrastructure.corpus_artifacts import (
     write_jsonl_atomic,
 )
 from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
-from app.infrastructure.qdrant.client import create_qdrant_client
 from evaluation.dataset import (
     EvaluationItem,
     dataset_sha256,
@@ -121,6 +115,14 @@ def main() -> int:
     settings = _runtime_settings(Settings())
     _validate_semantic_approval(args)
     semantic_judge = _build_semantic_judge(args)
+
+    from app.composition.retrieval import (
+        LazyQueryRetriever,
+        build_query_retriever,
+        validate_frozen_runtime,
+    )
+    from app.infrastructure.qdrant.client import create_qdrant_client
+
     client = create_qdrant_client(settings)
     validate_frozen_runtime(
         client,

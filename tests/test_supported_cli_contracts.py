@@ -108,6 +108,33 @@ def _run_cli(module: str, *arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.mark.parametrize("module", [module for module, _ in SUPPORTED_CLI_OPTIONS])
+def test_supported_cli_import_does_not_load_model_runtime(module: str) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import importlib, sys; "
+                "importlib.import_module(sys.argv[1]); "
+                "raise SystemExit('onnxruntime' in sys.modules)"
+            ),
+            module,
+        ],
+        cwd=REPOSITORY_ROOT,
+        env=_offline_environment(),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        f"Importing {module} loaded the ONNX model runtime before CLI argument parsing.\n"
+        f"{result.stderr}"
+    )
+
+
 @pytest.mark.parametrize(("module", "expected_options"), SUPPORTED_CLI_OPTIONS)
 def test_supported_cli_help_preserves_the_public_option_surface(
     module: str,

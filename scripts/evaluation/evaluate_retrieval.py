@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from app.application.reranking_service import CANDIDATE_TEXT_FORMAT
-from app.composition.retrieval import build_query_retriever
 from app.config import Settings
 from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
@@ -60,6 +59,9 @@ def main() -> int:
     validation = validate_dataset_splits(calibration, test, chunks)
     selected = [item for item in calibration if item.answerable]
     settings = _runtime_settings(Settings())
+
+    from app.composition.retrieval import build_query_retriever
+
     retriever = build_query_retriever(settings, contract=ATV320_RETRIEVAL_CONTRACT)
 
     rows: list[dict[str, Any]] = []

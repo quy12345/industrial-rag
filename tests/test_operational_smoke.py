@@ -35,7 +35,7 @@ def test_retrieval_smoke_defaults_and_builds_the_resolved_atv320_contract(
         "resolve_retrieval_runtime",
         lambda value: (value, ATV320_RETRIEVAL_CONTRACT),
     )
-    monkeypatch.setattr(validate_query_runtime, "build_query_retriever", build)
+    monkeypatch.setattr(validate_query_runtime, "_build_query_retriever", build)
     monkeypatch.setattr(
         "sys.argv",
         ["validate_query_runtime", "menu navigation"],
@@ -64,7 +64,7 @@ def test_query_smoke_without_key_writes_sanitized_atv320_artifact(
     monkeypatch.setattr(query_smoke, "get_settings", lambda: settings)
     monkeypatch.setattr(
         query_smoke,
-        "get_query_service",
+        "_get_query_service",
         lambda: (_ for _ in ()).throw(AssertionError("service must not be constructed")),
     )
     monkeypatch.setattr(query_smoke, "_git_commit", lambda: "test-commit")

@@ -32,18 +32,6 @@ from app.infrastructure.corpus_artifacts import (
 )
 from app.infrastructure.ingestion.jsonl import write_chunks_jsonl
 from app.infrastructure.ingestion.pipeline import ingest_document
-from app.infrastructure.qdrant.client import create_qdrant_client
-from app.infrastructure.qdrant.dense import (
-    create_embedding_model,
-    get_embedding_dimension,
-    get_indexed_chunk_ids,
-    index_chunks,
-)
-from app.infrastructure.qdrant.hybrid import (
-    compute_bm25_average_length,
-    create_sparse_embedding_model,
-    index_hybrid_chunks,
-)
 
 DEFAULT_INPUTS = (
     Path("data/raw/ATV320_Installation_manual_EN_NVE41289_09.pdf"),
@@ -87,6 +75,19 @@ def main() -> int:
             )
             print(f"ATV320 ingestion preview PASS: {args.chunks_output}")
             return 0
+
+        from app.infrastructure.qdrant.client import create_qdrant_client
+        from app.infrastructure.qdrant.dense import (
+            create_embedding_model,
+            get_embedding_dimension,
+            get_indexed_chunk_ids,
+            index_chunks,
+        )
+        from app.infrastructure.qdrant.hybrid import (
+            compute_bm25_average_length,
+            create_sparse_embedding_model,
+            index_hybrid_chunks,
+        )
 
         settings = get_settings().model_copy(
             update={
