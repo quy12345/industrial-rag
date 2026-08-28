@@ -7,6 +7,10 @@ class QueryPipelineError(Exception):
     """Base class for expected query-pipeline failures."""
 
 
+class RetrievalError(Exception):
+    """Raised when Qdrant indexing or retrieval infrastructure fails."""
+
+
 class RetrievalUnavailableError(QueryPipelineError):
     """Raised when Qdrant or a retrieval model cannot serve a query."""
 

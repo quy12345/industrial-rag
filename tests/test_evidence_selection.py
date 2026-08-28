@@ -2,8 +2,27 @@
 
 from __future__ import annotations
 
-from app.evidence_selection import select_evidence_candidates
-from app.models import RetrievalCandidate
+import pytest
+
+from app.domain import content_identity
+from app.domain.evidence import (
+    EvidenceGate,
+    EvidenceGateDecision,
+    EvidenceSelectionError,
+    select_evidence_candidates,
+)
+from app.domain.retrieval import RetrievalCandidate
+
+
+def test_evidence_content_identity_normalizes_and_hashes_exactly() -> None:
+    text = "  Disconnect\tPOWER\r\n before  service. "
+
+    assert content_identity.normalize_evidence_content(text) == (
+        "disconnect power before service."
+    )
+    assert content_identity.evidence_content_fingerprint(text) == (
+        "5e8167a98d18e8c913f4731198d5c80e1600085e409bc53d09ec13142fcd9575"
+    )
 
 
 def _candidate(
@@ -72,3 +91,42 @@ def test_same_document_duplicate_content_is_preserved() -> None:
     selection = select_evidence_candidates("wiring", [first, second], top_k=2)
     assert [candidate.chunk_id for candidate in selection.candidates] == ["first", "second"]
     assert selection.duplicate_groups == ()
+
+
+def test_selection_rejects_invalid_inputs_without_fallback() -> None:
+    candidate = _candidate("first", document_id="installation", role="installation")
+
+    with pytest.raises(EvidenceSelectionError, match="top_k"):
+        select_evidence_candidates("wiring", [candidate], top_k=0)
+    with pytest.raises(EvidenceSelectionError, match="blank"):
+        select_evidence_candidates(" ", [candidate], top_k=1)
+    with pytest.raises(EvidenceSelectionError, match="unique"):
+        select_evidence_candidates("wiring", [candidate, candidate], top_k=2)
+
+
+def test_evidence_gate_returns_exact_metadata_and_threshold_decisions() -> None:
+    candidate = _candidate("first", document_id="installation", role="installation")
+    invalid_page = candidate.model_copy(update={"page_numbers": [0]})
+    invalid_heading = candidate.model_copy(update={"headings": [" "]})
+    non_finite = candidate.model_copy(update={"score": float("nan")})
+
+    gate = EvidenceGate()
+    assert gate.evaluate([candidate], requested_document_id="installation") == (
+        EvidenceGateDecision(True)
+    )
+    assert gate.evaluate([], requested_document_id=None) == EvidenceGateDecision(
+        False, "no_candidates"
+    )
+    for candidates, requested_document_id in (
+        ([candidate], "programming"),
+        ([candidate, candidate], None),
+        ([invalid_page], None),
+        ([invalid_heading], None),
+        ([non_finite], None),
+    ):
+        assert gate.evaluate(candidates, requested_document_id=requested_document_id) == (
+            EvidenceGateDecision(False, "invalid_candidate_metadata")
+        )
+    assert EvidenceGate(score_threshold=1.1).evaluate(
+        [candidate], requested_document_id=None
+    ) == EvidenceGateDecision(False, "configured_score_gate_failed")

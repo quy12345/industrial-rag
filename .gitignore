@@ -19,11 +19,10 @@ build/
 # Runtime data and generated artifacts.
 data/raw/*
 !data/raw/.gitkeep
+# Evaluation payloads can contain manual-derived questions, answers, or evidence.
+# Keep only the directory marker in the public repository.
 data/eval/*
 !data/eval/.gitkeep
-!data/eval/dense_smoke.jsonl
-!data/eval/phase7/
-!data/eval/phase7/*.jsonl
 # Locally access-controlled Phase 7 replacement held-out set.  This prevents
 # accidental Git exposure; operating-system ACLs remain the workspace owner's
 # responsibility.
@@ -35,3 +34,5 @@ artifacts/figures/*
 artifacts/*.jsonl
 artifacts/*.log
 artifacts/private-debug/
+# Extracted corpus text remains local regardless of the artifact namespace.
+artifacts/**/frozen-chunks*.jsonl

@@ -6,7 +6,10 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from app.api.app import create_app
+from app.application.query_service import QueryExecution, QueryTimings
 from app.config import get_settings
+from app.contracts.query import Citation, QueryResponse
 from app.errors import (
     LLMNotConfiguredError,
     LLMTimeoutError,
@@ -14,9 +17,6 @@ from app.errors import (
     RerankerUnavailableError,
     RetrievalUnavailableError,
 )
-from app.main import app
-from app.models import Citation, QueryResponse
-from app.query_service import QueryExecution, QueryTimings, get_query_service
 
 
 class FakeService:
@@ -52,10 +52,12 @@ class FakeService:
 @pytest.fixture
 def client_and_service():
     service = FakeService()
-    app.dependency_overrides[get_query_service] = lambda: service
-    with TestClient(app) as client:
+    test_app = create_app(
+        query_service_provider=lambda: service,
+        readiness_checker=lambda: None,
+    )
+    with TestClient(test_app) as client:
         yield client, service
-    app.dependency_overrides.clear()
 
 
 def test_valid_unicode_request_default_top_k_and_optional_document(client_and_service) -> None:

@@ -6,18 +6,18 @@ import logging
 
 import pytest
 
+from app.application.query_service import QueryService
 from app.config import Settings
+from app.domain.evidence import EvidenceGate
+from app.domain.generation import GeneratedAnswer, GenerationResult, TokenUsage
+from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate
 from app.errors import (
     GenerationValidationError,
     LLMRefusalError,
     LLMTimeoutError,
     RerankerUnavailableError,
 )
-from app.generation import GeneratedAnswer, GenerationResult, TokenUsage
-from app.models import RetrievalCandidate
-from app.query_service import EvidenceGate, QueryService
 from app.request_context import request_id
-from app.retrieval_runtime import QueryRetrievalResult
 
 
 def _candidate(

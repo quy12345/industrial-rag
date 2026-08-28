@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.models import QueryResponse
+from app.contracts.query import QueryResponse
 from ui.api_client import RAGAPIError
 
 MAX_HISTORY_TURNS = 20

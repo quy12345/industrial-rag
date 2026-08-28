@@ -1,6 +1,6 @@
 """Offline tests for Streamlit presentation helpers and bounded session history."""
 
-from app.models import Citation, QueryResponse
+from app.contracts.query import Citation, QueryResponse
 from ui.api_client import RAGAPIError
 from ui.config import (
     INSTALLATION_DOCUMENT_ID,

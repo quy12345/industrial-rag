@@ -2,11 +2,21 @@
 
 from fastapi.testclient import TestClient
 
-import app.main as app_main
+from app.api import dependencies
+from app.api.app import create_app
+from app.application.query_service import QueryService
+from app.bootstrap import get_query_service
+from app.config import Settings, get_settings
+from app.errors import RetrievalError
 from app.main import app
-from app.retrieval import RetrievalError
 
 client = TestClient(app)
+
+
+def test_api_dependency_seams_preserve_composition_identity() -> None:
+    assert dependencies.QueryService is QueryService
+    assert dependencies.get_query_service is get_query_service
+    assert dependencies.get_settings is get_settings
 
 
 def test_health_endpoint() -> None:
@@ -28,49 +38,52 @@ def test_health_has_safe_request_correlation_id() -> None:
     assert generated.headers["x-request-id"] != "bad value"
 
 
-def test_readiness_checks_frozen_qdrant_contract_without_loading_models(monkeypatch) -> None:
-    fake_client = object()
+def test_readiness_calls_the_injected_checker() -> None:
     calls = []
-    monkeypatch.setattr(app_main, "create_qdrant_client", lambda settings: fake_client)
-    monkeypatch.setattr(
-        app_main,
-        "validate_frozen_runtime",
-        lambda client, *, collection_names, contract: calls.append(
-            (client, collection_names, contract)
-        ),
-    )
-    response = client.get("/api/v1/ready")
+    test_app = create_app(readiness_checker=lambda: calls.append("checked"))
+    with TestClient(test_app) as test_client:
+        response = test_client.get("/api/v1/ready")
+
     assert response.status_code == 200
-    assert calls[0][0] is fake_client
+    assert response.json() == {
+        "status": "ok",
+        "service": "industrial-rag",
+        "version": "0.1.0",
+    }
+    assert calls == ["checked"]
 
 
-def test_readiness_uses_selected_phase7_contract(monkeypatch) -> None:
-    fake_client = object()
-    calls = []
-    monkeypatch.setattr(app_main.settings, "retrieval_profile", "phase7")
-    monkeypatch.setattr(app_main, "create_qdrant_client", lambda settings: fake_client)
-    monkeypatch.setattr(
-        app_main,
-        "validate_frozen_runtime",
-        lambda client, *, collection_names, contract: calls.append(
-            (client, collection_names, contract)
-        ),
+def test_create_app_preserves_custom_metadata_routes_and_request_id() -> None:
+    settings = Settings(
+        app_name="Test Industrial RAG",
+        app_version="9.8.7",
+        api_prefix="/custom/v1",
     )
-    response = client.get("/api/v1/ready")
+    test_app = create_app(settings, readiness_checker=lambda: None)
+    paths = set(test_app.openapi()["paths"])
+
+    assert test_app.title == "Test Industrial RAG"
+    assert test_app.version == "9.8.7"
+    assert {"/custom/v1/health", "/custom/v1/ready", "/custom/v1/query"} <= paths
+    with TestClient(test_app) as test_client:
+        response = test_client.get(
+            "/custom/v1/health",
+            headers={"X-Request-ID": "factory.request"},
+        )
+
     assert response.status_code == 200
-    assert calls[0][1] == (
-        "industrial_manual_phase7_dense_v1",
-        "industrial_manual_phase7_hybrid_v1",
-    )
-    assert calls[0][2].chunk_count == 2753
+    assert response.json()["version"] == "9.8.7"
+    assert response.headers["x-request-id"] == "factory.request"
 
 
-def test_readiness_returns_sanitized_503_when_qdrant_is_unavailable(monkeypatch) -> None:
-    def unavailable(settings):
+def test_readiness_returns_sanitized_503_when_qdrant_is_unavailable() -> None:
+    def unavailable() -> None:
         raise RetrievalError("private endpoint")
 
-    monkeypatch.setattr(app_main, "create_qdrant_client", unavailable)
-    response = client.get("/api/v1/ready")
+    test_app = create_app(readiness_checker=unavailable)
+    with TestClient(test_app) as test_client:
+        response = test_client.get("/api/v1/ready")
+
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "retrieval_not_ready"
     assert "private" not in response.text

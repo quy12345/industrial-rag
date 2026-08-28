@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from types import SimpleNamespace
 from uuid import UUID
@@ -11,19 +12,19 @@ from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
 from app.config import Settings
-from app.models import DocumentChunk
-from app.retrieval import (
-    RetrievalError,
+from app.domain.documents import DocumentChunk
+from app.errors import RetrievalError
+from app.infrastructure.qdrant.dense import (
     build_embedding_text,
     build_point_id,
     create_embedding_model,
     dense_search,
+    document_filter,
     ensure_dense_collection,
     get_indexed_chunk_ids,
     index_chunks,
-    validate_index_manifest,
-    write_index_manifest,
 )
+from app.infrastructure.qdrant.manifests import validate_index_manifest, write_index_manifest
 
 COLLECTION = "test_chunks"
 VECTOR_NAME = "dense"
@@ -113,6 +114,7 @@ def test_point_id_is_deterministic_valid_uuid() -> None:
     second = build_point_id("manual_p1_c0000")
 
     assert first == second
+    assert first == "6e464eaf-4697-5dcb-8b8a-6565890541d9"
     assert str(UUID(first)) == first
     assert build_point_id("manual_p1_c0001") != first
 
@@ -238,11 +240,23 @@ def test_indexing_payload_and_reindex_behavior() -> None:
     points, _ = client.scroll(COLLECTION, limit=10, with_payload=True)
     payloads = {point.payload["chunk_id"]: point.payload for point in points}
     assert set(payloads) == {"a-1", "b-1"}
-    assert payloads["a-1"]["page_numbers"] == [1]
-    assert payloads["a-1"]["headings"] == []
-    assert payloads["a-1"]["source_path"] == "manual-a.pdf"
-    assert payloads["a-1"]["character_count"] == len("Sensor monitoring")
-    assert "embedding_text" not in payloads["a-1"]
+    assert payloads["a-1"] == {
+        "chunk_id": "a-1",
+        "document_id": "manual-a",
+        "filename": "manual-a.pdf",
+        "text": "Sensor monitoring",
+        "page_numbers": [1],
+        "headings": [],
+        "content_type": "text",
+        "source_path": "manual-a.pdf",
+        "character_count": len("Sensor monitoring"),
+    }
+
+
+def test_document_filter_snapshot_is_exact() -> None:
+    assert document_filter("manual-a").model_dump(
+        mode="json", exclude_none=True
+    ) == {"must": [{"key": "document_id", "match": {"value": "manual-a"}}]}
 
 
 def test_get_indexed_chunk_ids_returns_document_payload_ids() -> None:
@@ -327,6 +341,45 @@ def test_dense_search_returns_ranked_payload_and_respects_limit() -> None:
     )
 
 
+def test_dense_search_sends_exact_named_vector_query_contract() -> None:
+    captured: dict[str, object] = {}
+
+    class RecordingClient:
+        def query_points(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(points=[])
+
+    results = dense_search(
+        RecordingClient(),  # type: ignore[arg-type]
+        " sensor ",
+        collection_name=COLLECTION,
+        vector_name=VECTOR_NAME,
+        embedding_model=FakeEmbeddingModel(),
+        limit=7,
+        document_id="manual-a",
+        score_threshold=0.42,
+    )
+
+    assert results == []
+    assert captured == {
+        "collection_name": COLLECTION,
+        "query": [1.0, 0.0, 0.0],
+        "using": VECTOR_NAME,
+        "query_filter": models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="document_id",
+                    match=models.MatchValue(value="manual-a"),
+                )
+            ]
+        ),
+        "limit": 7,
+        "with_payload": True,
+        "with_vectors": False,
+        "score_threshold": 0.42,
+    }
+
+
 def test_dense_search_uses_qdrant_document_filter() -> None:
     client = QdrantClient(":memory:")
     model = FakeEmbeddingModel()
@@ -387,6 +440,15 @@ def test_index_manifest_round_trip_and_mismatch(tmp_path) -> None:
         embedding_dimension=3,
         ingestion_profile={"chunker": "hierarchical"},
     )
+
+    assert json.loads(manifest.read_text(encoding="utf-8")) == {
+        "collection_name": COLLECTION,
+        "vector_name": VECTOR_NAME,
+        "embedding_model": "model-a",
+        "embedding_dimension": 3,
+        "distance": "cosine",
+        "ingestion_profile": {"chunker": "hierarchical"},
+    }
 
     validate_index_manifest(
         manifest,

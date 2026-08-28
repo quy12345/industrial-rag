@@ -1,0 +1,1 @@
+"""Outbound structured-generation adapters."""

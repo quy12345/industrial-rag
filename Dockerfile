@@ -12,8 +12,19 @@ RUN useradd --create-home appuser \
 
 COPY pyproject.toml README.md ./
 COPY app ./app
+COPY evaluation ./evaluation
 
-RUN pip install --no-cache-dir ".[retrieval]"
+RUN --mount=type=cache,id=industrial-rag-pip,target=/root/.cache/pip,sharing=locked \
+    python -m pip install \
+    --retries 10 \
+    --timeout 120 \
+    "pip==26.2.1"
+RUN --mount=type=cache,id=industrial-rag-pip,target=/root/.cache/pip,sharing=locked \
+    pip install \
+    --retries 10 \
+    --resume-retries 10 \
+    --timeout 120 \
+    ".[retrieval]"
 
 
 FROM retrieval-runtime AS api
@@ -28,6 +39,23 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)" || exit 1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+FROM retrieval-runtime AS evaluation
+
+# Semantic evaluation is intentionally isolated from both production and Docling.
+RUN --mount=type=cache,id=industrial-rag-pip,target=/root/.cache/pip,sharing=locked \
+    pip install \
+    --retries 10 \
+    --resume-retries 10 \
+    --timeout 120 \
+    ".[retrieval,llm,semantic-eval]"
+
+COPY scripts ./scripts
+
+USER appuser
+
+CMD ["python", "-m", "scripts.evaluation.evaluate_e2e", "--help"]
 
 
 FROM python:3.11-slim AS ui
@@ -60,7 +88,12 @@ FROM retrieval-runtime AS ingestion
 
 # The on-demand Phase 7 E2E CLI uses the same structured generator as the API.
 # Keep this runtime-only: no model weights are initialized or downloaded at build time.
-RUN pip install --no-cache-dir ".[retrieval,ingestion,llm]"
+RUN --mount=type=cache,id=industrial-rag-pip,target=/root/.cache/pip,sharing=locked \
+    pip install \
+    --retries 10 \
+    --resume-retries 10 \
+    --timeout 120 \
+    ".[retrieval,ingestion,llm]"
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends libgl1 libglib2.0-0t64 libxcb1 \

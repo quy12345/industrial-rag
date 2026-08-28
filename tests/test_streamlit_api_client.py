@@ -7,6 +7,7 @@ import json
 import httpx
 import pytest
 
+from app.contracts.query import QueryResponse
 from ui.api_client import RAGAPIClient, RAGAPIError
 from ui.config import UISettings
 
@@ -50,6 +51,7 @@ def test_client_calls_health_ready_and_query_with_document_filter() -> None:
     assert client.health() is True
     assert client.ready() is True
     result = client.query(question="Điện áp là bao nhiêu?", document_id="doc-1", top_k=4)
+    assert isinstance(result, QueryResponse)
     assert result.answer.startswith("Điện áp")
     assert result.citations[0].chunk_id == "chunk-1"
     query_request = requests[-1]

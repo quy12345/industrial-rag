@@ -13,7 +13,6 @@ services:
     environment:
       QDRANT_URL: http://qdrant
       EMBEDDING_CACHE_DIR: /models/fastembed
-      RETRIEVAL_PROFILE: phase7
     depends_on:
       - qdrant
     volumes:
@@ -52,7 +51,27 @@ services:
       - qdrant
     volumes:
       - fastembed_cache:/models/fastembed
-      - ./data/raw:/data/raw:ro
+      - ./data/raw:/app/data/raw:ro
+      - ./artifacts:/app/artifacts
+
+  evaluation:
+    image: industrial-rag-evaluation:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: evaluation
+    profiles: ["tools"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      QDRANT_URL: http://qdrant
+      EMBEDDING_CACHE_DIR: /models/fastembed
+    depends_on:
+      - qdrant
+    volumes:
+      - fastembed_cache:/models/fastembed
+      - ./data/eval:/app/data/eval:ro
       - ./artifacts:/app/artifacts
 
   qdrant:

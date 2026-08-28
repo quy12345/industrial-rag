@@ -1,10 +1,10 @@
-"""Offline tests for deterministic Phase 7 lexical query augmentation."""
+"""Offline tests for deterministic ATV320 lexical query augmentation."""
 
 from __future__ import annotations
 
 import pytest
 
-from app.query_expansion import augment_vietnamese_technical_query
+from app.domain.policies.query_analysis import augment_vietnamese_technical_query
 
 
 def test_query_expansion_adds_only_matching_technical_terms_deterministically() -> None:

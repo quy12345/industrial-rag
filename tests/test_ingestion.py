@@ -1,15 +1,65 @@
 """Unit tests for document ingestion normalization and CLI-independent helpers."""
 
 import json
+import subprocess
+import sys
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from docling.datamodel.base_models import ConversionStatus
 
-import app.ingestion as ingestion
-import scripts.ingest_preview as ingest_preview
-from app.models import DocumentChunk
+from app.domain import documents
+from app.domain.documents import DocumentChunk
+from app.infrastructure.ingestion import docling as docling_adapter
+from app.infrastructure.ingestion import pipeline as ingestion
+from app.infrastructure.ingestion.jsonl import write_chunks_jsonl
+from scripts.operations import ingest_preview
+
+
+def test_docling_chunk_warnings_do_not_echo_manual_content() -> None:
+    class Chunker:
+        @staticmethod
+        def chunk(*, dl_doc):
+            assert dl_doc == "document"
+            warnings.warn(
+                f"{docling_adapter._OVERSIZED_METADATA_WARNING_PREFIX} secret manual text",
+                UserWarning,
+                stacklevel=2,
+            )
+            warnings.warn("separate diagnostic", RuntimeWarning, stacklevel=2)
+            return iter(["chunk"])
+
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        chunks = docling_adapter._chunk_document(Chunker(), "document")
+
+    messages = [str(caught_warning.message) for caught_warning in caught_warnings]
+    assert chunks == ["chunk"]
+    assert messages == [
+        "separate diagnostic",
+        "Docling omitted oversized heading/caption metadata for 1 chunk(s); "
+        "chunk body text was retained.",
+    ]
+    assert "secret manual text" not in " ".join(messages)
+
+
+def test_importing_canonical_ingestion_does_not_load_docling_or_pdfium() -> None:
+    source = (
+        "import sys; import app.infrastructure.ingestion.pipeline; "
+        "assert not any(name == 'docling' or name.startswith('docling.') "
+        "for name in sys.modules); "
+        "assert 'pypdfium2' not in sys.modules"
+    )
+
+    subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=Path(__file__).parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_document_id_is_deterministic_and_content_based(tmp_path: Path) -> None:
@@ -22,11 +72,11 @@ def test_document_id_is_deterministic_and_content_based(tmp_path: Path) -> None:
     same_name.write_bytes(b"different contents")
     same_content.write_bytes(b"manual contents")
 
-    assert ingestion.build_document_id(first) == ingestion.build_document_id(first)
-    assert ingestion.build_document_id(first) != ingestion.build_document_id(same_name)
-    assert ingestion.build_document_id(first) == ingestion.build_document_id(same_content)
-    assert " " not in ingestion.build_document_id(first)
-    assert ingestion.build_document_id(first).startswith("motor-drive-manual-")
+    assert documents.build_document_id(first) == documents.build_document_id(first)
+    assert documents.build_document_id(first) != documents.build_document_id(same_name)
+    assert documents.build_document_id(first) == documents.build_document_id(same_content)
+    assert " " not in documents.build_document_id(first)
+    assert documents.build_document_id(first) == "motor-drive-manual-be8f1049a8bd"
 
 
 @pytest.mark.parametrize("filename", ["manual.PDF", "manual.DOCX"])
@@ -38,35 +88,55 @@ def test_uppercase_supported_extensions(tmp_path: Path, filename: str) -> None:
 
 
 def test_input_validation_errors(tmp_path: Path) -> None:
-    with pytest.raises(ingestion.IngestionError, match="does not exist"):
+    with pytest.raises(documents.IngestionError, match="does not exist"):
         ingestion.validate_input_path(tmp_path / "missing.pdf")
 
     directory = tmp_path / "manual.pdf"
     directory.mkdir()
-    with pytest.raises(ingestion.IngestionError, match="not a file"):
+    with pytest.raises(documents.IngestionError, match="not a file"):
         ingestion.validate_input_path(directory)
 
     unsupported = tmp_path / "manual.txt"
     unsupported.write_text("text", encoding="utf-8")
-    with pytest.raises(ingestion.IngestionError, match=r"Unsupported document type: \.txt"):
+    with pytest.raises(documents.IngestionError, match=r"Unsupported document type: \.txt"):
         ingestion.validate_input_path(unsupported)
 
 
 def test_chunk_id_is_content_stable_and_duplicate_safe() -> None:
-    first = ingestion.build_chunk_id("manual-id", [19, 18], ["Safety"], "Disconnect power", 0)
+    first = documents.build_chunk_id("manual-id", [19, 18], ["Safety"], "Disconnect power", 0)
 
-    assert first == ingestion.build_chunk_id(
+    assert first == documents.build_chunk_id(
         "manual-id", [18, 19], ["Safety"], "Disconnect power", 0
     )
-    assert first != ingestion.build_chunk_id(
+    assert first != documents.build_chunk_id(
         "manual-id", [18, 19], ["Safety"], "Disconnect power first", 0
     )
-    assert first != ingestion.build_chunk_id(
+    assert first != documents.build_chunk_id(
         "manual-id", [18, 19], ["Safety"], "Disconnect power", 1
     )
-    assert ingestion.build_chunk_id("manual-id", [], [], "Unknown page", 0).startswith(
+    assert documents.build_chunk_id("manual-id", [], [], "Unknown page", 0).startswith(
         "manual-id_punknown_h"
     )
+
+
+def test_chunk_id_unicode_normalization_and_occurrence_are_exact() -> None:
+    first = documents.build_chunk_id(
+        "tài-liệu",
+        [2, 1, 2],
+        [" An toàn ", "Điện áp"],
+        "  Kiểm tra\r\nđiện áp.  ",
+        0,
+    )
+    duplicate = documents.build_chunk_id(
+        "tài-liệu",
+        [1, 2],
+        ["An toàn", "Điện áp"],
+        "Kiểm tra\nđiện áp.",
+        1,
+    )
+
+    assert first == "tài-liệu_p1_ha35389a0de74e7a7"
+    assert duplicate == "tài-liệu_p1_he02317fa21914856"
 
 
 @pytest.mark.parametrize(
@@ -84,7 +154,7 @@ def test_build_page_batches(
     batch_size: int,
     expected: list[tuple[int, int]],
 ) -> None:
-    assert ingestion.build_page_batches(start_page, end_page, batch_size) == expected
+    assert documents.build_page_batches(start_page, end_page, batch_size) == expected
 
 
 @pytest.mark.parametrize(
@@ -102,8 +172,8 @@ def test_build_page_batches_rejects_invalid_values(
     batch_size: int,
     message: str,
 ) -> None:
-    with pytest.raises(ingestion.IngestionError, match=message):
-        ingestion.build_page_batches(start_page, end_page, batch_size)
+    with pytest.raises(documents.IngestionError, match=message):
+        documents.build_page_batches(start_page, end_page, batch_size)
 
 
 def test_conversion_status_success_is_accepted() -> None:
@@ -128,7 +198,7 @@ def test_incomplete_conversion_status_is_rejected(
         errors=[SimpleNamespace(page_no=9, error_message="std::bad_alloc")],
     )
 
-    with pytest.raises(ingestion.IngestionError) as error:
+    with pytest.raises(documents.IngestionError) as error:
         ingestion._validate_conversion_result(result, (1, 21))
 
     message = str(error.value)
@@ -149,7 +219,7 @@ def test_jsonl_writer_preserves_unicode(tmp_path: Path) -> None:
         headings=["An toàn"],
     )
 
-    ingestion.write_chunks_jsonl(output, [chunk])
+    write_chunks_jsonl(output, [chunk])
 
     lines = output.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
@@ -185,7 +255,7 @@ def test_jsonl_writer_does_not_replace_output_after_serialization_error(
         raise RuntimeError("batch failed")
 
     with pytest.raises(RuntimeError, match="batch failed"):
-        ingestion.write_chunks_jsonl(output, interrupted_chunks())
+        write_chunks_jsonl(output, interrupted_chunks())
 
     assert output.read_text(encoding="utf-8") == "previous complete output\n"
     assert list(tmp_path.glob("*.tmp")) == []
@@ -274,7 +344,7 @@ def test_pdf_page_range_must_not_exceed_page_count(
     document.write_bytes(b"content")
     monkeypatch.setattr(ingestion, "get_pdf_page_count", lambda _: 21)
 
-    with pytest.raises(ingestion.IngestionError, match="exceeds the PDF page count"):
+    with pytest.raises(documents.IngestionError, match="exceeds the PDF page count"):
         ingestion.ingest_document(document, page_range=(1, 22), batch_size=8)
 
 
@@ -282,7 +352,7 @@ def test_batch_size_is_rejected_for_docx(tmp_path: Path) -> None:
     document = tmp_path / "manual.docx"
     document.write_bytes(b"content")
 
-    with pytest.raises(ingestion.IngestionError, match="only for PDF"):
+    with pytest.raises(documents.IngestionError, match="only for PDF"):
         ingestion.ingest_document(document, batch_size=8)
 
 
@@ -310,7 +380,7 @@ def test_cli_does_not_write_jsonl_when_ingestion_fails(
     monkeypatch.setattr(ingest_preview, "get_pdf_page_count", lambda _: 21)
 
     def fail_ingestion(*args, **kwargs):
-        raise ingestion.IngestionError(
+        raise documents.IngestionError(
             "Docling returned PARTIAL_SUCCESS for pages 9-16; refusing incomplete output."
         )
 

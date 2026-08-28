@@ -1,22 +1,24 @@
-"""Offline scoring tests for the Phase 7 end-to-end evaluator."""
+"""Offline scoring tests for the ATV320 end-to-end evaluator."""
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from app.evaluation_e2e import (
-    aggregate_phase7_records,
-    evaluate_phase7_quality_gates,
+from app.application.query_service import QueryExecution, QueryTimings
+from app.contracts.query import Citation, QueryResponse
+from app.domain.generation import TokenUsage
+from app.domain.retrieval import RetrievalCandidate
+from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
+from evaluation.e2e import (
+    aggregate_query_records,
+    evaluate_quality_gates,
     score_expected_answer_fact,
-    score_phase7_execution,
+    score_query_execution,
 )
-from app.generation import TokenUsage
-from app.models import Citation, QueryResponse, RetrievalCandidate
-from app.phase7 import ExpectedAnswerFact, Phase7DatasetItem
-from app.query_service import QueryExecution, QueryTimings
-from scripts import evaluate_phase7_e2e
+from scripts.evaluation import evaluate_e2e
 
 
 def _candidate(chunk_id: str, *, document_id: str = "installation") -> RetrievalCandidate:
@@ -32,9 +34,9 @@ def _candidate(chunk_id: str, *, document_id: str = "installation") -> Retrieval
     )
 
 
-def _item(*, answerable: bool = True, phrase_mode: str = "all") -> Phase7DatasetItem:
+def _item(*, answerable: bool = True, phrase_mode: str = "all") -> EvaluationItem:
     if not answerable:
-        return Phase7DatasetItem(
+        return EvaluationItem(
             id="unsupported",
             question="Unknown?",
             language="en",
@@ -49,7 +51,7 @@ def _item(*, answerable: bool = True, phrase_mode: str = "all") -> Phase7Dataset
             unanswerable_reason="Verified absent.",
             review_status="approved",
         )
-    return Phase7DatasetItem(
+    return EvaluationItem(
         id="answerable",
         question="Range?",
         language="en",
@@ -111,7 +113,7 @@ def _execution(
 def test_scores_direct_evidence_and_candidate_miss_without_page_fallback() -> None:
     item = _item()
     pool = [_candidate("same-page"), _candidate("qrel")]
-    record = score_phase7_execution(item, _execution(final=[_candidate("same-page")], pool=pool))
+    record = score_query_execution(item, _execution(final=[_candidate("same-page")], pool=pool))
     assert record["candidate_direct_evidence_rank"] == 2
     assert record["direct_evidence_rank"] is None
     assert record["failure_class"] == "reranker_miss_top20"
@@ -135,7 +137,7 @@ def test_scores_direct_evidence_and_candidate_miss_without_page_fallback() -> No
 
 def test_scoring_distinguishes_full_ranking_from_actual_generation_evidence() -> None:
     qrel = _candidate("qrel")
-    record = score_phase7_execution(
+    record = score_query_execution(
         _item(),
         _execution(
             final=[_candidate("other"), qrel],
@@ -152,7 +154,7 @@ def test_scoring_distinguishes_full_ranking_from_actual_generation_evidence() ->
 def test_full_rank_six_excluded_from_actual_top_five_is_a_top5_miss() -> None:
     leading = [_candidate(f"other-{index}") for index in range(1, 6)]
     qrel = _candidate("qrel")
-    record = score_phase7_execution(
+    record = score_query_execution(
         _item(),
         _execution(
             final=[*leading, qrel],
@@ -166,14 +168,14 @@ def test_full_rank_six_excluded_from_actual_top_five_is_a_top5_miss() -> None:
 
 
 def test_aggregate_reports_retrieval_citations_abstention_and_latency() -> None:
-    answerable = score_phase7_execution(
+    answerable = score_query_execution(
         _item(), _execution(final=[_candidate("qrel")], pool=[_candidate("qrel")])
     )
-    unsupported = score_phase7_execution(
+    unsupported = score_query_execution(
         _item(answerable=False),
         _execution(final=[_candidate("other")], pool=[_candidate("other")], abstained=True),
     )
-    metrics = aggregate_phase7_records([answerable, unsupported])
+    metrics = aggregate_query_records([answerable, unsupported])
     assert metrics["retrieval"]["hit_rate_at_1"] == 1.0
     assert metrics["answer_quality"]["answer_fact_accuracy_when_answered"] == 1.0
     assert metrics["answer_quality"]["deterministic_fact_accuracy_when_answered"] == 1.0
@@ -191,14 +193,14 @@ def test_aggregate_reports_retrieval_citations_abstention_and_latency() -> None:
     assert metrics["latency_ms"]["total"]["p95"] == 15
     assert metrics["per_language"]["en"]["query_count"] == 2
 
-    gates = evaluate_phase7_quality_gates(metrics)
+    gates = evaluate_quality_gates(metrics)
     assert gates["overall_pass"] is True
     assert gates["gates"]["unsupported_citation_ids"]["actual"] == 0
     assert gates["gates"]["wrong_document_citations"]["actual"] == 0
 
 
 def test_answerable_abstention_does_not_claim_answer_or_citation_success() -> None:
-    record = score_phase7_execution(
+    record = score_query_execution(
         _item(), _execution(final=[_candidate("qrel")], pool=[_candidate("qrel")], abstained=True)
     )
     assert record["answer_fact_match"] is None
@@ -225,7 +227,7 @@ def test_answer_fact_uses_language_aliases_not_evidence_phrase() -> None:
         candidates=execution.candidates,
         candidate_pool=execution.candidate_pool,
     )
-    record = score_phase7_execution(item, execution)
+    record = score_query_execution(item, execution)
     assert record["answer_fact_match"] is True
     assert record["answer_fact_results"][0]["id"] == "frequency-range"
     assert record["answer_fact_results"][0]["matched"] is True
@@ -233,7 +235,7 @@ def test_answer_fact_uses_language_aliases_not_evidence_phrase() -> None:
 
 
 def test_answer_fact_diagnostics_report_ids_without_alias_or_answer_content() -> None:
-    item = Phase7DatasetItem.model_validate(
+    item = EvaluationItem.model_validate(
         _item().model_dump()
         | {
             "expected_answer_facts": [
@@ -242,7 +244,7 @@ def test_answer_fact_diagnostics_report_ids_without_alias_or_answer_content() ->
             ]
         }
     )
-    record = score_phase7_execution(
+    record = score_query_execution(
         item, _execution(final=[_candidate("qrel")], pool=[_candidate("qrel")])
     )
     assert record["answer_fact_match"] is False
@@ -435,63 +437,97 @@ def test_fact_matcher_rejects_plain_negation_even_when_alias_tokens_are_present(
 
 
 def test_document_contamination_metrics_and_gate_are_explicit() -> None:
-    wrong = score_phase7_execution(
+    wrong = score_query_execution(
         _item(),
         _execution(
             final=[_candidate("qrel", document_id="programming")],
             pool=[_candidate("qrel", document_id="programming")],
         ),
     )
-    unsupported = score_phase7_execution(
+    unsupported = score_query_execution(
         _item(answerable=False),
         _execution(final=[_candidate("other")], pool=[_candidate("other")], abstained=True),
     )
-    metrics = aggregate_phase7_records([wrong, unsupported])
+    metrics = aggregate_query_records([wrong, unsupported])
     assert metrics["document_contamination"]["wrong_document_retrieval_at_1_rate"] == 1.0
     assert metrics["citations"]["wrong_document_citation_rate_when_answered"] == 1.0
-    gates = evaluate_phase7_quality_gates(metrics)
+    gates = evaluate_quality_gates(metrics)
     assert gates["overall_pass"] is False
     assert gates["gates"]["wrong_document_citations"]["passed"] is False
 
 
-def test_phase7_v5_cli_uses_new_artifact_paths(monkeypatch) -> None:
+def test_v8_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
-            "evaluate_phase7_e2e",
+            "evaluate_e2e",
             "--dataset",
             "calibration",
             "--provider-approval-token",
-            evaluate_phase7_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
+            evaluate_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
         ],
     )
-    args = evaluate_phase7_e2e._parse_args()
-    assert args.output.name == "phase-7-calibration-e2e-v5.json"
-    assert args.checkpoint.name == "phase-7-calibration-e2e-v5-checkpoint.jsonl"
-    settings = evaluate_phase7_e2e._phase7_settings(evaluate_phase7_e2e.Settings())
+    args = evaluate_e2e._parse_args()
+    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 8
+    assert args.output.name == "atv320-calibration-e2e-v8.json"
+    assert args.checkpoint.name == "atv320-calibration-e2e-v8-checkpoint.jsonl"
+    assert args.semantic_judge == "none"
+    settings = evaluate_e2e._runtime_settings(evaluate_e2e.Settings())
     assert settings.rerank_deduplicate_content is True
     assert settings.dense_candidate_limit == 60
     assert settings.sparse_candidate_limit == 40
 
 
+def test_heldout_v2_cli_uses_private_sealed_paths(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "heldout-v2",
+            "--provider-approval-token",
+            evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        ],
+    )
+
+    args = evaluate_e2e._parse_args()
+
+    assert args.heldout_v2 == evaluate_e2e.PRIVATE_HELDOUT_DATASET_PATH
+    assert args.manifest == evaluate_e2e.PRIVATE_HELDOUT_MANIFEST_PATH
+    assert args.output.name == "atv320-heldout-v2-e2e-v8.json"
+    assert args.checkpoint.name == "atv320-heldout-v2-e2e-v8-checkpoint.jsonl"
+
+
 def test_provider_execution_requires_dataset_specific_approval() -> None:
     with pytest.raises(SystemExit, match="missing or invalid"):
-        evaluate_phase7_e2e._validate_execution_approval(
+        evaluate_e2e._validate_execution_approval(
             SimpleNamespace(dataset="calibration", provider_approval_token="wrong")
         )
-    evaluate_phase7_e2e._validate_execution_approval(
+    evaluate_e2e._validate_execution_approval(
         SimpleNamespace(
             dataset="calibration",
-            provider_approval_token=evaluate_phase7_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
+            provider_approval_token=evaluate_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
         )
     )
-    with pytest.raises(SystemExit, match="BLOCKED_GOVERNANCE"):
-        evaluate_phase7_e2e._validate_execution_approval(
+    with pytest.raises(SystemExit, match="missing or invalid"):
+        evaluate_e2e._validate_execution_approval(
             SimpleNamespace(
                 dataset="test",
-                provider_approval_token=evaluate_phase7_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+                provider_approval_token=evaluate_e2e.CALIBRATION_PROVIDER_APPROVAL_TOKEN,
             )
         )
+    evaluate_e2e._validate_execution_approval(
+        SimpleNamespace(
+            dataset="test",
+            provider_approval_token=evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        )
+    )
+    evaluate_e2e._validate_execution_approval(
+        SimpleNamespace(
+            dataset="heldout-v2",
+            provider_approval_token=evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        )
+    )
 
 
 def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
@@ -504,16 +540,18 @@ def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
             raise AssertionError("held-out path was opened")
         return [approved]
 
-    monkeypatch.setattr(evaluate_phase7_e2e, "read_phase7_dataset", fake_read)
+    monkeypatch.setattr(evaluate_e2e, "read_dataset", fake_read)
     monkeypatch.setattr(
-        evaluate_phase7_e2e,
-        "validate_phase7_dataset",
+        evaluate_e2e,
+        "validate_dataset",
         lambda dataset, chunks, *, kind: {"kind": kind},
     )
     monkeypatch.setattr(
-        evaluate_phase7_e2e,
+        evaluate_e2e,
         "_validate_evaluation_manifest",
-        lambda path, chunks, dataset, *, kind: {"test_dataset_sha256": "a" * 64},
+        lambda path, chunks, dataset, *, dataset_key: {
+            "test_dataset_sha256": "a" * 64
+        },
     )
     args = SimpleNamespace(
         dataset="calibration",
@@ -521,33 +559,125 @@ def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
         test="poison-held-out",
         manifest="manifest",
     )
-    dataset, validation, _ = evaluate_phase7_e2e._load_selected_dataset(args, [])
+    dataset, validation, _ = evaluate_e2e._load_selected_dataset(args, [])
     assert dataset == [approved]
     assert validation == {"kind": "calibration"}
     assert opened == ["active-calibration"]
+
+
+def test_heldout_v2_loader_uses_only_private_sealed_inputs(
+    monkeypatch, tmp_path
+) -> None:
+    private_root = tmp_path / "private-heldout-v2"
+    dataset_path = private_root / "heldout-v2.jsonl"
+    manifest_path = private_root / "heldout-v2-manifest.json"
+    approved = SimpleNamespace(review_status="approved")
+    observed = {}
+
+    def fake_read_dataset(path):
+        observed["dataset_path"] = path
+        return [approved]
+
+    def fake_validate_dataset(dataset, chunks, *, kind):
+        observed["kind"] = kind
+        return {"kind": kind}
+
+    monkeypatch.setattr(evaluate_e2e, "PRIVATE_HELDOUT_ROOT", private_root)
+    monkeypatch.setattr(evaluate_e2e, "read_dataset", fake_read_dataset)
+    monkeypatch.setattr(evaluate_e2e, "validate_dataset", fake_validate_dataset)
+    monkeypatch.setattr(
+        evaluate_e2e,
+        "_validate_evaluation_manifest",
+        lambda path, chunks, dataset, *, dataset_key: observed.update(
+            manifest_path=path,
+            dataset_key=dataset_key,
+        )
+        or {"heldout_dataset_sha256": "a" * 64},
+    )
+    args = SimpleNamespace(
+        dataset="heldout-v2",
+        heldout_v2=dataset_path,
+        manifest=manifest_path,
+    )
+
+    dataset, validation, manifest = evaluate_e2e._load_selected_dataset(args, [])
+
+    assert dataset == [approved]
+    assert validation == {"kind": "test"}
+    assert manifest == {"heldout_dataset_sha256": "a" * 64}
+    assert observed == {
+        "dataset_path": dataset_path,
+        "kind": "test",
+        "manifest_path": manifest_path,
+        "dataset_key": "heldout_dataset_sha256",
+    }
+
+
+def test_heldout_v2_loader_rejects_inputs_outside_private_root(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        evaluate_e2e, "PRIVATE_HELDOUT_ROOT", tmp_path / "private-heldout-v2"
+    )
+    args = SimpleNamespace(
+        dataset="heldout-v2",
+        heldout_v2=tmp_path / "public-test.jsonl",
+        manifest=tmp_path / "manifest.json",
+    )
+
+    with pytest.raises(SystemExit, match="must remain under"):
+        evaluate_e2e._load_selected_dataset(args, [])
+
+
+def test_heldout_v2_manifest_requires_its_sealed_dataset_hash(
+    monkeypatch, tmp_path
+) -> None:
+    manifest_path = tmp_path / "heldout-v2-manifest.json"
+    corpus = {"chunk_count": 2753, "chunk_ids_sha256": "c" * 64}
+    dataset_hash = "d" * 64
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "corpus": corpus,
+                "heldout_dataset_sha256": dataset_hash,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(evaluate_e2e, "chunk_set_metadata", lambda chunks: corpus)
+    monkeypatch.setattr(evaluate_e2e, "dataset_sha256", lambda dataset: dataset_hash)
+
+    manifest = evaluate_e2e._validate_evaluation_manifest(
+        manifest_path,
+        [],
+        [],
+        dataset_key="heldout_dataset_sha256",
+    )
+
+    assert manifest["heldout_dataset_sha256"] == dataset_hash
 
 
 def test_item_id_is_calibration_only(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
-            "evaluate_phase7_e2e",
+            "evaluate_e2e",
             "--dataset",
             "test",
             "--item-id",
             "phase7_test_001",
             "--provider-approval-token",
-            evaluate_phase7_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+            evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
         ],
     )
     with pytest.raises(SystemExit):
-        evaluate_phase7_e2e._parse_args()
+        evaluate_e2e._parse_args()
 
 
 def test_checkpoint_fails_closed_when_provider_identity_changes(tmp_path) -> None:
     checkpoint = tmp_path / "checkpoint.jsonl"
     identity = {"generation_configuration": {"temperature": 0.0}}
-    evaluate_phase7_e2e._write_checkpoint(checkpoint, identity, [])
+    evaluate_e2e._write_checkpoint(checkpoint, identity, [])
     changed = {"generation_configuration": {"temperature": 0.1}}
     with pytest.raises(RuntimeError, match="different frozen run"):
-        evaluate_phase7_e2e._load_checkpoint(checkpoint, changed)
+        evaluate_e2e._load_checkpoint(checkpoint, changed)

@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
 
+from app.application.generation_prompt import (
+    HUMAN_PROMPT,
+    SYSTEM_PROMPT,
+    build_correction_text,
+    format_evidence,
+)
 from app.config import Settings
+from app.domain.generation import GeneratedAnswer
+from app.domain.retrieval import RetrievalCandidate
 from app.errors import (
     GenerationValidationError,
     LLMNotConfiguredError,
@@ -14,13 +23,7 @@ from app.errors import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
-from app.generation import (
-    SYSTEM_PROMPT,
-    GeneratedAnswer,
-    LangChainOpenAIGenerator,
-    format_evidence,
-)
-from app.models import RetrievalCandidate
+from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
 
 
 def _candidate(
@@ -87,7 +90,7 @@ def _adapter(result=None, *, error=None, **settings_overrides):
         model_kwargs.update(kwargs)
         return model
 
-    adapter = LangChainOpenAIGenerator(
+    adapter = _generator(
         Settings(_env_file=None, openai_api_key="secret", **settings_overrides),
         model_factory=model_factory,
         prompt_factory=lambda messages: prompt,
@@ -97,6 +100,16 @@ def _adapter(result=None, *, error=None, **settings_overrides):
 
 def _bundle():
     return format_evidence([_candidate("a")], max_chars=4_000)
+
+
+def _generator(settings: Settings, **kwargs) -> LangChainStructuredGenerator:
+    return LangChainStructuredGenerator(
+        settings,
+        system_prompt=SYSTEM_PROMPT,
+        human_prompt=HUMAN_PROMPT,
+        correction_text_builder=build_correction_text,
+        **kwargs,
+    )
 
 
 def test_evidence_labels_mapping_and_format_are_deterministic() -> None:
@@ -111,6 +124,53 @@ def test_evidence_labels_mapping_and_format_are_deterministic() -> None:
     assert "document_title: n/a" in first.text
     assert "document_role: n/a" in first.text
     assert "<untrusted_document>" in first.text
+
+
+def test_single_evidence_block_has_exact_frozen_rendering() -> None:
+    bundle = format_evidence([_candidate("a", pages=[3, 1])], max_chars=4_000)
+
+    assert bundle.text == (
+        "--- SOURCE S1 ---\n"
+        "chunk_id: a\n"
+        "document_id: manual-a\n"
+        "filename: manual.pdf\n"
+        "document_title: n/a\n"
+        "document_role: n/a\n"
+        "pages: 1, 3\n"
+        "heading: Power > Limits\n"
+        "content:\n"
+        "<untrusted_document>\n"
+        "Technical evidence a: 24 VDC.\n"
+        "</untrusted_document>\n"
+        "--- END SOURCE ---"
+    )
+
+
+def test_prompt_templates_have_frozen_bytes() -> None:
+    captured: list[list[tuple[str, str]]] = []
+    prompt = object()
+    adapter = _generator(
+        Settings(_env_file=None),
+        prompt_factory=lambda messages: captured.append(messages) or prompt,
+    )
+
+    assert adapter._get_prompt() is prompt
+    assert captured == [
+        [
+            ("system", SYSTEM_PROMPT),
+            (
+                "human",
+                "Question:\n{question}\n\nAllowed source IDs: {allowed_source_ids}"
+                "{correction}\n\nSupplied evidence:\n{evidence}",
+            ),
+        ]
+    ]
+    assert hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest() == (
+        "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"
+    )
+    assert hashlib.sha256(captured[0][1][1].encode("utf-8")).hexdigest() == (
+        "b4b6ca4b7c96e5151bb318827016019fd321b779119db7eff9075f8b50c026d0"
+    )
 
 
 def test_evidence_includes_trusted_document_title_and_role() -> None:
@@ -158,18 +218,18 @@ def test_evidence_rejects_empty_input_and_impossibly_small_metadata_budget() -> 
 
 def test_missing_key_and_store_true_fail_without_constructing_model() -> None:
     calls = []
-    adapter = LangChainOpenAIGenerator(
+    adapter = _generator(
         Settings(_env_file=None), model_factory=lambda **kwargs: calls.append(kwargs)
     )
     with pytest.raises(LLMNotConfiguredError, match="OPENAI_API_KEY"):
         adapter.ensure_configured()
     assert calls == []
     with pytest.raises(LLMNotConfiguredError, match="OPENAI_STORE"):
-        LangChainOpenAIGenerator(
+        _generator(
             Settings(_env_file=None, openai_api_key="secret", openai_store=True)
         ).ensure_configured()
     with pytest.raises(LLMNotConfiguredError, match="GEMINI_API_KEY"):
-        LangChainOpenAIGenerator(
+        _generator(
             Settings(_env_file=None, generation_provider="gemini")
         ).ensure_configured()
 
@@ -318,8 +378,6 @@ def test_provider_exceptions_are_sanitized(error, exception) -> None:
 
 
 def test_import_and_adapter_construction_do_not_initialize_provider() -> None:
-    import app.generation as generation
-
-    adapter = generation.LangChainOpenAIGenerator(Settings(_env_file=None))
+    adapter = _generator(Settings(_env_file=None))
     assert adapter._structured_model is None
     assert adapter._prompt is None

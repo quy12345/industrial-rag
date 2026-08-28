@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,19 +11,22 @@ from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
 from app.config import Settings
-from app.hybrid_retrieval import (
-    HYBRID_SCHEMA_VERSION,
+from app.domain.documents import DocumentChunk
+from app.domain.policies.fusion import fuse_rrf
+from app.domain.retrieval import RetrievalCandidate
+from app.errors import RetrievalError
+from app.infrastructure.qdrant.dense import build_point_id, ensure_dense_collection
+from app.infrastructure.qdrant.hybrid import (
     compute_bm25_average_length,
     ensure_hybrid_collection,
-    fuse_rrf,
-    hybrid_search,
     index_hybrid_chunks,
     sparse_search,
+)
+from app.infrastructure.qdrant.manifests import (
+    HYBRID_SCHEMA_VERSION,
     validate_hybrid_index_manifest,
     write_hybrid_index_manifest,
 )
-from app.models import DocumentChunk, RetrievalCandidate
-from app.retrieval import RetrievalError, build_point_id, ensure_dense_collection
 
 V1 = "dense-v1"
 V2 = "hybrid-v2"
@@ -132,7 +136,7 @@ def candidate(
 def test_hybrid_settings_default_to_bm25_with_stemming_disabled() -> None:
     settings = Settings()
 
-    assert settings.qdrant_hybrid_collection == "industrial_manual_chunks_v2"
+    assert settings.qdrant_hybrid_collection == "industrial_manual_phase7_hybrid_v1"
     assert settings.sparse_model == "Qdrant/bm25"
     assert settings.bm25_disable_stemmer is True
     with pytest.raises(ValidationError):
@@ -233,9 +237,53 @@ def test_hybrid_index_reindex_and_sparse_failure_safety() -> None:
     points, _ = client.scroll(V2, limit=10, with_payload=True, with_vectors=False)
     payloads = {point.payload["chunk_id"]: point.payload for point in points}
     assert set(payloads) == {"a-1", "b-1"}
-    assert "embedding_text" not in payloads["a-1"]
+    assert payloads["a-1"] == {
+        "chunk_id": "a-1",
+        "document_id": "manual-a",
+        "filename": "manual-a.pdf",
+        "text": "Sensor 24 VDC",
+        "page_numbers": [1],
+        "headings": ["Safety"],
+        "content_type": "text",
+        "source_path": "manual-a.pdf",
+        "character_count": len("Sensor 24 VDC"),
+    }
     assert build_point_id("a-1") in {str(point.id) for point in points}
     assert sparse_model.passage_calls
+
+
+def test_hybrid_upsert_failure_does_not_delete_existing_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = QdrantClient(":memory:")
+    original = [make_chunk("a-1", "Sensor 24 VDC"), make_chunk("a-2", "PLC IP65")]
+    _index(client, FakeDenseModel(), FakeSparseModel(), original)
+    original_upsert = client.upsert
+    calls = 0
+
+    def fail_on_second_upsert(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("upsert failed")
+        return original_upsert(*args, **kwargs)
+
+    monkeypatch.setattr(client, "upsert", fail_on_second_upsert)
+    with pytest.raises(RetrievalError, match="Failed to update hybrid Qdrant collection"):
+        _index(
+            client,
+            FakeDenseModel(),
+            FakeSparseModel(),
+            [
+                make_chunk("new-1", "Sensor one"),
+                make_chunk("new-2", "Sensor two"),
+                make_chunk("new-3", "PLC three"),
+            ],
+        )
+
+    points, _ = client.scroll(V2, limit=10, with_payload=True, with_vectors=False)
+    chunk_ids = {point.payload["chunk_id"] for point in points}
+    assert {"a-1", "a-2"}.issubset(chunk_ids)
 
 
 def test_sparse_search_filters_documents_and_preserves_metadata() -> None:
@@ -274,6 +322,45 @@ def test_sparse_search_filters_documents_and_preserves_metadata() -> None:
         )
 
 
+def test_sparse_search_sends_exact_named_vector_query_contract() -> None:
+    captured: dict[str, object] = {}
+    sparse_model = FakeSparseModel()
+
+    class RecordingClient:
+        def query_points(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(points=[])
+
+    results = sparse_search(
+        RecordingClient(),  # type: ignore[arg-type]
+        " sensor ",
+        collection_name=V2,
+        sparse_vector_name=SPARSE,
+        sparse_embedding_model=sparse_model,
+        limit=7,
+        document_id="manual-a",
+    )
+
+    assert results == []
+    assert sparse_model.query_calls == ["sensor"]
+    assert captured == {
+        "collection_name": V2,
+        "query": models.SparseVector(indices=[1], values=[1.0]),
+        "using": SPARSE,
+        "query_filter": models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="document_id",
+                    match=models.MatchValue(value="manual-a"),
+                )
+            ]
+        ),
+        "limit": 7,
+        "with_payload": True,
+        "with_vectors": False,
+    }
+
+
 def test_rrf_formula_duplicate_collapse_ties_and_empty_components() -> None:
     dense = [
         candidate("a", dense_score=0.9, dense_rank=1),
@@ -289,54 +376,28 @@ def test_rrf_formula_duplicate_collapse_ties_and_empty_components() -> None:
     assert fused[0].rrf_score == pytest.approx(1 / 62 + 1 / 61)
     assert fused[0].dense_score == 0.8
     assert fused[0].sparse_score == 20.0
+    assert fused[0].model_dump() == {
+        "chunk_id": "b",
+        "document_id": "manual-a",
+        "filename": "manual-a.pdf",
+        "text": "b",
+        "page_numbers": [1],
+        "headings": [],
+        "content_type": "text",
+        "metadata": {},
+        "score": 1 / 62 + 1 / 61,
+        "dense_score": 0.8,
+        "dense_rank": 2,
+        "sparse_score": 20.0,
+        "sparse_rank": 1,
+        "rrf_score": 1 / 62 + 1 / 61,
+        "rrf_rank": 1,
+        "rerank_score": None,
+        "rerank_rank": None,
+    }
     assert fuse_rrf([], [], rrf_k=60, final_limit=5) == []
     with pytest.raises(RetrievalError, match="RRF k"):
         fuse_rrf(dense, sparse, rrf_k=0, final_limit=5)
-
-
-def test_hybrid_search_uses_component_limits_and_does_not_mix_scores(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: dict[str, int] = {}
-
-    def fake_dense(*args, **kwargs):
-        calls["dense"] = kwargs["limit"]
-        return [
-            SimpleNamespace(
-                chunk_id="dense-only",
-                document_id="manual-a",
-                filename="manual.pdf",
-                text="dense",
-                page_numbers=[1],
-                headings=[],
-                content_type="text",
-                score=0.99,
-            )
-        ]
-
-    def fake_sparse(*args, **kwargs):
-        calls["sparse"] = kwargs["limit"]
-        return [candidate("sparse-only", sparse_score=999.0, sparse_rank=1)]
-
-    monkeypatch.setattr("app.hybrid_retrieval.dense_search", fake_dense)
-    monkeypatch.setattr("app.hybrid_retrieval.sparse_search", fake_sparse)
-    results = hybrid_search(
-        QdrantClient(":memory:"),
-        "question",
-        collection_name=V2,
-        dense_vector_name=DENSE,
-        sparse_vector_name=SPARSE,
-        dense_embedding_model=FakeDenseModel(),
-        sparse_embedding_model=FakeSparseModel(),
-        dense_candidate_limit=20,
-        sparse_candidate_limit=15,
-        final_limit=1,
-        rrf_k=60,
-    )
-
-    assert calls == {"dense": 20, "sparse": 15}
-    assert results[0].rrf_score == pytest.approx(1 / 61)
-    assert results[0].score == results[0].rrf_score
 
 
 def test_hybrid_manifest_round_trip_and_mismatch(tmp_path: Path) -> None:
@@ -355,8 +416,31 @@ def test_hybrid_manifest_round_trip_and_mismatch(tmp_path: Path) -> None:
     payload = validate_hybrid_index_manifest(
         manifest, settings=settings, dense_dimension=3, frozen_chunk_set=frozen
     )
-    assert payload["schema_version"] == HYBRID_SCHEMA_VERSION
-    assert payload["bm25_avg_len"] == 12.5
+    assert payload == {
+        "schema_version": HYBRID_SCHEMA_VERSION,
+        "collection": V2,
+        "dense_vector_name": "dense",
+        "dense_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "dense_dimension": 3,
+        "dense_distance": "cosine",
+        "sparse_vector_name": "sparse",
+        "sparse_model": "Qdrant/bm25",
+        "sparse_modifier": "idf",
+        "bm25_k": 1.2,
+        "bm25_b": 0.75,
+        "bm25_avg_len": 12.5,
+        "disable_stemmer": True,
+        "normalization_profile": (
+            "FastEmbed 0.8.0 Bm25: remove_non_alphanumeric + SimpleTokenizer + disabled stemmer"
+        ),
+        "frozen_chunk_set": frozen,
+        "ingestion_profile": {"page_batch_size": 4},
+        "dense_candidate_limit": 60,
+        "sparse_candidate_limit": 40,
+        "rrf_k": 40,
+        "hybrid_final_limit": 5,
+        "runtime_versions": json.loads(manifest.read_text(encoding="utf-8"))["runtime_versions"],
+    }
     with pytest.raises(RetrievalError, match="does not match"):
         validate_hybrid_index_manifest(
             manifest,
