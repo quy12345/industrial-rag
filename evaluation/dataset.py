@@ -29,7 +29,7 @@ from app.domain.documents import DocumentChunk
 from app.infrastructure.corpus_artifacts import chunk_set_metadata
 from evaluation.retrieval import phrase_matches
 
-DatasetKind = Literal["calibration", "test"]
+DatasetKind = Literal["calibration", "test", "development", "confirmation"]
 QuestionLanguage = Literal["vi", "en"]
 Scenario = Literal["vi_to_en", "en_to_en"]
 QuestionType = Literal[
@@ -49,6 +49,23 @@ QuestionType = Literal[
     "cross_document",
     "unanswerable",
 ]
+_OPTIMIZATION_ANSWERABLE_TYPES = frozenset(
+    {
+        "mounting",
+        "safety",
+        "menu_navigation",
+        "parameter_code",
+        "fault_diagnosis",
+        "wiring",
+        "table_lookup",
+        "ordered_procedure",
+        "cross_document",
+    }
+)
+_OPTIMIZATION_TYPE_MINIMUMS: dict[str, int] = {
+    "development": 8,
+    "confirmation": 4,
+}
 ReviewStatus = Literal["needs_human_review", "approved"]
 PhraseMatchMode = Literal["all", "any"]
 AnswerFactType = Literal["text", "numeric_unit", "identifier"]
@@ -215,6 +232,7 @@ class EvaluationItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
+    fact_family_id: str | None = None
     question: str
     language: QuestionLanguage
     answerable: bool
@@ -237,6 +255,16 @@ class EvaluationItem(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("must not be empty")
+        return normalized
+
+    @field_validator("fact_family_id")
+    @classmethod
+    def normalized_optional_fact_family_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
         return normalized
 
     @field_validator("expected_document_ids", "relevant_chunk_ids", "expected_phrases")
@@ -336,20 +364,19 @@ def validate_dataset_splits(
         calibration, chunks, kind="calibration"
     )
     test_validation = validate_dataset(test, chunks, kind="test")
-    calibration_ids = {item.id for item in calibration}
-    duplicate_ids = calibration_ids.intersection(item.id for item in test)
-    if duplicate_ids:
-        raise DatasetValidationError(f"Calibration/test IDs overlap: {sorted(duplicate_ids)}")
-    calibration_questions = {_normalized_question(item.question) for item in calibration}
-    duplicated_questions = calibration_questions.intersection(
-        _normalized_question(item.question) for item in test
+    _validate_disjoint_splits(
+        calibration,
+        test,
+        first_name="Calibration",
+        second_name="test",
+        compare_fact_families=False,
     )
-    if duplicated_questions:
-        raise DatasetValidationError("Calibration/test questions have normalized exact duplicates.")
 
     return {
         "calibration": calibration_validation["dataset"],
         "test": test_validation["dataset"],
+        "calibration_dataset_sha256": calibration_validation["dataset"]["sha256"],
+        "test_dataset_sha256": test_validation["dataset"]["sha256"],
         "corpus": calibration_validation["corpus"],
         "review": {
             "approved": (
@@ -368,6 +395,58 @@ def validate_dataset_splits(
     }
 
 
+def validate_development_dataset_splits(
+    development: Sequence[EvaluationItem],
+    confirmation: Sequence[EvaluationItem],
+    chunks: Sequence[DocumentChunk],
+) -> dict[str, Any]:
+    """Validate balanced optimization splits and prevent cross-split leakage."""
+
+    development_validation = validate_dataset(
+        development, chunks, kind="development"
+    )
+    confirmation_validation = validate_dataset(
+        confirmation, chunks, kind="confirmation"
+    )
+    unapproved_count = sum(
+        item.review_status != "approved" for item in (*development, *confirmation)
+    )
+    if unapproved_count:
+        raise DatasetValidationError(
+            "Optimization split sealing requires every item to be approved; "
+            f"unapproved record count: {unapproved_count}."
+        )
+    _validate_disjoint_splits(
+        development,
+        confirmation,
+        first_name="Development",
+        second_name="confirmation",
+        compare_fact_families=True,
+    )
+
+    return {
+        "development": development_validation["dataset"],
+        "confirmation": confirmation_validation["dataset"],
+        "development_dataset_sha256": development_validation["dataset"]["sha256"],
+        "confirmation_dataset_sha256": confirmation_validation["dataset"]["sha256"],
+        "corpus": development_validation["corpus"],
+        "review": {
+            "approved": (
+                development_validation["review"]["approved"]
+                + confirmation_validation["review"]["approved"]
+            ),
+            "needs_human_review": (
+                development_validation["review"]["needs_human_review"]
+                + confirmation_validation["review"]["needs_human_review"]
+            ),
+            "answerable_missing_answer_facts": (
+                development_validation["review"]["answerable_missing_answer_facts"]
+                + confirmation_validation["review"]["answerable_missing_answer_facts"]
+            ),
+        },
+    }
+
+
 def validate_dataset(
     items: Sequence[EvaluationItem],
     chunks: Sequence[DocumentChunk],
@@ -379,6 +458,8 @@ def validate_dataset(
     expected_counts = {
         "calibration": (12, 8),
         "test": (30, 15),
+        "development": (80, 40),
+        "confirmation": (40, 20),
     }
     expected_answerable, expected_unanswerable = expected_counts[kind]
     _validate_dataset_shape(
@@ -522,6 +603,59 @@ def _validate_dataset_shape(
         missing = sorted(required - set(answerable_types))
         if missing:
             raise DatasetValidationError(f"Held-out test misses required question types: {missing}")
+    if kind in {"development", "confirmation"}:
+        missing_fact_families = [item.id for item in items if item.fact_family_id is None]
+        if missing_fact_families:
+            raise DatasetValidationError(
+                f"{kind} items require fact_family_id; missing record count: "
+                f"{len(missing_fact_families)}."
+            )
+        invalid_identifier_count = sum(
+            not _is_opaque_identifier(item.id)
+            or not _is_opaque_identifier(item.fact_family_id or "")
+            or any(
+                not _is_opaque_identifier(fact.id)
+                for fact in item.expected_answer_facts
+            )
+            for item in items
+        )
+        if invalid_identifier_count:
+            raise DatasetValidationError(
+                f"{kind} requires opaque lowercase item, fact-family, and expected-fact IDs; "
+                f"invalid record count: {invalid_identifier_count}."
+            )
+        for answerable, expected_count in (
+            (True, expected_answerable),
+            (False, expected_unanswerable),
+        ):
+            language_counts = Counter(
+                item.language for item in items if item.answerable is answerable
+            )
+            expected_per_language = expected_count // 2
+            if language_counts != {
+                "en": expected_per_language,
+                "vi": expected_per_language,
+            }:
+                label = "answerable" if answerable else "unanswerable"
+                raise DatasetValidationError(
+                    f"{kind} {label} items require exactly {expected_per_language} EN and "
+                    f"{expected_per_language} VI questions; found "
+                    f"{language_counts['en']} and {language_counts['vi']}."
+                )
+        answerable_type_counts = Counter(
+            item.question_type for item in items if item.answerable
+        )
+        minimum = _OPTIMIZATION_TYPE_MINIMUMS[kind]
+        below_quota = {
+            question_type: answerable_type_counts[question_type]
+            for question_type in sorted(_OPTIMIZATION_ANSWERABLE_TYPES)
+            if answerable_type_counts[question_type] < minimum
+        }
+        if below_quota:
+            raise DatasetValidationError(
+                f"{kind} answerable question-type quota is at least {minimum} per type; "
+                f"below quota: {below_quota}"
+            )
 
 
 def _dataset_summary(items: Sequence[EvaluationItem]) -> dict[str, Any]:
@@ -539,3 +673,44 @@ def _dataset_summary(items: Sequence[EvaluationItem]) -> dict[str, Any]:
 def _normalized_question(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", normalized)).strip()
+
+
+def _is_opaque_identifier(value: str) -> bool:
+    return re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", value) is not None
+
+
+def _validate_disjoint_splits(
+    first: Sequence[EvaluationItem],
+    second: Sequence[EvaluationItem],
+    *,
+    first_name: str,
+    second_name: str,
+    compare_fact_families: bool,
+) -> None:
+    first_ids = {item.id for item in first}
+    duplicate_ids = first_ids.intersection(item.id for item in second)
+    split_label = f"{first_name}/{second_name}"
+    if duplicate_ids:
+        raise DatasetValidationError(
+            f"{split_label} IDs overlap: {sorted(duplicate_ids)}"
+        )
+    first_questions = {_normalized_question(item.question) for item in first}
+    duplicated_questions = first_questions.intersection(
+        _normalized_question(item.question) for item in second
+    )
+    if duplicated_questions:
+        raise DatasetValidationError(
+            f"{split_label} questions have normalized exact duplicates."
+        )
+    if not compare_fact_families:
+        return
+    first_families = {
+        item.fact_family_id for item in first if item.fact_family_id is not None
+    }
+    duplicate_families = first_families.intersection(
+        item.fact_family_id for item in second if item.fact_family_id is not None
+    )
+    if duplicate_families:
+        raise DatasetValidationError(
+            f"{split_label} fact families overlap: {sorted(duplicate_families)}"
+        )

@@ -15,7 +15,7 @@ from app.domain.evidence import EvidenceGate as EvidenceGate
 from app.domain.evidence import EvidenceGateDecision as EvidenceGateDecision
 from app.domain.evidence import EvidenceSelectionError, select_evidence_candidates
 from app.domain.generation import AnswerGenerator, TokenUsage
-from app.domain.retrieval import QueryRetriever, RetrievalCandidate
+from app.domain.retrieval import QueryRetriever, RetrievalCandidate, RetrievalTrace
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
 from app.request_context import request_id
 
@@ -60,6 +60,9 @@ class QueryExecution:
     evidence_candidates: tuple[RetrievalCandidate, ...] = ()
     evidence_duplicate_groups: tuple[EvidenceDuplicateGroup, ...] = ()
     generation_attempts: int = 0
+    retrieval_trace: RetrievalTrace | None = None
+    evidence_context_chars: int = 0
+    evidence_truncated_source_ids: tuple[str, ...] = ()
 
 
 class QuerySettings(Protocol):
@@ -107,6 +110,7 @@ class QueryService:
                 gate_ms=0.0,
                 candidates=tuple(retrieved.candidates),
                 candidate_pool=candidate_pool,
+                retrieval_trace=retrieved.trace,
             )
         candidates = list(selection.candidates)
 
@@ -124,6 +128,7 @@ class QueryService:
                 candidate_pool=candidate_pool,
                 evidence_candidates=selection.candidates,
                 evidence_duplicate_groups=selection.duplicate_groups,
+                retrieval_trace=retrieved.trace,
             )
 
         try:
@@ -141,6 +146,7 @@ class QueryService:
                 candidate_pool=candidate_pool,
                 evidence_candidates=selection.candidates,
                 evidence_duplicate_groups=selection.duplicate_groups,
+                retrieval_trace=retrieved.trace,
             )
 
         generation_ms = 0.0
@@ -171,6 +177,9 @@ class QueryService:
                     evidence_candidates=selection.candidates,
                     evidence_duplicate_groups=selection.duplicate_groups,
                     generation_attempts=attempt + 1,
+                    retrieval_trace=retrieved.trace,
+                    evidence_context_chars=len(evidence.text),
+                    evidence_truncated_source_ids=evidence.truncated_source_ids,
                 )
             except GenerationValidationError as exc:
                 generation_ms += (perf_counter() - generation_started) * 1000
@@ -191,6 +200,9 @@ class QueryService:
                     evidence_candidates=selection.candidates,
                     evidence_duplicate_groups=selection.duplicate_groups,
                     generation_attempts=attempt + 1,
+                    retrieval_trace=retrieved.trace,
+                    evidence_context_chars=len(evidence.text),
+                    evidence_truncated_source_ids=evidence.truncated_source_ids,
                 )
             generation_ms += (perf_counter() - generation_started) * 1000
             usage = _combine_usage(usage, generated.usage)
@@ -216,6 +228,9 @@ class QueryService:
                         evidence_candidates=selection.candidates,
                         evidence_duplicate_groups=selection.duplicate_groups,
                         generation_attempts=attempt + 1,
+                        retrieval_trace=retrieved.trace,
+                        evidence_context_chars=len(evidence.text),
+                        evidence_truncated_source_ids=evidence.truncated_source_ids,
                     )
                 citations = build_citations(
                     validated.source_ids,
@@ -244,6 +259,9 @@ class QueryService:
                     evidence_candidates=selection.candidates,
                     evidence_duplicate_groups=selection.duplicate_groups,
                     generation_attempts=attempt + 1,
+                    retrieval_trace=retrieved.trace,
+                    evidence_context_chars=len(evidence.text),
+                    evidence_truncated_source_ids=evidence.truncated_source_ids,
                 )
             citation_ms += (perf_counter() - citation_started) * 1000
             response = QueryResponse(
@@ -270,6 +288,9 @@ class QueryService:
                 evidence_candidates=selection.candidates,
                 evidence_duplicate_groups=selection.duplicate_groups,
                 generation_attempts=attempt + 1,
+                retrieval_trace=retrieved.trace,
+                evidence_context_chars=len(evidence.text),
+                evidence_truncated_source_ids=evidence.truncated_source_ids,
             )
 
         raise RuntimeError("Correction loop terminated without a query result.")
@@ -290,6 +311,9 @@ class QueryService:
         evidence_candidates: tuple[RetrievalCandidate, ...] = (),
         evidence_duplicate_groups: tuple[EvidenceDuplicateGroup, ...] = (),
         generation_attempts: int = 0,
+        retrieval_trace: RetrievalTrace | None = None,
+        evidence_context_chars: int = 0,
+        evidence_truncated_source_ids: tuple[str, ...] = (),
     ) -> QueryExecution:
         timings = _timings(
             total_started=total_started,
@@ -314,6 +338,9 @@ class QueryService:
             evidence_candidates=evidence_candidates,
             evidence_duplicate_groups=evidence_duplicate_groups,
             generation_attempts=generation_attempts,
+            retrieval_trace=retrieval_trace,
+            evidence_context_chars=evidence_context_chars,
+            evidence_truncated_source_ids=evidence_truncated_source_ids,
         )
 
 

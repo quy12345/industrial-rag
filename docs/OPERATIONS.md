@@ -47,13 +47,79 @@ Always inspect `--help` first. Commands are adapters; reusable logic is owned by
 | `scripts.operations.ingest_preview` | Inspect deterministic parsing/chunking output | Docling/model cache; writes preview files |
 | `scripts.operations.query_smoke` | Run a bounded end-to-end query diagnostic | Qdrant/models and possibly a provider, according to flags |
 | `scripts.operations.validate_query_runtime` | Validate current retrieval runtime | Qdrant and local retrieval/reranker models |
-| `scripts.evaluation.validate_dataset` | Validate frozen dataset structure | Reads frozen evaluation files only |
+| `scripts.evaluation.validate_dataset` | Validate the legacy or optimization dataset pair | Reads frozen evaluation files only |
 | `scripts.evaluation.evaluate_retrieval` | Produce current retrieval evaluation | Qdrant and local models; writes a versioned artifact |
 | `scripts.evaluation.evaluate_e2e` | Run approval-gated generation evaluation | May call a real provider and write a checkpoint/artifact |
 
 Historical commands under `scripts/archive/` are unsupported provenance snapshots. Do not infer that
 they are safe because they remain in Git; some can mutate Qdrant, overwrite artifacts, or call a
 provider.
+
+## Dataset validation suites
+
+`scripts.evaluation.validate_dataset` defaults to the legacy `calibration`/`test` pair. When the
+separately approved optimization inputs are present, select the new pair explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.evaluation.validate_dataset `
+  --suite optimization `
+  --output artifacts/metrics/atv320-optimization-dataset-validation.json
+```
+
+The optimization contract requires 120 development items (80 answerable, 40 unanswerable) and 60
+confirmation items (40 answerable, 20 unanswerable). Within each answerability class, each split is
+balanced equally between English and Vietnamese. Every optimization item has a non-blank
+`fact_family_id` (the field remains optional for legacy items). Each of the nine answerable question
+types has a minimum quota of eight development items and four confirmation items; the pair must be
+disjoint by item ID, normalized exact question, and fact family. The validator also checks
+answerable qrels, expected documents, pages, phrases, and the frozen corpus as it does for the
+legacy suite.
+
+Use opaque lowercase item IDs, `fact_family_id` values, and expected-fact IDs (letters, digits, `.`,
+`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v9 rows retain
+these IDs so later paired and clustered comparisons can group translations/paraphrases and diagnose
+fact outcomes without persisting the underlying question or expected fact.
+
+This command reads both payloads plus the frozen chunks and validates their structure; it does not
+validate manifest path containment, authorize tuning, or authorize provider egress. Its sanitized
+JSON output includes both dataset hashes and the frozen corpus identity, so the reviewed output can
+serve as the hash manifest without a one-off generator. Pair validation emits that sealing report
+only when all 180 optimization records are explicitly `approved`; single-split validation remains
+available through `evaluation.dataset.validate_dataset` while annotations are still drafts.
+Development
+is the inspectable optimization surface. A development E2E run reads only that split and requires
+its manifest to carry the sealed confirmation hash; it does not open the confirmation payload. E2E
+requires the confirmation dataset and manifest to remain under
+`data/eval/atv320/private-confirmation-v1/`, uses separate confirmation approval tokens, and rejects
+partial `--item-id` or `--max-queries` runs.
+
+Development permits `--item-id` or `--max-queries` diagnostics only when both `--output` and
+`--checkpoint` are explicit, preventing a partial trace from replacing or blocking the default full
+development artifact.
+
+Sealed held-out v2 likewise rejects `--item-id` and `--max-queries`; checkpoint resume is the only
+supported way to continue an interrupted full sealed run.
+
+Optimization E2E is also provider- and cost-bearing. After the datasets, manifests, and egress have
+been explicitly approved, use the dataset-specific generator token below; add the independent
+semantic token only when `--semantic-judge ragas` is requested.
+
+| Dataset | Generator approval token | Optional semantic approval token |
+| --- | --- | --- |
+| development | `APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS` | `APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS EGRESS` |
+| confirmation | `APPROVE ATV320 CONFIRMATION GENERATOR EGRESS` | `APPROVE ATV320 CONFIRMATION OPENROUTER RAGAS EGRESS` |
+
+```powershell
+# Inspectable development run; --item-id is allowed only for a sanitized diagnostic.
+.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
+
+# Full sealed confirmation run; partial-selection flags are rejected.
+.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
+  --dataset confirmation `
+  --provider-approval-token "APPROVE ATV320 CONFIRMATION GENERATOR EGRESS"
+```
 
 ## Approved held-out regression run
 
@@ -74,11 +140,20 @@ Python 3.11 before running:
 to remain under `data/eval/phase7/private-heldout-v2/`, then validates their hash, the frozen corpus,
 collection identities, runtime source identity, and configured provider before completing.
 
-The current v8 command writes a resumable sanitized checkpoint to
-`artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and the final sanitized artifact to
-`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`. Existing v7 evidence remains immutable. Neither
-format contains raw questions, evidence, prompts, answers, or provider responses. Never use the
-result to tune the current runtime.
+The current evaluator declares artifact schema v9. If the command above is approved and executed,
+its default paths are `artifacts/metrics/atv320-heldout-v2-e2e-v9-checkpoint.jsonl` and
+`artifacts/metrics/atv320-heldout-v2-e2e-v9.json`. V9 records a sanitized retrieval trace because
+the E2E adapter explicitly opts in; production builders default to `capture_trace=False` and the
+production bootstrap does not opt in. The artifact includes stage counts, IDs, ranks, and allowlisted
+role signals, but still excludes raw questions, evidence, prompts, answers, and provider responses.
+Reviewed expected-fact text is also excluded; only fact IDs, matcher outcomes, counts, and positions
+are persisted.
+
+Schema availability is not execution evidence. The latest executed held-out result remains the v8
+checkpoint at `artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and final artifact at
+`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9 held-out run is claimed. Existing v7 and v8
+evidence remain immutable. A v8 checkpoint cannot resume under schema v9/source identity v5. Never
+use any held-out result to tune the current runtime.
 
 ## Optional Ragas semantic evaluation
 
@@ -141,10 +216,10 @@ run shown above:
 --judge-provider-approval-token "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
 ```
 
-V8 checkpoints fail closed if the schema, source identity, judge model, embedding model, metric
-configuration, or input policy differs. Only a fully answered item with all three finite semantic
-scores is checkpointed. Abstentions are recorded as not applicable and excluded from semantic
-denominators. Deterministic quality gates remain the only source of exit code `0` or `2`.
+Schema-v9 checkpoints fail closed if the schema, source identity, judge model, embedding model,
+metric configuration, or input policy differs. Only a fully answered item with all three finite
+semantic scores is checkpointed. Abstentions are recorded as not applicable and excluded from
+semantic denominators. Deterministic quality gates remain the only source of exit code `0` or `2`.
 
 ## Reproduce ingestion without indexing
 

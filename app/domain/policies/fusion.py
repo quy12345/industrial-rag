@@ -192,11 +192,19 @@ def select_coverage_preserving_candidates(
     *,
     profile: FusionProfile,
     query_role: QueryRole,
+    fused_candidates: Sequence[RetrievalCandidate] | None = None,
 ) -> list[RetrievalCandidate]:
     """Keep bounded component reserves, then fill remaining slots by weighted RRF."""
 
-    fused = fuse_weighted_rrf(
-        dense_candidates, sparse_candidates, profile=profile, query_role=query_role
+    fused = (
+        list(fused_candidates)
+        if fused_candidates is not None
+        else fuse_weighted_rrf(
+            dense_candidates,
+            sparse_candidates,
+            profile=profile,
+            query_role=query_role,
+        )
     )
     mandatory_ids = {candidate.chunk_id for candidate in dense_candidates[: profile.dense_reserve]}
     mandatory_ids.update(

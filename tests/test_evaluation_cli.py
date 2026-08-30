@@ -15,10 +15,25 @@ from scripts.evaluation import validate_dataset as validation_cli
 def test_dataset_validation_parser_preserves_cli_contract() -> None:
     args = validation_cli._build_parser().parse_args([])
 
+    assert args.suite == "legacy"
     assert args.calibration == Path("data/eval/phase7/calibration.jsonl")
     assert args.test == Path("data/eval/phase7/test.jsonl")
+    assert args.development == Path("data/eval/atv320/development-v1.jsonl")
+    assert args.confirmation == Path(
+        "data/eval/atv320/private-confirmation-v1/confirmation-v1.jsonl"
+    )
     assert args.chunks == Path("artifacts/phase7/frozen-chunks.jsonl")
-    assert args.output == Path("artifacts/metrics/phase-7-dataset-validation.json")
+    assert args.output is None
+    assert validation_cli._output_path(args) == Path(
+        "artifacts/metrics/phase-7-dataset-validation.json"
+    )
+
+    optimization = validation_cli._build_parser().parse_args(
+        ["--suite", "optimization"]
+    )
+    assert validation_cli._output_path(optimization) == Path(
+        "artifacts/metrics/atv320-optimization-dataset-validation.json"
+    )
 
 
 def test_dataset_validation_cli_coordinates_injected_offline_helpers(
@@ -26,8 +41,11 @@ def test_dataset_validation_cli_coordinates_injected_offline_helpers(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     args = SimpleNamespace(
+        suite="legacy",
         calibration=Path("calibration.jsonl"),
         test=Path("test.jsonl"),
+        development=Path("development.jsonl"),
+        confirmation=Path("confirmation.jsonl"),
         chunks=Path("chunks.jsonl"),
         output=Path("report.json"),
     )
@@ -68,6 +86,48 @@ def test_dataset_validation_cli_coordinates_injected_offline_helpers(
     assert reads == [args.calibration, args.test]
     assert written == [(args.output, report)]
     assert capsys.readouterr().out == "ATV320 dataset validation PASS: report.json\n"
+
+
+def test_dataset_validation_cli_coordinates_optimization_splits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = SimpleNamespace(
+        suite="optimization",
+        calibration=Path("calibration.jsonl"),
+        test=Path("test.jsonl"),
+        development=Path("development.jsonl"),
+        confirmation=Path("confirmation.jsonl"),
+        chunks=Path("chunks.jsonl"),
+        output=Path("report.json"),
+    )
+    development = [object()]
+    confirmation = [object()]
+    chunks = [object()]
+    observed: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        validation_cli,
+        "_build_parser",
+        lambda: SimpleNamespace(parse_args=lambda: args),
+    )
+    monkeypatch.setattr(
+        validation_cli,
+        "read_dataset",
+        lambda path: development if path == args.development else confirmation,
+    )
+    monkeypatch.setattr(validation_cli, "load_frozen_chunks", lambda path: chunks)
+    monkeypatch.setattr(
+        validation_cli,
+        "validate_development_dataset_splits",
+        lambda actual_development, actual_confirmation, actual_chunks: observed.append(
+            (actual_development, actual_confirmation, actual_chunks)
+        )
+        or {"status": "valid"},
+    )
+    monkeypatch.setattr(validation_cli, "write_json_atomic", lambda path, payload: None)
+
+    assert validation_cli.main() == 0
+    assert observed == [(development, confirmation, chunks)]
 
 
 def test_dataset_validation_cli_preserves_argparse_error_mapping(

@@ -119,6 +119,7 @@ def test_evidence_labels_mapping_and_format_are_deterministic() -> None:
     assert first.text == second.text
     assert tuple(first.source_map) == ("S1", "S2")
     assert first.source_map["S1"] is candidates[0]
+    assert first.truncated_source_ids == ()
     assert "pages: 1, 3" in first.text
     assert "heading: Power > Limits" in first.text
     assert "document_title: n/a" in first.text
@@ -205,6 +206,7 @@ def test_evidence_context_is_bounded_and_unicode_safe() -> None:
         [_candidate("a", text=text), _candidate("b", text=text)], max_chars=4_000
     )
     assert len(bundle.text) <= 4_000
+    assert bundle.truncated_source_ids == ("S1", "S2")
     assert "[…truncated…]" in bundle.text
     bundle.text.encode("utf-8")
 

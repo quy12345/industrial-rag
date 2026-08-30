@@ -10,7 +10,7 @@ from app.application.query_service import QueryService
 from app.config import Settings
 from app.domain.evidence import EvidenceGate
 from app.domain.generation import GeneratedAnswer, GenerationResult, TokenUsage
-from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate
+from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate, RetrievalTrace
 from app.errors import (
     GenerationValidationError,
     LLMRefusalError,
@@ -131,6 +131,33 @@ def test_execution_keeps_full_final_and_pre_rerank_candidates_for_evaluation() -
         "final-2",
     ]
     assert [candidate.chunk_id for candidate in execution.evidence_candidates] == ["final-1"]
+
+
+def test_execution_preserves_opt_in_retrieval_trace_for_evaluation() -> None:
+    final = [_candidate("final-1")]
+    trace = RetrievalTrace(
+        dense_candidates=tuple(final),
+        candidate_pool_post_dedup=tuple(final),
+        candidates_before_rerank=tuple(final),
+        final_candidates=tuple(final),
+        candidate_count_pre_dedup=1,
+        candidate_count_post_dedup=1,
+        candidate_count_before_rerank=1,
+    )
+    retriever = FakeRetriever(final)
+    retriever.retrieve = lambda question, *, document_id: QueryRetrievalResult(
+        final,
+        retrieval_ms=2.0,
+        rerank_ms=3.0,
+        candidate_pool=final,
+        trace=trace,
+    )
+
+    execution = _service(retriever).execute(question="q", document_id=None, top_k=1)
+
+    assert execution.retrieval_trace is trace
+    assert execution.evidence_context_chars > 0
+    assert execution.evidence_truncated_source_ids == ()
 
 
 def test_exact_cross_document_duplicate_is_removed_before_top_k() -> None:

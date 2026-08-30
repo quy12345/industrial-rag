@@ -9,7 +9,10 @@ import pytest
 
 from evaluation.retrieval import (
     aggregate_retrieval_rows,
+    build_corpus_exact_content_equivalence,
     direct_evidence_rank,
+    evidence_rank,
+    exact_equivalent_evidence_rank,
     percentile_nearest_rank,
     phrase_matches,
 )
@@ -56,6 +59,48 @@ def test_retrieval_metric_primitives_are_deterministic() -> None:
     assert direct_evidence_rank(results, {"missing"}) is None
     assert phrase_matches("Cafe\u0301\n menu", "CAF\u00c9 menu")
     assert percentile_nearest_rank([30.0, 10.0, 20.0], 95) == 30.0
+
+
+def test_evidence_rank_keeps_strict_and_exact_equivalent_policies_distinct() -> None:
+    results = [
+        SimpleNamespace(
+            chunk_id="representative",
+            metadata={"equivalent_chunk_ids": ["qrel", "representative", 42]},
+        )
+    ]
+
+    assert direct_evidence_rank(results, {"qrel"}) is None
+    assert (
+        evidence_rank(results, {"qrel"}, include_exact_equivalents=False) is None
+    )
+    assert exact_equivalent_evidence_rank(results, {"qrel"}) == 1
+    assert evidence_rank(results, {"qrel"}, include_exact_equivalents=True) == 1
+
+
+def test_corpus_equivalence_detects_cross_document_exact_content_without_text_output() -> None:
+    chunks = [
+        SimpleNamespace(chunk_id="installation-copy", text="Disconnect all power."),
+        SimpleNamespace(chunk_id="programming-copy", text="  DISCONNECT  ALL POWER.  "),
+        SimpleNamespace(chunk_id="different", text="Block the motor shaft."),
+    ]
+
+    equivalence = build_corpus_exact_content_equivalence(chunks)
+
+    assert equivalence == {
+        "installation-copy": ("installation-copy", "programming-copy"),
+        "programming-copy": ("installation-copy", "programming-copy"),
+    }
+    assert (
+        exact_equivalent_evidence_rank(
+            [SimpleNamespace(chunk_id="programming-copy")],
+            {"installation-copy"},
+            equivalence=equivalence,
+        )
+        == 1
+    )
+    assert direct_evidence_rank(
+        [SimpleNamespace(chunk_id="programming-copy")], {"installation-copy"}
+    ) is None
 
 
 def test_retrieval_evaluator_hashes_existing_canonical_behavior_owners() -> None:

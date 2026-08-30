@@ -8,6 +8,7 @@ from app.domain.policies.fusion import (
     FusionPolicyError,
     FusionProfile,
     apply_role_aware_rank_fusion,
+    fuse_weighted_rrf,
     select_coverage_preserving_candidates,
 )
 from app.domain.policies.list_completeness import (
@@ -224,6 +225,36 @@ def test_selector_preserves_sparse_tail_evidence_inside_fixed_budget() -> None:
     )
     assert len(result) == 3
     assert "evidence-24" in [candidate.chunk_id for candidate in result]
+
+
+def test_selector_reuses_precomputed_fusion_without_changing_order() -> None:
+    dense = [_candidate("shared", dense_rank=1), _candidate("dense", dense_rank=2)]
+    sparse = [_candidate("shared", sparse_rank=1), _candidate("sparse", sparse_rank=2)]
+    profile = _profile(dense_reserve=1, sparse_reserve=1)
+    fused = fuse_weighted_rrf(
+        dense,
+        sparse,
+        profile=profile,
+        query_role="installation",
+    )
+
+    calculated = select_coverage_preserving_candidates(
+        dense,
+        sparse,
+        profile=profile,
+        query_role="installation",
+    )
+    reused = select_coverage_preserving_candidates(
+        dense,
+        sparse,
+        profile=profile,
+        query_role="installation",
+        fused_candidates=fused,
+    )
+
+    assert [candidate.model_dump() for candidate in reused] == [
+        candidate.model_dump() for candidate in calculated
+    ]
 
 
 def test_role_prior_is_rank_only_and_preserves_cross_encoder_score() -> None:

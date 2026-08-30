@@ -15,7 +15,12 @@ from app.domain.policies.query_analysis import (
     augment_vietnamese_technical_query,
 )
 from app.domain.reranking import RerankingError
-from app.domain.retrieval import QueryRetrievalResult, QueryRetriever, SparseSearchPort
+from app.domain.retrieval import (
+    QueryRetrievalResult,
+    QueryRetriever,
+    RetrievalTrace,
+    SparseSearchPort,
+)
 from app.domain.retrieval_contracts import FrozenRetrievalContract
 from app.errors import RerankerUnavailableError, RetrievalError, RetrievalUnavailableError
 from app.infrastructure.models.reranker import FastEmbedCrossEncoder
@@ -69,15 +74,23 @@ class UnionRerankRetriever:
             candidate_pool=list(
                 getattr(execution, "candidates_before_rerank", execution.candidates_after_rerank)
             ),
+            trace=getattr(execution, "trace", None),
         )
 
 
 class SparseRollbackRetriever:
     """Explicit no-reranker operational rollback using the v2 sparse vector."""
 
-    def __init__(self, *, searcher: SparseSearchPort, settings: Settings) -> None:
+    def __init__(
+        self,
+        *,
+        searcher: SparseSearchPort,
+        settings: Settings,
+        capture_trace: bool = False,
+    ) -> None:
         self.searcher = searcher
         self.settings = settings
+        self.capture_trace = capture_trace
 
     def retrieve(self, question: str, *, document_id: str | None) -> QueryRetrievalResult:
         started = perf_counter()
@@ -95,6 +108,20 @@ class SparseRollbackRetriever:
             retrieval_ms=(perf_counter() - started) * 1000,
             rerank_ms=0.0,
             candidate_pool=list(candidates),
+            trace=(
+                RetrievalTrace(
+                    sparse_candidates=tuple(candidates),
+                    selected_candidates_pre_dedup=tuple(candidates),
+                    candidate_pool_post_dedup=tuple(candidates),
+                    candidates_before_rerank=tuple(candidates),
+                    final_candidates=tuple(candidates),
+                    candidate_count_pre_dedup=len(candidates),
+                    candidate_count_post_dedup=len(candidates),
+                    candidate_count_before_rerank=len(candidates),
+                )
+                if self.capture_trace
+                else None
+            ),
         )
 
 
@@ -121,12 +148,17 @@ def build_query_retriever(
     settings: Settings,
     *,
     contract: FrozenRetrievalContract,
+    capture_trace: bool = False,
 ) -> QueryRetriever:
     """Validate the selected runtime and build only dependencies that strategy needs."""
 
     validate_retrieval_settings(settings, contract)
     if settings.retrieval_strategy == "union":
-        pipeline, _ = build_union_rerank_runtime(settings, contract=contract)
+        pipeline, _ = build_union_rerank_runtime(
+            settings,
+            contract=contract,
+            capture_trace=capture_trace,
+        )
         return UnionRerankRetriever(pipeline)
     try:
         client = create_qdrant_client(settings)
@@ -153,6 +185,7 @@ def build_query_retriever(
                 embedding_model=sparse_model,
             ),
             settings=settings,
+            capture_trace=capture_trace,
         )
     except RetrievalError as exc:
         raise RetrievalUnavailableError("Unable to initialize frozen retrieval runtime.") from exc
@@ -164,6 +197,7 @@ def build_union_rerank_runtime(
     settings: Settings,
     *,
     contract: FrozenRetrievalContract,
+    capture_trace: bool = False,
 ) -> tuple[RerankPipeline, dict[str, Any]]:
     """Build one explicit frozen union pipeline without host artifact dependencies."""
 
@@ -239,6 +273,7 @@ def build_union_rerank_runtime(
             ),
             union_rrf_prune_limit=contract.union_rrf_prune_limit,
             fusion_profile=contract.fusion_profile,
+            capture_trace=capture_trace,
         )
         return pipeline, _runtime_metadata(settings, contract, dense_dimension=dimension)
     except RetrievalUnavailableError:

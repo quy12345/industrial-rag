@@ -62,6 +62,13 @@ def format_evidence(
     if overhead >= max_chars:
         raise GenerationValidationError("Evidence context limit is too small for source metadata.")
     allocations = _allocate_content_chars(contents, max_chars - overhead)
+    truncated_source_ids = tuple(
+        source_id
+        for source_id, content, allocation in zip(
+            source_map, contents, allocations, strict=True
+        )
+        if len(content) > allocation
+    )
     blocks = [
         header + _truncate_to_allocation(content, allocation) + suffix
         for header, content, allocation in zip(headers, contents, allocations, strict=True)
@@ -69,7 +76,11 @@ def format_evidence(
     rendered = "\n\n".join(blocks)
     if len(rendered) > max_chars:
         raise GenerationValidationError("Evidence formatter exceeded its configured context limit.")
-    return EvidenceBundle(text=rendered, source_map=source_map)
+    return EvidenceBundle(
+        text=rendered,
+        source_map=source_map,
+        truncated_source_ids=truncated_source_ids,
+    )
 
 
 def build_correction_text(errors: Sequence[str]) -> str:

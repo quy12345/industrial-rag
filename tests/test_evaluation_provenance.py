@@ -13,6 +13,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 
 CANONICAL_SOURCE_IDENTITY_PATHS = {
     "citation_policy": Path("app/domain/citations.py"),
+    "content_identity": Path("app/domain/content_identity.py"),
     "dataset_contract": Path("evaluation/dataset.py"),
     "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
     "evaluator": Path("evaluation/e2e.py"),
@@ -20,11 +21,13 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
     "evidence_policy": Path("app/domain/evidence.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
     "generation_adapter": Path("app/infrastructure/generation/langchain_structured.py"),
+    "generation_contract": Path("app/domain/generation.py"),
     "generation_prompt_policy": Path("app/application/generation_prompt.py"),
     "list_completeness_policy": Path("app/domain/policies/list_completeness.py"),
     "query_analysis_policy": Path("app/domain/policies/query_analysis.py"),
     "query_role_policy": Path("app/domain/policies/query_roles.py"),
     "query_service": Path("app/application/query_service.py"),
+    "retrieval_types": Path("app/domain/retrieval.py"),
     "reranker_adapter": Path("app/infrastructure/models/reranker.py"),
     "reranking_service": Path("app/application/reranking_service.py"),
     "retrieval_metrics": Path("evaluation/retrieval.py"),
@@ -36,8 +39,8 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
 }
 
 
-def test_e2e_source_identity_v4_hashes_canonical_behavior_owners() -> None:
-    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 4
+def test_e2e_source_identity_v5_hashes_canonical_behavior_owners() -> None:
+    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 5
     assert evaluate_e2e.SOURCE_IDENTITY_PATHS == CANONICAL_SOURCE_IDENTITY_PATHS
 
     expected_files = {
@@ -46,7 +49,7 @@ def test_e2e_source_identity_v4_hashes_canonical_behavior_owners() -> None:
     }
 
     assert evaluate_e2e._source_identity() == {
-        "version": 4,
+        "version": 5,
         "files": expected_files,
         "system_prompt_sha256": (
             "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"
@@ -54,8 +57,8 @@ def test_e2e_source_identity_v4_hashes_canonical_behavior_owners() -> None:
     }
 
 
-def test_v7_checkpoint_fails_closed_under_source_identity_v4(tmp_path: Path) -> None:
-    checkpoint = tmp_path / "legacy-v7-checkpoint.jsonl"
+def test_v8_checkpoint_fails_closed_under_source_identity_v5(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "legacy-v8-checkpoint.jsonl"
     legacy_identity = {
         "source_identity": {
             "prompt": "legacy",

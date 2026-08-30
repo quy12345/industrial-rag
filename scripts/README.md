@@ -38,7 +38,7 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
 
 `scripts/evaluation/` owns three current adapters:
 
-- validate frozen dataset splits;
+- validate either the legacy frozen pair or the development/confirmation optimization pair;
 - evaluate retrieval and write the versioned retrieval artifact;
 - run approval-gated end-to-end generation evaluation.
 
@@ -50,8 +50,11 @@ the separate evaluator image and requires an independent OpenRouter approval tok
 `none` mode does not import Ragas. The OpenRouter gateway is pinned to OpenAI upstream endpoints with
 provider fallback disabled. The `test` choice is the public regression split; `heldout-v2` is a
 separate sealed private split with path and manifest containment checks. Exposed held-out v2 is
-regression evidence, not tuning data. See [Operations](../docs/OPERATIONS.md) for the two-run
-calibration preflight and sanitized v8 artifact contract.
+regression evidence, not tuning data. The E2E adapter declares sanitized artifact schema v9 and
+explicitly opts into retrieval tracing; normal production composition leaves tracing disabled. A
+schema declaration is not proof of execution: the latest executed held-out artifact remains v8,
+and no v9 held-out result is claimed. See [Operations](../docs/OPERATIONS.md) for dataset-suite
+validation, the two-run calibration preflight, and artifact provenance.
 
 ## Archive
 

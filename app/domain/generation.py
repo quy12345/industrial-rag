@@ -36,6 +36,7 @@ class EvidenceBundle:
 
     text: str
     source_map: dict[str, RetrievalCandidate]
+    truncated_source_ids: tuple[str, ...] = ()
 
     @property
     def allowed_source_ids(self) -> tuple[str, ...]:

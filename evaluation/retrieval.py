@@ -5,14 +5,41 @@ from __future__ import annotations
 import math
 import unicodedata
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
+
+from app.domain.content_identity import evidence_content_fingerprint
 
 
 class RetrievedLike(Protocol):
     """Minimum result identity required by direct-evidence metrics."""
 
     chunk_id: str
+
+
+class ContentLike(Protocol):
+    """Minimum corpus fields required to derive exact-content equivalence."""
+
+    chunk_id: str
+    text: str
+
+
+def build_corpus_exact_content_equivalence(
+    chunks: Sequence[ContentLike],
+) -> dict[str, tuple[str, ...]]:
+    """Map each chunk ID to corpus-wide exact-normalized content alternatives."""
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    for chunk in chunks:
+        groups[evidence_content_fingerprint(chunk.text)].append(chunk.chunk_id)
+    result: dict[str, tuple[str, ...]] = {}
+    for members in groups.values():
+        alternatives = tuple(sorted(set(members)))
+        if len(alternatives) < 2:
+            continue
+        for chunk_id in alternatives:
+            result[chunk_id] = alternatives
+    return result
 
 
 def phrase_matches(text: str, expected_phrase: str) -> bool:
@@ -26,14 +53,81 @@ def direct_evidence_rank(
 ) -> int | None:
     """Return the first one-based result rank whose stable chunk ID is a qrel."""
 
+    return evidence_rank(
+        results,
+        relevant_chunk_ids,
+        include_exact_equivalents=False,
+    )
+
+
+def exact_equivalent_evidence_rank(
+    results: Sequence[RetrievedLike],
+    relevant_chunk_ids: set[str],
+    *,
+    equivalence: Mapping[str, Sequence[str]] | None = None,
+) -> int | None:
+    """Return the first rank matching a qrel or its declared exact-content equivalent."""
+
+    return evidence_rank(
+        results,
+        expand_exact_content_ids(relevant_chunk_ids, equivalence=equivalence),
+        include_exact_equivalents=True,
+    )
+
+
+def expand_exact_content_ids(
+    chunk_ids: set[str],
+    *,
+    equivalence: Mapping[str, Sequence[str]] | None,
+) -> set[str]:
+    """Expand qrel IDs only through a precomputed exact-content map."""
+
+    expanded = set(chunk_ids)
+    if equivalence is None:
+        return expanded
+    for chunk_id in chunk_ids:
+        expanded.update(equivalence.get(chunk_id, ()))
+    return expanded
+
+
+def evidence_rank(
+    results: Sequence[RetrievedLike],
+    relevant_chunk_ids: set[str],
+    *,
+    include_exact_equivalents: bool,
+) -> int | None:
+    """Return the first qrel rank under an explicit strict or exact-equivalent policy."""
+
     return next(
         (
             rank
             for rank, result in enumerate(results, start=1)
-            if result.chunk_id in relevant_chunk_ids
+            if relevant_chunk_ids.intersection(
+                _result_chunk_ids(
+                    result,
+                    include_exact_equivalents=include_exact_equivalents,
+                )
+            )
         ),
         None,
     )
+
+
+def _result_chunk_ids(
+    result: RetrievedLike, *, include_exact_equivalents: bool
+) -> set[str]:
+    chunk_ids = {result.chunk_id}
+    if not include_exact_equivalents:
+        return chunk_ids
+    metadata = getattr(result, "metadata", None)
+    if not isinstance(metadata, dict):
+        return chunk_ids
+    equivalent_ids = metadata.get("equivalent_chunk_ids", ())
+    if isinstance(equivalent_ids, (list, tuple, set, frozenset)):
+        chunk_ids.update(
+            chunk_id for chunk_id in equivalent_ids if isinstance(chunk_id, str)
+        )
+    return chunk_ids
 
 
 def percentile_nearest_rank(values: Sequence[float], percentile: int) -> float:

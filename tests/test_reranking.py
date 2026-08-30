@@ -19,6 +19,7 @@ from app.application.reranking_service import (
     rerank_candidates,
 )
 from app.config import Settings
+from app.domain.policies.fusion import FusionProfile
 from app.domain.reranking import CrossEncoderScore, RerankingError
 from app.domain.retrieval import RetrievalCandidate, RetrievedChunk
 from app.infrastructure.models.reranker import (
@@ -370,6 +371,148 @@ def test_pipeline_content_dedup_is_opt_in() -> None:
     assert "content_deduplication" in execution.stage_latency_ms
 
 
+def test_pipeline_trace_captures_boundaries_without_changing_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_dense(*args, **kwargs):
+        return [
+            _dense("dense-a", 0.9).model_copy(update={"text": "same content"}),
+            _dense("shared", 0.8),
+        ]
+
+    def fake_sparse(*args, **kwargs):
+        return [
+            _candidate("sparse-a", sparse_rank=1).model_copy(
+                update={"text": " SAME  CONTENT "}
+            ),
+            _candidate("shared", sparse_rank=2),
+        ]
+
+    profile = FusionProfile(
+        name="trace-test",
+        rrf_k=40,
+        dense_weight=1.0,
+        sparse_weight=1.25,
+        fusion_role_multiplier=0.0,
+        dense_reserve=1,
+        sparse_reserve=1,
+        max_candidates=3,
+        post_rerank_role_multiplier=0.0,
+    )
+
+    def execute(*, capture_trace: bool):
+        return RerankPipeline(
+            dense_searcher=DenseSearchStub(fake_dense),
+            sparse_searcher=SparseSearchStub(fake_sparse),
+            cross_encoder=FakeCrossEncoder(),
+            dense_collection="v1",
+            hybrid_collection="v2",
+            deduplicate_content=True,
+            fusion_profile=profile,
+            capture_trace=capture_trace,
+        ).search("q", strategy="union")
+
+    baseline = execute(capture_trace=False)
+    fusion_calls = 0
+    from app.application import reranking_service
+
+    original_fuse = reranking_service.fuse_weighted_rrf
+
+    def counted_fuse(*args, **kwargs):
+        nonlocal fusion_calls
+        fusion_calls += 1
+        return original_fuse(*args, **kwargs)
+
+    monkeypatch.setattr(reranking_service, "fuse_weighted_rrf", counted_fuse)
+    traced = execute(capture_trace=True)
+
+    assert traced.trace is not None
+    trace = traced.trace
+    assert baseline.trace is None
+    assert fusion_calls == 1
+    assert [candidate.model_dump() for candidate in traced.candidates_after_rerank] == [
+        candidate.model_dump() for candidate in baseline.candidates_after_rerank
+    ]
+    assert [candidate.chunk_id for candidate in trace.dense_candidates] == [
+        "dense-a",
+        "shared",
+    ]
+    assert [candidate.chunk_id for candidate in trace.sparse_candidates] == [
+        "sparse-a",
+        "shared",
+    ]
+    assert {candidate.chunk_id for candidate in trace.fused_candidates} == {
+        "dense-a",
+        "sparse-a",
+        "shared",
+    }
+    assert trace.candidate_count_pre_dedup == 3
+    assert trace.candidate_count_post_dedup == 2
+    assert [candidate.chunk_id for candidate in trace.candidate_pool_post_dedup] == [
+        candidate.chunk_id for candidate in traced.candidates_before_rerank
+    ]
+    assert [candidate.chunk_id for candidate in trace.raw_cross_encoder_candidates] == [
+        candidate.chunk_id for candidate in traced.candidates_after_rerank
+    ]
+    assert [candidate.chunk_id for candidate in trace.final_candidates] == [
+        candidate.chunk_id for candidate in traced.candidates_after_rerank
+    ]
+
+
+def test_pipeline_trace_separates_cross_encoder_and_post_policy_order() -> None:
+    def fake_dense(*args, **kwargs):
+        return [
+            _dense("installation", 0.9, document_id="manual-installation"),
+            _dense("programming", 0.8, document_id="manual-programming"),
+        ]
+
+    pipeline = RerankPipeline(
+        dense_searcher=DenseSearchStub(fake_dense),
+        sparse_searcher=SparseSearchStub(lambda *args, **kwargs: []),
+        cross_encoder=FakeCrossEncoder(),
+        dense_collection="v1",
+        hybrid_collection="v2",
+        document_contexts={
+            "manual-installation": {
+                "document_title": "Installation Manual",
+                "document_role": "installation",
+            },
+            "manual-programming": {
+                "document_title": "Programming Manual",
+                "document_role": "programming",
+            },
+        },
+        fusion_profile=FusionProfile(
+            name="trace-role-test",
+            rrf_k=40,
+            dense_weight=1.0,
+            sparse_weight=1.0,
+            fusion_role_multiplier=0.0,
+            dense_reserve=2,
+            sparse_reserve=0,
+            max_candidates=2,
+            post_rerank_role_multiplier=0.5,
+            post_rerank_rank_offset=10,
+        ),
+        capture_trace=True,
+    )
+
+    execution = pipeline.search("electrical installation", strategy="union")
+
+    assert execution.trace is not None
+    assert [
+        candidate.chunk_id for candidate in execution.trace.raw_cross_encoder_candidates
+    ] == ["programming", "installation"]
+    assert [candidate.chunk_id for candidate in execution.trace.final_candidates] == [
+        "installation",
+        "programming",
+    ]
+    assert [candidate.chunk_id for candidate in execution.candidates_after_rerank] == [
+        "installation",
+        "programming",
+    ]
+
+
 def test_pipeline_preserves_document_filter_and_uses_correct_dense_collection() -> None:
     calls: list[tuple[str, str | None]] = []
 
@@ -484,6 +627,7 @@ def test_pipeline_expands_sparse_query_then_rrf_prunes_before_fixed_rerank_budge
         hybrid_collection="v2",
         sparse_query_transform=lambda query: f"{query} expanded",
         union_rrf_prune_limit=3,
+        capture_trace=True,
     )
     pool = pipeline.prepare_pool("q", strategy="union")
     assert sparse_queries == ["q expanded"]
@@ -491,6 +635,12 @@ def test_pipeline_expands_sparse_query_then_rrf_prunes_before_fixed_rerank_budge
     assert all(candidate.rrf_rank is not None for candidate in pool.candidates)
     assert "query_expansion" in pool.stage_latency_ms
     assert "rrf_pruning" in pool.stage_latency_ms
+    assert pool.trace is not None
+    assert pool.trace.candidate_count_pre_dedup == 8
+    assert pool.trace.candidate_count_post_dedup == 8
+    assert pool.trace.candidate_count_before_rerank == 3
+    assert len(pool.trace.candidate_pool_post_dedup) == 8
+    assert pool.trace.candidates_before_rerank == tuple(pool.candidates)
 
 
 def test_importing_module_does_not_construct_fastembed_model() -> None:

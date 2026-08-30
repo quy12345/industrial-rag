@@ -67,6 +67,13 @@ The provider never supplies trusted filenames, pages, or chunk metadata. One cit
 attempt may repair invalid source labels without rerunning retrieval; a second invalid response is a
 safe abstention. Generation cannot run before the evidence gate passes.
 
+Retrieval tracing is an explicit observer boundary. The normal production composition uses the
+default `capture_trace=False` and does not opt in; the current E2E evaluator opts in when it builds
+the retriever. An enabled trace keeps immutable candidate snapshots in memory across dense, sparse,
+fusion, pre/post-deduplication, raw cross-encoder, and final policy stages. Evaluation serializes
+only allowlisted IDs, counts, ranks, and role signals, never candidate text. Enabling the observer
+does not change final retrieval ordering or scores, and the public HTTP response remains unchanged.
+
 ## Ingestion and indexing flow
 
 ```text
@@ -113,6 +120,24 @@ third pipeline.
 The collection labels and frozen paths under `data/eval/phase7/` and `artifacts/phase7/` are physical
 or historical identities. They are intentionally not renamed by a source-code cleanup.
 
+## Evaluation contracts
+
+`evaluation/dataset.py` owns two split-pair contracts. The legacy pair remains `calibration`/`test`.
+The optimization pair is development (120 items: 80 answerable and 40 unanswerable) plus sealed
+confirmation (60 items: 40 answerable and 20 unanswerable). Both optimization splits require equal
+English/Vietnamese balance within each answerability class and non-blank `fact_family_id`; that field
+remains optional for legacy items. Their answerable records must cover `mounting`, `safety`,
+`menu_navigation`, `parameter_code`, `fault_diagnosis`, `wiring`, `table_lookup`,
+`ordered_procedure`, and `cross_document`, with at least eight answerable development items and four
+answerable confirmation items per type. Pair validation rejects overlapping item IDs, normalized
+exact questions, or fact families.
+
+The E2E evaluator emits sanitized schema-v9 checkpoints and artifacts. Its per-query trace exposes
+retrieval-boundary diagnostics and exact-content-equivalent ranks/document provenance for analysis.
+Strict qrel identity, expected-document metrics, failure classification, and deterministic release
+gates remain authoritative and are not relaxed by those diagnostics. Current production composition
+does not capture the trace.
+
 ## Invariants
 
 - API routes, request/response schemas, status mapping, citation validation, and abstention behavior
@@ -122,6 +147,7 @@ or historical identities. They are intentionally not renamed by a source-code cl
 - Stable IDs connect ingestion, Qdrant payloads, qrels, citations, and regression artifacts.
 - Production runtime must not reach evaluation or script implementations.
 - Evaluation may observe public contracts but cannot influence production decisions.
+- An artifact schema or default output path is not proof that an evaluation run was executed.
 - Tests remain offline and use fakes or in-memory Qdrant unless an integration command is explicitly
   approved.
 - No missing dependency, collection, model, provider, or source identity triggers a silent fallback.

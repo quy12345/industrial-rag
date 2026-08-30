@@ -17,7 +17,9 @@ from evaluation.dataset import (
     dataset_sha256,
     expand_exact_equivalent_qrels,
     read_dataset,
+    validate_dataset,
     validate_dataset_splits,
+    validate_development_dataset_splits,
     validate_source_records,
 )
 
@@ -107,6 +109,64 @@ def _valid_sets() -> tuple[list[EvaluationItem], list[EvaluationItem], list[Docu
     return calibration, test, chunks
 
 
+def _optimization_split(
+    *,
+    prefix: str,
+    first_index: int,
+    answerable_count: int,
+    unanswerable_count: int,
+) -> tuple[list[EvaluationItem], list[DocumentChunk]]:
+    required_types = [
+        "mounting",
+        "safety",
+        "menu_navigation",
+        "parameter_code",
+        "fault_diagnosis",
+        "wiring",
+        "table_lookup",
+        "ordered_procedure",
+        "cross_document",
+    ]
+    items: list[EvaluationItem] = []
+    for offset in range(answerable_count):
+        index = first_index + offset
+        language = "en" if offset < answerable_count // 2 else "vi"
+        items.append(
+            _answerable(
+                index,
+                language=language,
+                question_type=required_types[offset % len(required_types)],
+            ).model_copy(
+                update={
+                    "fact_family_id": f"{prefix}-family-{offset}",
+                    "review_status": "approved",
+                }
+            )
+        )
+    for offset in range(unanswerable_count):
+        index = first_index + answerable_count + offset
+        language = "en" if offset < unanswerable_count // 2 else "vi"
+        items.append(
+            _unanswerable(index, language=language).model_copy(
+                update={
+                    "fact_family_id": f"{prefix}-unsupported-family-{offset}",
+                    "review_status": "approved",
+                }
+            )
+        )
+    chunks = [
+        _chunk(
+            item.relevant_chunk_ids[0],
+            item.expected_document_ids[0],
+            item.expected_phrases[0],
+            item.expected_pages[0],
+        )
+        for item in items
+        if item.answerable
+    ]
+    return items, chunks
+
+
 def test_valid_dataset_splits_have_deterministic_hashes() -> None:
     calibration, test, chunks = _valid_sets()
     result = validate_dataset_splits(calibration, test, chunks)
@@ -115,6 +175,167 @@ def test_valid_dataset_splits_have_deterministic_hashes() -> None:
     assert result["test"]["by_scenario"]["vi_to_en"] >= 10
     assert result["review"]["answerable_missing_answer_facts"] == 0
     assert dataset_sha256(test) == dataset_sha256(list(test))
+
+
+def test_development_splits_are_balanced_covered_and_leakage_free() -> None:
+    development, development_chunks = _optimization_split(
+        prefix="development",
+        first_index=100,
+        answerable_count=80,
+        unanswerable_count=40,
+    )
+    confirmation, confirmation_chunks = _optimization_split(
+        prefix="confirmation",
+        first_index=300,
+        answerable_count=40,
+        unanswerable_count=20,
+    )
+
+    result = validate_development_dataset_splits(
+        development,
+        confirmation,
+        [*development_chunks, *confirmation_chunks],
+    )
+
+    assert result["development"]["by_language"] == {"en": 60, "vi": 60}
+    assert result["confirmation"]["by_language"] == {"en": 30, "vi": 30}
+    assert result["development_dataset_sha256"] == dataset_sha256(development)
+    assert result["confirmation_dataset_sha256"] == dataset_sha256(confirmation)
+
+
+def test_optimization_split_sealing_rejects_unreviewed_items() -> None:
+    development, development_chunks = _optimization_split(
+        prefix="development",
+        first_index=100,
+        answerable_count=80,
+        unanswerable_count=40,
+    )
+    confirmation, confirmation_chunks = _optimization_split(
+        prefix="confirmation",
+        first_index=300,
+        answerable_count=40,
+        unanswerable_count=20,
+    )
+    confirmation[0] = confirmation[0].model_copy(
+        update={"review_status": "needs_human_review"}
+    )
+
+    with pytest.raises(DatasetValidationError, match="every item to be approved"):
+        validate_development_dataset_splits(
+            development,
+            confirmation,
+            [*development_chunks, *confirmation_chunks],
+        )
+
+
+def test_development_contract_requires_fact_family_balance_and_type_coverage() -> None:
+    development, chunks = _optimization_split(
+        prefix="development",
+        first_index=100,
+        answerable_count=80,
+        unanswerable_count=40,
+    )
+    missing_family = development.copy()
+    missing_family[0] = missing_family[0].model_copy(update={"fact_family_id": None})
+    with pytest.raises(DatasetValidationError, match="require fact_family_id"):
+        validate_dataset(missing_family, chunks, kind="development")
+
+    unbalanced = development.copy()
+    unbalanced[0] = unbalanced[0].model_copy(
+        update={"language": "vi", "scenario": "vi_to_en"}
+    )
+    with pytest.raises(DatasetValidationError, match="exactly 40 EN and 40 VI"):
+        validate_dataset(unbalanced, chunks, kind="development")
+
+    missing_type = [
+        item.model_copy(update={"question_type": "installation"})
+        if item.answerable and item.question_type == "cross_document"
+        else item
+        for item in development
+    ]
+    with pytest.raises(DatasetValidationError, match="cross_document"):
+        validate_dataset(missing_type, chunks, kind="development")
+
+    below_quota = development.copy()
+    cross_document_index = next(
+        index
+        for index, item in enumerate(below_quota)
+        if item.question_type == "cross_document"
+    )
+    below_quota[cross_document_index] = below_quota[cross_document_index].model_copy(
+        update={"question_type": "safety"}
+    )
+    with pytest.raises(DatasetValidationError, match="at least 8 per type"):
+        validate_dataset(below_quota, chunks, kind="development")
+
+
+def test_development_split_rejects_fact_family_and_question_leakage() -> None:
+    development, development_chunks = _optimization_split(
+        prefix="development",
+        first_index=100,
+        answerable_count=80,
+        unanswerable_count=40,
+    )
+    confirmation, confirmation_chunks = _optimization_split(
+        prefix="confirmation",
+        first_index=300,
+        answerable_count=40,
+        unanswerable_count=20,
+    )
+    chunks = [*development_chunks, *confirmation_chunks]
+
+    family_overlap = confirmation.copy()
+    family_overlap[0] = family_overlap[0].model_copy(
+        update={"fact_family_id": development[0].fact_family_id}
+    )
+    with pytest.raises(DatasetValidationError, match="fact families overlap"):
+        validate_development_dataset_splits(development, family_overlap, chunks)
+
+    question_overlap = confirmation.copy()
+    question_overlap[0] = question_overlap[0].model_copy(
+        update={"question": f"  {development[0].question.upper()}!!!"}
+    )
+    with pytest.raises(DatasetValidationError, match="normalized exact duplicates"):
+        validate_development_dataset_splits(development, question_overlap, chunks)
+
+
+def test_unset_fact_family_preserves_legacy_canonical_hash_shape() -> None:
+    legacy_item = _answerable(1)
+
+    assert "fact_family_id" not in legacy_item.model_dump(mode="json", exclude_unset=True)
+    assert dataset_sha256([legacy_item]) == dataset_sha256([legacy_item.model_copy()])
+
+
+
+@pytest.mark.parametrize("field", ["item", "family", "fact"])
+def test_optimization_contract_rejects_content_bearing_persisted_ids(field: str) -> None:
+    development, chunks = _optimization_split(
+        prefix="development",
+        first_index=100,
+        answerable_count=80,
+        unanswerable_count=40,
+    )
+    invalid = development.copy()
+    item = invalid[0]
+    if field == "item":
+        invalid[0] = item.model_copy(update={"id": "Raw question used as ID"})
+    elif field == "family":
+        invalid[0] = item.model_copy(
+            update={"fact_family_id": "Raw fact family sentence"}
+        )
+    else:
+        invalid[0] = item.model_copy(
+            update={
+                "expected_answer_facts": [
+                    item.expected_answer_facts[0].model_copy(
+                        update={"id": "Raw expected fact used as ID"}
+                    )
+                ]
+            }
+        )
+
+    with pytest.raises(DatasetValidationError, match="opaque lowercase"):
+        validate_dataset(invalid, chunks, kind="development")
 
 
 def test_approved_answerable_requires_reviewed_answer_facts() -> None:

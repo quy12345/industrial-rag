@@ -11,13 +11,20 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from app.application.query_service import QueryExecution
+from app.domain.retrieval import RetrievalCandidate, RetrievalTrace
 from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
-from evaluation.retrieval import direct_evidence_rank, percentile_nearest_rank, phrase_matches
+from evaluation.retrieval import (
+    direct_evidence_rank,
+    exact_equivalent_evidence_rank,
+    expand_exact_content_ids,
+    percentile_nearest_rank,
+    phrase_matches,
+)
 
 FACT_EVALUATOR_ID = "phase7_deterministic_typed_facts_v2"
 _NEGATION_TOKENS = frozenset(
@@ -38,7 +45,12 @@ class _TextMatch:
     polarity: str
 
 
-def score_query_execution(item: EvaluationItem, execution: QueryExecution) -> dict[str, Any]:
+def score_query_execution(
+    item: EvaluationItem,
+    execution: QueryExecution,
+    *,
+    exact_content_equivalence: Mapping[str, Sequence[str]] | None = None,
+) -> dict[str, Any]:
     """Create one sanitized, deterministic record for an end-to-end execution.
 
     Retrieval relevance is based exclusively on stable qrel chunk IDs.  A page,
@@ -46,6 +58,10 @@ def score_query_execution(item: EvaluationItem, execution: QueryExecution) -> di
     """
 
     relevant = set(item.relevant_chunk_ids)
+    exact_relevant = expand_exact_content_ids(
+        relevant,
+        equivalence=exact_content_equivalence,
+    )
     evidence_candidates = execution.evidence_candidates or execution.candidates
     ranked_rank = (
         direct_evidence_rank(execution.candidates, relevant) if item.answerable else None
@@ -54,13 +70,44 @@ def score_query_execution(item: EvaluationItem, execution: QueryExecution) -> di
     candidate_rank = (
         direct_evidence_rank(execution.candidate_pool, relevant) if item.answerable else None
     )
+    ranked_exact_equivalent_rank = (
+        exact_equivalent_evidence_rank(
+            execution.candidates,
+            relevant,
+            equivalence=exact_content_equivalence,
+        )
+        if item.answerable
+        else None
+    )
+    final_exact_equivalent_rank = (
+        exact_equivalent_evidence_rank(
+            evidence_candidates,
+            relevant,
+            equivalence=exact_content_equivalence,
+        )
+        if item.answerable
+        else None
+    )
+    candidate_exact_equivalent_rank = (
+        exact_equivalent_evidence_rank(
+            execution.candidate_pool,
+            relevant,
+            equivalence=exact_content_equivalence,
+        )
+        if item.answerable
+        else None
+    )
     response = execution.response
     citation_ids = [citation.chunk_id for citation in response.citations]
     final_ids = {candidate.chunk_id for candidate in evidence_candidates}
+    final_candidates_by_id = {
+        candidate.chunk_id: candidate for candidate in evidence_candidates
+    }
     citation_documents = {citation.document_id for citation in response.citations}
 
     record: dict[str, Any] = {
         "id": item.id,
+        "fact_family_id": item.fact_family_id,
         "language": item.language,
         "scenario": item.scenario,
         "question_type": item.question_type,
@@ -71,6 +118,9 @@ def score_query_execution(item: EvaluationItem, execution: QueryExecution) -> di
         "candidate_direct_evidence_rank": candidate_rank,
         "ranked_direct_evidence_rank": ranked_rank,
         "direct_evidence_rank": final_rank,
+        "candidate_exact_equivalent_evidence_rank": candidate_exact_equivalent_rank,
+        "ranked_exact_equivalent_evidence_rank": ranked_exact_equivalent_rank,
+        "exact_equivalent_evidence_rank": final_exact_equivalent_rank,
         "abstained": response.abstained,
         "abstention_reason": response.abstention_reason,
         "citation_count": len(citation_ids),
@@ -88,6 +138,16 @@ def score_query_execution(item: EvaluationItem, execution: QueryExecution) -> di
             for group in execution.evidence_duplicate_groups
         ],
         "generation_attempts": execution.generation_attempts,
+        "retrieval_trace": _retrieval_trace_payload(
+            execution.retrieval_trace,
+            relevant_chunk_ids=relevant if item.answerable else set(),
+            exact_relevant_chunk_ids=exact_relevant if item.answerable else set(),
+        ),
+        "evidence_rendering": {
+            "context_chars": execution.evidence_context_chars,
+            "truncated": bool(execution.evidence_truncated_source_ids),
+            "truncated_source_ids": list(execution.evidence_truncated_source_ids),
+        },
         "timings_ms": {
             "retrieval": execution.timings.retrieval_ms,
             "rerank": execution.timings.rerank_ms,
@@ -142,15 +202,68 @@ def score_query_execution(item: EvaluationItem, execution: QueryExecution) -> di
                     execution.candidates, relevant
                 ),
                 "citation_direct_evidence": bool(set(citation_ids).intersection(relevant)),
+                "citation_exact_equivalent_evidence": bool(
+                    set(citation_ids).intersection(relevant)
+                )
+                or exact_equivalent_evidence_rank(
+                    [
+                        final_candidates_by_id[chunk_id]
+                        for chunk_id in citation_ids
+                        if chunk_id in final_candidates_by_id
+                    ],
+                    relevant,
+                    equivalence=exact_content_equivalence,
+                )
+                is not None,
                 "citation_document_correct": bool(citation_ids)
                 and citation_documents.issubset(set(item.expected_document_ids)),
+                "citation_exact_equivalent_document_correct": bool(citation_ids)
+                and all(
+                    _candidate_matches_expected_document_or_exact_equivalent(
+                        final_candidates_by_id.get(citation.chunk_id),
+                        citation_document_id=citation.document_id,
+                        expected_document_ids=set(item.expected_document_ids),
+                        exact_relevant_chunk_ids=exact_relevant,
+                    )
+                    for citation in response.citations
+                ),
                 "unexpected_citation_document_ids": sorted(
                     citation_documents - set(item.expected_document_ids)
                 ),
+                "unexpected_citation_document_ids_excluding_exact_equivalents": sorted(
+                    {
+                        citation.document_id
+                        for citation in response.citations
+                        if not _candidate_matches_expected_document_or_exact_equivalent(
+                            final_candidates_by_id.get(citation.chunk_id),
+                            citation_document_id=citation.document_id,
+                            expected_document_ids=set(item.expected_document_ids),
+                            exact_relevant_chunk_ids=exact_relevant,
+                        )
+                    }
+                ),
                 "wrong_document_retrieval_at_1": bool(execution.candidates)
                 and execution.candidates[0].document_id not in item.expected_document_ids,
+                "wrong_document_retrieval_at_1_excluding_exact_equivalents": bool(
+                    execution.candidates
+                )
+                and not _candidate_matches_expected_document_or_exact_equivalent(
+                    execution.candidates[0],
+                    citation_document_id=execution.candidates[0].document_id,
+                    expected_document_ids=set(item.expected_document_ids),
+                    exact_relevant_chunk_ids=exact_relevant,
+                ),
                 "wrong_document_candidate_count_at_5": sum(
                     candidate.document_id not in item.expected_document_ids
+                    for candidate in execution.candidates[:5]
+                ),
+                "wrong_document_candidate_count_at_5_excluding_exact_equivalents": sum(
+                    not _candidate_matches_expected_document_or_exact_equivalent(
+                        candidate,
+                        citation_document_id=candidate.document_id,
+                        expected_document_ids=set(item.expected_document_ids),
+                        exact_relevant_chunk_ids=exact_relevant,
+                    )
                     for candidate in execution.candidates[:5]
                 ),
                 "wrong_document_evidence_at_1": bool(evidence_candidates)
@@ -175,10 +288,15 @@ def score_query_execution(item: EvaluationItem, execution: QueryExecution) -> di
                 "qrel_final_diagnostics": [],
                 "qrel_reranked_diagnostics": [],
                 "citation_direct_evidence": None,
+                "citation_exact_equivalent_evidence": None,
                 "citation_document_correct": None,
+                "citation_exact_equivalent_document_correct": None,
                 "unexpected_citation_document_ids": [],
+                "unexpected_citation_document_ids_excluding_exact_equivalents": [],
                 "wrong_document_retrieval_at_1": None,
+                "wrong_document_retrieval_at_1_excluding_exact_equivalents": None,
                 "wrong_document_candidate_count_at_5": None,
+                "wrong_document_candidate_count_at_5_excluding_exact_equivalents": None,
                 "wrong_document_evidence_at_1": None,
                 "wrong_document_evidence_count_at_5": None,
             }
@@ -252,7 +370,9 @@ def evaluate_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
         "gates": gates,
         "note": (
             f"Headline answer accuracy uses {FACT_EVALUATOR_ID}. Strict contiguous aliases and "
-            "token coverage remain diagnostics. Evidence phrases validate qrels only."
+            "token coverage remain diagnostics. Evidence phrases validate qrels only. "
+            "Exact-content-equivalent ranks and document provenance are diagnostic; release "
+            "gates continue to use strict qrel and expected-document identity."
         ),
     }
 
@@ -260,6 +380,17 @@ def evaluate_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
 def _retrieval_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float]:
     final_ranks = [row["direct_evidence_rank"] for row in rows]
     candidate_ranks = [row["candidate_direct_evidence_rank"] for row in rows]
+    exact_equivalent_final_ranks = [
+        row.get("exact_equivalent_evidence_rank", row["direct_evidence_rank"])
+        for row in rows
+    ]
+    exact_equivalent_candidate_ranks = [
+        row.get(
+            "candidate_exact_equivalent_evidence_rank",
+            row["candidate_direct_evidence_rank"],
+        )
+        for row in rows
+    ]
     return {
         "candidate_recall": _hit_rate(candidate_ranks, cutoff=None),
         "hit_rate_at_1": _hit_rate(final_ranks, cutoff=1),
@@ -268,6 +399,23 @@ def _retrieval_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float]:
         "hit_rate_at_20": _hit_rate(final_ranks, cutoff=20),
         "mrr_at_5": _mrr(final_ranks, cutoff=5),
         "mrr_at_20": _mrr(final_ranks, cutoff=20),
+        "exact_equivalent_candidate_recall": _hit_rate(
+            exact_equivalent_candidate_ranks, cutoff=None
+        ),
+        "exact_equivalent_hit_rate_at_1": _hit_rate(
+            exact_equivalent_final_ranks, cutoff=1
+        ),
+        "exact_equivalent_hit_rate_at_3": _hit_rate(
+            exact_equivalent_final_ranks, cutoff=3
+        ),
+        "exact_equivalent_hit_rate_at_5": _hit_rate(
+            exact_equivalent_final_ranks, cutoff=5
+        ),
+        "exact_equivalent_hit_rate_at_20": _hit_rate(
+            exact_equivalent_final_ranks, cutoff=20
+        ),
+        "exact_equivalent_mrr_at_5": _mrr(exact_equivalent_final_ranks, cutoff=5),
+        "exact_equivalent_mrr_at_20": _mrr(exact_equivalent_final_ranks, cutoff=20),
         "candidate_count_maximum": float(max(int(row["candidate_count"]) for row in rows)),
     }
 
@@ -348,11 +496,15 @@ def _citation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
     if not answered:
         return {
             "direct_evidence_rate_when_answered": 0.0,
+            "exact_equivalent_evidence_rate_when_answered": 0.0,
             "document_correct_rate_when_answered": 0.0,
+            "exact_equivalent_document_correct_rate_when_answered": 0.0,
             "referential_valid_rate_when_answered": 0.0,
             "unsupported_citation_count": 0,
             "wrong_document_citation_count": 0,
             "wrong_document_citation_rate_when_answered": 0.0,
+            "wrong_document_citation_count_excluding_exact_equivalents": 0,
+            "wrong_document_citation_rate_when_answered_excluding_exact_equivalents": 0.0,
             "answered_count": 0,
         }
     return {
@@ -360,8 +512,28 @@ def _citation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
             bool(row["citation_direct_evidence"]) for row in answered
         )
         / len(answered),
+        "exact_equivalent_evidence_rate_when_answered": sum(
+            bool(
+                row.get(
+                    "citation_exact_equivalent_evidence",
+                    row["citation_direct_evidence"],
+                )
+            )
+            for row in answered
+        )
+        / len(answered),
         "document_correct_rate_when_answered": sum(
             bool(row["citation_document_correct"]) for row in answered
+        )
+        / len(answered),
+        "exact_equivalent_document_correct_rate_when_answered": sum(
+            bool(
+                row.get(
+                    "citation_exact_equivalent_document_correct",
+                    row["citation_document_correct"],
+                )
+            )
+            for row in answered
         )
         / len(answered),
         "referential_valid_rate_when_answered": sum(
@@ -384,6 +556,25 @@ def _citation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
             bool(row.get("unexpected_citation_document_ids")) for row in answered
         )
         / len(answered),
+        "wrong_document_citation_count_excluding_exact_equivalents": sum(
+            bool(
+                row.get(
+                    "unexpected_citation_document_ids_excluding_exact_equivalents",
+                    row.get("unexpected_citation_document_ids"),
+                )
+            )
+            for row in answered
+        ),
+        "wrong_document_citation_rate_when_answered_excluding_exact_equivalents": sum(
+            bool(
+                row.get(
+                    "unexpected_citation_document_ids_excluding_exact_equivalents",
+                    row.get("unexpected_citation_document_ids"),
+                )
+            )
+            for row in answered
+        )
+        / len(answered),
         "answered_count": len(answered),
     }
 
@@ -391,6 +582,24 @@ def _citation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
 def _document_contamination_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
     wrong_top1 = sum(bool(row["wrong_document_retrieval_at_1"]) for row in rows)
     wrong_top5_candidates = sum(int(row["wrong_document_candidate_count_at_5"]) for row in rows)
+    wrong_top1_excluding_exact_equivalents = sum(
+        bool(
+            row.get(
+                "wrong_document_retrieval_at_1_excluding_exact_equivalents",
+                row["wrong_document_retrieval_at_1"],
+            )
+        )
+        for row in rows
+    )
+    wrong_top5_excluding_exact_equivalents = sum(
+        int(
+            row.get(
+                "wrong_document_candidate_count_at_5_excluding_exact_equivalents",
+                row["wrong_document_candidate_count_at_5"],
+            )
+        )
+        for row in rows
+    )
     top5_candidates = sum(min(int(row["final_candidate_count"]), 5) for row in rows)
     return {
         "wrong_document_retrieval_at_1_count": wrong_top1,
@@ -398,6 +607,20 @@ def _document_contamination_metrics(rows: Sequence[dict[str, Any]]) -> dict[str,
         "wrong_document_candidate_count_at_5": wrong_top5_candidates,
         "wrong_document_candidate_rate_at_5": (
             wrong_top5_candidates / top5_candidates if top5_candidates else 0.0
+        ),
+        "wrong_document_retrieval_at_1_count_excluding_exact_equivalents": (
+            wrong_top1_excluding_exact_equivalents
+        ),
+        "wrong_document_retrieval_at_1_rate_excluding_exact_equivalents": (
+            wrong_top1_excluding_exact_equivalents / len(rows)
+        ),
+        "wrong_document_candidate_count_at_5_excluding_exact_equivalents": (
+            wrong_top5_excluding_exact_equivalents
+        ),
+        "wrong_document_candidate_rate_at_5_excluding_exact_equivalents": (
+            wrong_top5_excluding_exact_equivalents / top5_candidates
+            if top5_candidates
+            else 0.0
         ),
     }
 
@@ -498,8 +721,8 @@ def score_expected_answer_fact(fact: ExpectedAnswerFact, answer: str) -> dict[st
         "max_alias_token_precision": max(
             (score[1] for score in alias_token_scores), default=0.0
         ),
-        "selected_group_alternatives": (
-            list(text_trace.alternatives) if text_trace is not None else []
+        "selected_group_alternative_count": (
+            len(text_trace.alternatives) if text_trace is not None else 0
         ),
         "match_mode": text_trace.match_mode if text_trace is not None else None,
         "matched_token_positions": (
@@ -761,6 +984,141 @@ def _qrel_diagnostics(
             }
         )
     return diagnostics
+
+
+def _candidate_matches_expected_document_or_exact_equivalent(
+    candidate: RetrievalCandidate | None,
+    *,
+    citation_document_id: str,
+    expected_document_ids: set[str],
+    exact_relevant_chunk_ids: set[str],
+) -> bool:
+    if citation_document_id in expected_document_ids:
+        return True
+    if candidate is None:
+        return False
+    candidate_chunk_ids = {candidate.chunk_id}
+    equivalent_chunk_ids = candidate.metadata.get("equivalent_chunk_ids", ())
+    if isinstance(equivalent_chunk_ids, (list, tuple, set, frozenset)):
+        candidate_chunk_ids.update(
+            chunk_id for chunk_id in equivalent_chunk_ids if isinstance(chunk_id, str)
+        )
+    if candidate_chunk_ids.intersection(exact_relevant_chunk_ids):
+        return True
+    return False
+
+
+def _retrieval_trace_payload(
+    trace: RetrievalTrace | None,
+    *,
+    relevant_chunk_ids: set[str],
+    exact_relevant_chunk_ids: set[str],
+) -> dict[str, Any]:
+    """Serialize only allowlisted IDs and rank signals from an opt-in trace."""
+
+    if trace is None:
+        return {"status": "disabled"}
+    stages = {
+        "dense": trace.dense_candidates,
+        "sparse": trace.sparse_candidates,
+        "raw_fusion": trace.fused_candidates,
+        "selected_pre_dedup": trace.selected_candidates_pre_dedup,
+        "candidate_pool_post_dedup": trace.candidate_pool_post_dedup,
+        "candidates_before_rerank": trace.candidates_before_rerank,
+        "raw_cross_encoder": trace.raw_cross_encoder_candidates,
+        "post_policy": trace.final_candidates,
+    }
+    fused_ids = {candidate.chunk_id for candidate in trace.fused_candidates}
+    selected_ids = {
+        candidate.chunk_id for candidate in trace.selected_candidates_pre_dedup
+    }
+    post_dedup_ids = {
+        candidate.chunk_id for candidate in trace.candidate_pool_post_dedup
+    }
+    before_rerank_ids = {
+        candidate.chunk_id for candidate in trace.candidates_before_rerank
+    }
+    return {
+        "status": "captured",
+        "candidate_count_pre_dedup": trace.candidate_count_pre_dedup,
+        "candidate_count_post_dedup": trace.candidate_count_post_dedup,
+        "candidate_count_before_rerank": trace.candidate_count_before_rerank,
+        "removed_by_candidate_selection_ids": sorted(fused_ids - selected_ids),
+        "removed_by_same_document_dedup_ids": sorted(selected_ids - post_dedup_ids),
+        "removed_by_prune_ids": sorted(post_dedup_ids - before_rerank_ids),
+        "refilled_candidate_ids": list(trace.refilled_candidate_ids),
+        "stages": {
+            name: _retrieval_trace_stage_payload(
+                candidates,
+                relevant_chunk_ids=relevant_chunk_ids,
+                exact_relevant_chunk_ids=exact_relevant_chunk_ids,
+            )
+            for name, candidates in stages.items()
+        },
+    }
+
+
+def _retrieval_trace_stage_payload(
+    candidates: Sequence[RetrievalCandidate],
+    *,
+    relevant_chunk_ids: set[str],
+    exact_relevant_chunk_ids: set[str],
+) -> dict[str, Any]:
+    return {
+        "count": len(candidates),
+        "strict_direct_evidence_rank": direct_evidence_rank(
+            candidates, relevant_chunk_ids
+        ),
+        "exact_equivalent_evidence_rank": exact_equivalent_evidence_rank(
+            candidates, exact_relevant_chunk_ids
+        ),
+        "candidates": [
+            {
+                "chunk_id": candidate.chunk_id,
+                "document_id": candidate.document_id,
+                "ordinal_rank": ordinal,
+                "dense_rank": candidate.dense_rank,
+                "sparse_rank": candidate.sparse_rank,
+                "rrf_rank": candidate.rrf_rank,
+                "rerank_rank": candidate.rerank_rank,
+                "document_role": _trace_metadata_value(
+                    candidate, "document_role"
+                ),
+                "query_role": _trace_metadata_value(candidate, "query_role"),
+                "query_role_confidence": _trace_metadata_value(
+                    candidate, "query_role_confidence"
+                ),
+                "cross_encoder_rank": _trace_metadata_value(
+                    candidate, "cross_encoder_rank"
+                ),
+                "role_rank": _trace_metadata_value(candidate, "role_rank"),
+            }
+            for ordinal, candidate in enumerate(candidates, start=1)
+        ],
+    }
+
+
+def _trace_metadata_value(
+    candidate: RetrievalCandidate,
+    key: str,
+) -> str | int | None:
+    value = candidate.metadata.get(key)
+    if key in {"document_role", "query_role"}:
+        return (
+            value
+            if isinstance(value, str)
+            and value in {"installation", "programming", "neutral"}
+            else None
+        )
+    if key == "query_role_confidence":
+        return (
+            value
+            if isinstance(value, str) and value in {"strong", "weak", "neutral"}
+            else None
+        )
+    if key in {"cross_encoder_rank", "role_rank"}:
+        return value if type(value) is int and value >= 1 else None
+    return None
 
 
 def _failure_class(

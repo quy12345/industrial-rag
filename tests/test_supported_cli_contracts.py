@@ -18,11 +18,16 @@ SUPPORTED_CLI_OPTIONS = [
         {
             "--dataset",
             "--calibration",
+            "--development",
+            "--confirmation",
             "--test",
+            "--heldout-v2",
             "--chunks",
             "--manifest",
             "--top-k",
             "--provider-approval-token",
+            "--semantic-judge",
+            "--judge-provider-approval-token",
             "--max-queries",
             "--item-id",
             "--checkpoint",
@@ -61,7 +66,15 @@ SUPPORTED_CLI_OPTIONS = [
     ("scripts.operations.query_smoke", {"--output"}),
     (
         "scripts.evaluation.validate_dataset",
-        {"--calibration", "--test", "--chunks", "--output"},
+        {
+            "--suite",
+            "--calibration",
+            "--test",
+            "--development",
+            "--confirmation",
+            "--chunks",
+            "--output",
+        },
     ),
     ("scripts.operations.validate_query_runtime", {"--document-id"}),
 ]

@@ -50,6 +50,7 @@ from evaluation.e2e import (
     evaluate_quality_gates,
     score_query_execution,
 )
+from evaluation.retrieval import build_corpus_exact_content_equivalence
 from evaluation.semantic import (
     RagasSemanticJudge,
     SemanticConfigurationError,
@@ -63,19 +64,31 @@ from evaluation.semantic import (
 
 CALIBRATION_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS"
 HELDOUT_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 HELDOUT PROVIDER EGRESS"
+DEVELOPMENT_PROVIDER_APPROVAL_TOKEN = "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
+CONFIRMATION_PROVIDER_APPROVAL_TOKEN = "APPROVE ATV320 CONFIRMATION GENERATOR EGRESS"
 CALIBRATION_SEMANTIC_APPROVAL_TOKEN = (
     "APPROVE ATV320 CALIBRATION OPENROUTER RAGAS EGRESS"
 )
 HELDOUT_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
+DEVELOPMENT_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS EGRESS"
+CONFIRMATION_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 CONFIRMATION OPENROUTER RAGAS EGRESS"
 ACTIVE_CALIBRATION_PATH = Path("data/eval/phase7/calibration-v3.jsonl")
 ACTIVE_MANIFEST_PATH = Path("artifacts/metrics/phase-7-evaluation-manifest-v3.json")
+ACTIVE_DEVELOPMENT_PATH = Path("data/eval/atv320/development-v1.jsonl")
+ACTIVE_DEVELOPMENT_MANIFEST_PATH = Path(
+    "data/eval/atv320/development-v1-manifest.json"
+)
+PRIVATE_CONFIRMATION_ROOT = Path("data/eval/atv320/private-confirmation-v1")
+PRIVATE_CONFIRMATION_DATASET_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v1.jsonl"
+PRIVATE_CONFIRMATION_MANIFEST_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v1-manifest.json"
 PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
-ARTIFACT_SCHEMA_VERSION = 8
-SOURCE_IDENTITY_VERSION = 4
+ARTIFACT_SCHEMA_VERSION = 9
+SOURCE_IDENTITY_VERSION = 5
 SOURCE_IDENTITY_PATHS = {
     "citation_policy": Path("app/domain/citations.py"),
+    "content_identity": Path("app/domain/content_identity.py"),
     "dataset_contract": Path("evaluation/dataset.py"),
     "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
     "evaluator": Path("evaluation/e2e.py"),
@@ -83,11 +96,13 @@ SOURCE_IDENTITY_PATHS = {
     "evidence_policy": Path("app/domain/evidence.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
     "generation_adapter": Path("app/infrastructure/generation/langchain_structured.py"),
+    "generation_contract": Path("app/domain/generation.py"),
     "generation_prompt_policy": Path("app/application/generation_prompt.py"),
     "list_completeness_policy": Path("app/domain/policies/list_completeness.py"),
     "query_analysis_policy": Path("app/domain/policies/query_analysis.py"),
     "query_role_policy": Path("app/domain/policies/query_roles.py"),
     "query_service": Path("app/application/query_service.py"),
+    "retrieval_types": Path("app/domain/retrieval.py"),
     "reranker_adapter": Path("app/infrastructure/models/reranker.py"),
     "reranking_service": Path("app/application/reranking_service.py"),
     "retrieval_metrics": Path("evaluation/retrieval.py"),
@@ -108,7 +123,7 @@ def main() -> int:
     if args.item_id is not None:
         selected = [item for item in selected if item.id == args.item_id]
         if not selected:
-            raise SystemExit(f"Calibration item ID was not found: {args.item_id}")
+            raise SystemExit(f"Diagnostic item ID was not found: {args.item_id}")
     if args.max_queries is not None:
         selected = selected[: args.max_queries]
 
@@ -131,7 +146,11 @@ def main() -> int:
     )
     service = QueryService(
         retriever=LazyQueryRetriever(
-            lambda: build_query_retriever(settings, contract=ATV320_RETRIEVAL_CONTRACT)
+            lambda: build_query_retriever(
+                settings,
+                contract=ATV320_RETRIEVAL_CONTRACT,
+                capture_trace=True,
+            )
         ),
         evidence_gate=EvidenceGate(score_threshold=settings.evidence_score_threshold),
         generator=LangChainStructuredGenerator(
@@ -143,6 +162,7 @@ def main() -> int:
         settings=settings,
     )
     full_dataset_hash = dataset_sha256(dataset)
+    exact_content_equivalence = build_corpus_exact_content_equivalence(chunks)
     identity = {
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
         "dataset": args.dataset,
@@ -164,8 +184,8 @@ def main() -> int:
         "source_identity": _source_identity(),
         "runtime_profile": _runtime_profile(),
         "libraries": _library_versions(semantic_mode=args.semantic_judge),
-        "held_out_dataset_sha256": manifest.get(
-            "heldout_dataset_sha256", manifest.get("test_dataset_sha256")
+        "sealed_comparison_dataset_sha256": _sealed_comparison_dataset_sha256(
+            manifest, args.dataset
         ),
         "deduplicate_exact_content": settings.rerank_deduplicate_content,
     }
@@ -180,7 +200,11 @@ def main() -> int:
                 document_id=None,
                 top_k=args.top_k,
             )
-            record = score_query_execution(item, execution)
+            record = score_query_execution(
+                item,
+                execution,
+                exact_content_equivalence=exact_content_equivalence,
+            )
             if semantic_judge is not None:
                 record["semantic_evaluation"] = _score_semantic_execution(
                     item,
@@ -233,6 +257,10 @@ def main() -> int:
             "strict_phrase_accuracy": "diagnostic_only",
             "token_coverage": "diagnostic_only",
             "retrieval_relevance": "stable relevant_chunk_ids only",
+            "exact_content_equivalence": (
+                "diagnostic_only_corpus_wide_exact_normalized_content"
+            ),
+            "retrieval_trace": "sanitized_ids_counts_ranks_and_allowlisted_role_signals",
         },
         "per_query": records,
         "sanitization": {
@@ -241,6 +269,8 @@ def main() -> int:
             "evidence_text": "excluded",
             "provider_response": "excluded",
             "judge_reasoning": "excluded",
+            "expected_fact_text": "excluded",
+            "candidate_text_and_unlisted_metadata": "excluded",
         },
     }
     write_json_atomic(args.output, output)
@@ -259,9 +289,15 @@ def main() -> int:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--dataset", choices=("calibration", "test", "heldout-v2"), required=True
+        "--dataset",
+        choices=("calibration", "development", "confirmation", "test", "heldout-v2"),
+        required=True,
     )
     parser.add_argument("--calibration", type=Path, default=ACTIVE_CALIBRATION_PATH)
+    parser.add_argument("--development", type=Path, default=ACTIVE_DEVELOPMENT_PATH)
+    parser.add_argument(
+        "--confirmation", type=Path, default=PRIVATE_CONFIRMATION_DATASET_PATH
+    )
     parser.add_argument("--test", type=Path, default=Path("data/eval/phase7/test.jsonl"))
     parser.add_argument(
         "--heldout-v2", type=Path, default=PRIVATE_HELDOUT_DATASET_PATH
@@ -289,37 +325,56 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--item-id",
         default=None,
-        help="Calibration-only exact item ID for a sanitized targeted diagnostic.",
+        help=(
+            "Calibration/development item ID for a sanitized targeted diagnostic; "
+            "development requires explicit output and checkpoint paths."
+        ),
     )
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
     if args.max_queries is not None and args.max_queries <= 0:
         parser.error("--max-queries must be positive")
-    if args.item_id is not None and args.dataset != "calibration":
-        parser.error("--item-id is permitted only for calibration diagnostics")
+    if args.item_id is not None and args.dataset not in {"calibration", "development"}:
+        parser.error("--item-id is permitted only for calibration or development diagnostics")
     if args.item_id is not None and args.max_queries is not None:
         parser.error("--item-id and --max-queries are mutually exclusive")
-    if args.manifest is None:
-        args.manifest = (
-            PRIVATE_HELDOUT_MANIFEST_PATH
-            if args.dataset == "heldout-v2"
-            else ACTIVE_MANIFEST_PATH
+    if args.dataset in {"confirmation", "heldout-v2"} and args.max_queries is not None:
+        parser.error("--max-queries is not permitted for sealed evaluation datasets")
+    if (
+        args.dataset == "development"
+        and (args.item_id is not None or args.max_queries is not None)
+        and (args.output is None or args.checkpoint is None)
+    ):
+        parser.error(
+            "Partial development diagnostics require explicit --output and --checkpoint paths"
         )
+    if args.manifest is None:
+        args.manifest = {
+            "development": ACTIVE_DEVELOPMENT_MANIFEST_PATH,
+            "confirmation": PRIVATE_CONFIRMATION_MANIFEST_PATH,
+            "heldout-v2": PRIVATE_HELDOUT_MANIFEST_PATH,
+        }.get(args.dataset, ACTIVE_MANIFEST_PATH)
     if args.output is None:
-        args.output = Path(f"artifacts/metrics/atv320-{args.dataset}-e2e-v8.json")
+        args.output = Path(
+            f"artifacts/metrics/atv320-{args.dataset}-e2e-v{ARTIFACT_SCHEMA_VERSION}.json"
+        )
     if args.checkpoint is None:
         args.checkpoint = Path(
-            f"artifacts/metrics/atv320-{args.dataset}-e2e-v8-checkpoint.jsonl"
+            f"artifacts/metrics/atv320-{args.dataset}-e2e-v{ARTIFACT_SCHEMA_VERSION}"
+            "-checkpoint.jsonl"
         )
     return args
 
 
 def _validate_execution_approval(args: argparse.Namespace) -> None:
-    if args.dataset == "calibration":
-        expected = CALIBRATION_PROVIDER_APPROVAL_TOKEN
-    else:
-        expected = HELDOUT_PROVIDER_APPROVAL_TOKEN
+    expected = {
+        "calibration": CALIBRATION_PROVIDER_APPROVAL_TOKEN,
+        "development": DEVELOPMENT_PROVIDER_APPROVAL_TOKEN,
+        "confirmation": CONFIRMATION_PROVIDER_APPROVAL_TOKEN,
+        "test": HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        "heldout-v2": HELDOUT_PROVIDER_APPROVAL_TOKEN,
+    }[args.dataset]
     if args.provider_approval_token != expected:
         raise SystemExit("ATV320 provider approval token is missing or invalid for this dataset.")
 
@@ -335,11 +390,13 @@ def _validate_semantic_approval(
                 "Semantic approval token was supplied while semantic evaluation is disabled."
             )
         return
-    expected = (
-        CALIBRATION_SEMANTIC_APPROVAL_TOKEN
-        if args.dataset == "calibration"
-        else HELDOUT_SEMANTIC_APPROVAL_TOKEN
-    )
+    expected = {
+        "calibration": CALIBRATION_SEMANTIC_APPROVAL_TOKEN,
+        "development": DEVELOPMENT_SEMANTIC_APPROVAL_TOKEN,
+        "confirmation": CONFIRMATION_SEMANTIC_APPROVAL_TOKEN,
+        "test": HELDOUT_SEMANTIC_APPROVAL_TOKEN,
+        "heldout-v2": HELDOUT_SEMANTIC_APPROVAL_TOKEN,
+    }[args.dataset]
     if args.judge_provider_approval_token != expected:
         raise SystemExit(
             "OpenRouter semantic-judge approval token is missing or invalid for this dataset."
@@ -400,12 +457,22 @@ def _score_semantic_execution(
 def _load_selected_dataset(
     args: argparse.Namespace, chunks: list[Any]
 ) -> tuple[list[Any], dict[str, Any], dict[str, Any]]:
-    """Load exactly one approved split; calibration never touches the held-out path."""
+    """Load exactly one approved split without opening its sealed counterpart."""
 
     if args.dataset == "calibration":
         dataset_path = args.calibration
         validation_kind = "calibration"
         dataset_key = "calibration_dataset_sha256"
+    elif args.dataset == "development":
+        dataset_path = args.development
+        validation_kind = "development"
+        dataset_key = "development_dataset_sha256"
+    elif args.dataset == "confirmation":
+        dataset_path = args.confirmation
+        validation_kind = "confirmation"
+        dataset_key = "confirmation_dataset_sha256"
+        _require_private_confirmation_path(dataset_path)
+        _require_private_confirmation_path(args.manifest)
     elif args.dataset == "test":
         dataset_path = args.test
         validation_kind = "test"
@@ -435,6 +502,16 @@ def _require_private_heldout_path(path: Path) -> None:
     except ValueError as exc:
         raise SystemExit(
             f"Held-out v2 input and manifest must remain under {PRIVATE_HELDOUT_ROOT}."
+        ) from exc
+
+
+def _require_private_confirmation_path(path: Path) -> None:
+    try:
+        path.resolve().relative_to(PRIVATE_CONFIRMATION_ROOT.resolve())
+    except ValueError as exc:
+        raise SystemExit(
+            "Confirmation input and manifest must remain under "
+            f"{PRIVATE_CONFIRMATION_ROOT}."
         ) from exc
 
 
@@ -471,14 +548,33 @@ def _validate_evaluation_manifest(
     for key, value in expected.items():
         if manifest.get(key) != value:
             raise RuntimeError(f"ATV320 evaluation manifest mismatch: {key}")
-    sealed_hash = manifest.get(
-        "heldout_dataset_sha256"
-        if dataset_key == "heldout_dataset_sha256"
-        else "test_dataset_sha256"
-    )
+    sealed_key = {
+        "calibration_dataset_sha256": "test_dataset_sha256",
+        "development_dataset_sha256": "confirmation_dataset_sha256",
+        "confirmation_dataset_sha256": "development_dataset_sha256",
+    }.get(dataset_key, dataset_key)
+    sealed_hash = manifest.get(sealed_key)
     if not isinstance(sealed_hash, str) or len(sealed_hash) != 64:
-        raise RuntimeError("ATV320 manifest has no valid sealed test dataset hash.")
+        raise RuntimeError(
+            f"ATV320 manifest has no valid sealed comparison hash: {sealed_key}"
+        )
     return manifest
+
+
+def _sealed_comparison_dataset_sha256(
+    manifest: Mapping[str, Any], dataset: str
+) -> str:
+    key = {
+        "calibration": "test_dataset_sha256",
+        "development": "confirmation_dataset_sha256",
+        "confirmation": "development_dataset_sha256",
+        "test": "test_dataset_sha256",
+        "heldout-v2": "heldout_dataset_sha256",
+    }[dataset]
+    value = manifest.get(key)
+    if not isinstance(value, str) or len(value) != 64:
+        raise RuntimeError(f"ATV320 manifest has no valid sealed comparison hash: {key}")
+    return value
 
 
 def _generation_configuration(settings: Settings) -> dict[str, Any]:
@@ -514,7 +610,7 @@ def _generation_configuration(settings: Settings) -> dict[str, Any]:
 
 
 def _source_identity() -> dict[str, Any]:
-    """Hash canonical behavior owners under the explicit v4 provenance schema."""
+    """Hash canonical behavior owners under the explicit v5 provenance schema."""
 
     return {
         "version": SOURCE_IDENTITY_VERSION,

@@ -48,6 +48,29 @@ class RetrievalCandidate(BaseModel):
 
 
 @dataclass(frozen=True)
+class RetrievalTrace:
+    """Immutable in-memory snapshots of candidates at retrieval boundaries.
+
+    Trace consumers must serialize only explicitly selected identifiers and rank
+    signals. Candidates intentionally remain in memory because they include raw
+    chunk text.
+    """
+
+    dense_candidates: tuple[RetrievalCandidate, ...] = ()
+    sparse_candidates: tuple[RetrievalCandidate, ...] = ()
+    fused_candidates: tuple[RetrievalCandidate, ...] = ()
+    selected_candidates_pre_dedup: tuple[RetrievalCandidate, ...] = ()
+    candidate_pool_post_dedup: tuple[RetrievalCandidate, ...] = ()
+    candidates_before_rerank: tuple[RetrievalCandidate, ...] = ()
+    raw_cross_encoder_candidates: tuple[RetrievalCandidate, ...] = ()
+    final_candidates: tuple[RetrievalCandidate, ...] = ()
+    refilled_candidate_ids: tuple[str, ...] = ()
+    candidate_count_pre_dedup: int = 0
+    candidate_count_post_dedup: int = 0
+    candidate_count_before_rerank: int = 0
+
+
+@dataclass(frozen=True)
 class QueryRetrievalResult:
     """Final ordered candidates plus independently measured stage latency."""
 
@@ -55,6 +78,7 @@ class QueryRetrievalResult:
     retrieval_ms: float
     rerank_ms: float
     candidate_pool: list[RetrievalCandidate] | None = None
+    trace: RetrievalTrace | None = None
 
 
 class QueryRetriever(Protocol):

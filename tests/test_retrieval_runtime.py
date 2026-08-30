@@ -17,7 +17,7 @@ from app.composition.retrieval import (
 )
 from app.config import Settings, resolve_retrieval_runtime, validate_retrieval_settings
 from app.domain.reranking import RerankingError
-from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate
+from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate, RetrievalTrace
 from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.errors import RerankerUnavailableError, RetrievalError, RetrievalUnavailableError
 
@@ -52,6 +52,8 @@ def test_lazy_retriever_builds_once_and_preserves_document_filter() -> None:
 
 
 def test_union_adapter_preserves_full_order_and_stage_timings() -> None:
+    trace = RetrievalTrace(final_candidates=(_candidate("b"), _candidate("a")))
+
     class Pipeline:
         def search(self, question, *, strategy, document_id):
             assert (strategy, document_id) == ("union", "manual-a")
@@ -65,12 +67,14 @@ def test_union_adapter_preserves_full_order_and_stage_timings() -> None:
                     "rerank": 4.0,
                     "total": 7.5,
                 },
+                trace=trace,
             )
 
     result = UnionRerankRetriever(Pipeline()).retrieve("q", document_id="manual-a")
     assert [item.chunk_id for item in result.candidates] == ["b", "a"]
     assert result.retrieval_ms == 3.75
     assert result.rerank_ms == 4.0
+    assert result.trace is trace
 
 
 @pytest.mark.parametrize(
@@ -101,12 +105,21 @@ def test_sparse_rollback_uses_bound_searcher_and_preserves_error_mapping() -> No
     settings = settings.model_copy(
         update={"retrieval_strategy": "sparse", "rerank_enabled": False}
     )
-    retriever = runtime.SparseRollbackRetriever(searcher=Searcher(), settings=settings)
+    retriever = runtime.SparseRollbackRetriever(
+        searcher=Searcher(),
+        settings=settings,
+        capture_trace=True,
+    )
 
     result = retriever.retrieve("q", document_id="manual-a")
 
     assert [candidate.chunk_id for candidate in result.candidates] == ["sparse"]
     assert result.rerank_ms == 0.0
+    assert result.trace is not None
+    assert result.trace.sparse_candidates == tuple(result.candidates)
+    assert result.trace.candidate_pool_post_dedup == tuple(result.candidates)
+    assert result.trace.candidate_count_pre_dedup == 1
+    assert result.trace.candidate_count_post_dedup == 1
     assert calls == [("q", settings.qdrant_hybrid_collection, 40, "manual-a")]
 
     class FailingSearcher:
@@ -299,11 +312,16 @@ def test_runtime_composition_injects_canonical_search_adapters(monkeypatch) -> N
 
     monkeypatch.setattr(runtime, "RerankPipeline", PipelineFactory)
 
-    built, _ = runtime.build_union_rerank_runtime(settings, contract=contract)
+    built, _ = runtime.build_union_rerank_runtime(
+        settings,
+        contract=contract,
+        capture_trace=True,
+    )
 
     assert built is pipeline
     assert captured["dense_searcher"] is dense_searcher
     assert captured["sparse_searcher"] is sparse_searcher
+    assert captured["capture_trace"] is True
     assert "client" not in captured
     assert "dense_embedding_model" not in captured
     assert "sparse_embedding_model" not in captured

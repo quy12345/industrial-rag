@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Literal
 
@@ -14,6 +14,7 @@ from app.domain.policies.fusion import (
     FusionProfile,
     apply_role_aware_rank_fusion,
     fuse_rrf,
+    fuse_weighted_rrf,
     select_coverage_preserving_candidates,
 )
 from app.domain.policies.list_completeness import (
@@ -25,6 +26,7 @@ from app.domain.reranking import CrossEncoder, CrossEncoderScore, RerankingError
 from app.domain.retrieval import (
     DenseSearchPort,
     RetrievalCandidate,
+    RetrievalTrace,
     RetrievedChunk,
     SparseSearchPort,
     dense_results_to_candidates,
@@ -41,6 +43,7 @@ class CandidatePool:
 
     candidates: list[RetrievalCandidate]
     stage_latency_ms: dict[str, float]
+    trace: RetrievalTrace | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,7 @@ class RerankExecution:
     candidates_before_rerank: list[RetrievalCandidate]
     candidates_after_rerank: list[RetrievalCandidate]
     stage_latency_ms: dict[str, float]
+    trace: RetrievalTrace | None = None
 
 
 class RerankPipeline:
@@ -73,6 +77,7 @@ class RerankPipeline:
         union_rrf_prune_limit: int | None = None,
         fusion_profile: FusionProfile | None = None,
         query_role_inferer: Callable[[str], QueryRoleInference] = infer_query_role,
+        capture_trace: bool = False,
     ) -> None:
         self.dense_searcher = dense_searcher
         self.sparse_searcher = sparse_searcher
@@ -89,6 +94,7 @@ class RerankPipeline:
         self.union_rrf_prune_limit = union_rrf_prune_limit
         self.fusion_profile = fusion_profile
         self.query_role_inferer = query_role_inferer
+        self.capture_trace = capture_trace
 
     def search(
         self, question: str, *, strategy: RerankStrategy, document_id: str | None = None
@@ -126,7 +132,17 @@ class RerankPipeline:
             raise RerankingError(str(exc)) from exc
         stages = dict(execution.stage_latency_ms)
         stages["role_aware_rank_fusion"] = (perf_counter() - inference_started) * 1000
-        return RerankExecution(execution.candidates_before_rerank, candidates, stages)
+        trace = (
+            replace(execution.trace, final_candidates=tuple(candidates))
+            if execution.trace is not None
+            else None
+        )
+        return RerankExecution(
+            execution.candidates_before_rerank,
+            candidates,
+            stages,
+            trace,
+        )
 
     def prepare_pool(
         self, question: str, *, strategy: RerankStrategy, document_id: str | None = None
@@ -173,16 +189,25 @@ class RerankPipeline:
             _with_document_context(candidate, self.document_contexts.get(candidate.document_id))
             for candidate in sparse_candidates
         ]
+        fused_candidates: list[RetrievalCandidate] = []
         if strategy == "union" and self.fusion_profile is not None:
             role_started = perf_counter()
             query_role = self.query_role_inferer(question)
             stages["query_role_inference"] = (perf_counter() - role_started) * 1000
             try:
+                if self.capture_trace:
+                    fused_candidates = fuse_weighted_rrf(
+                        dense_candidates,
+                        contextual_sparse_candidates,
+                        profile=self.fusion_profile,
+                        query_role=query_role.role,
+                    )
                 candidates = select_coverage_preserving_candidates(
                     dense_candidates,
                     contextual_sparse_candidates,
                     profile=self.fusion_profile,
                     query_role=query_role.role,
+                    fused_candidates=(fused_candidates if self.capture_trace else None),
                 )
             except FusionPolicyError as exc:
                 raise RerankingError(str(exc)) from exc
@@ -196,6 +221,8 @@ class RerankPipeline:
                 rrf_k=self.rrf_k,
                 final_limit=len(dense_results) + len(sparse_candidates),
             )
+            if self.capture_trace:
+                fused_candidates = list(candidates)
             pending_prune_limit = self.union_rrf_prune_limit
             preparation_stage = "rrf_pruning"
         else:
@@ -206,6 +233,8 @@ class RerankPipeline:
                 rrf_k=self.rrf_k,
                 hybrid_limit=max(self.dense_candidate_limit, self.sparse_candidate_limit),
             )
+            if self.capture_trace and strategy != "sparse":
+                fused_candidates = list(candidates)
             preparation_stage = "fusion" if strategy == "hybrid" else "union_preparation"
         if not (strategy == "union" and self.fusion_profile is not None):
             candidates = [
@@ -213,15 +242,32 @@ class RerankPipeline:
                 for candidate in candidates
             ]
         stages[preparation_stage] = (perf_counter() - preparation_started) * 1000
+        selected_candidates_pre_dedup = list(candidates) if self.capture_trace else []
         if self.deduplicate_content:
             deduplication_started = perf_counter()
             candidates = deduplicate_candidates_by_content(candidates)
             stages["content_deduplication"] = (perf_counter() - deduplication_started) * 1000
+        candidates_post_dedup = list(candidates) if self.capture_trace else []
         if pending_prune_limit is not None:
             candidates = candidates[:pending_prune_limit]
         if strategy == "sparse" and "union_preparation" in stages:
             stages.pop("union_preparation")
-        return CandidatePool(candidates, stages)
+        trace = (
+            RetrievalTrace(
+                dense_candidates=tuple(dense_candidates),
+                sparse_candidates=tuple(contextual_sparse_candidates),
+                fused_candidates=tuple(fused_candidates),
+                selected_candidates_pre_dedup=tuple(selected_candidates_pre_dedup),
+                candidate_pool_post_dedup=tuple(candidates_post_dedup),
+                candidates_before_rerank=tuple(candidates),
+                candidate_count_pre_dedup=len(selected_candidates_pre_dedup),
+                candidate_count_post_dedup=len(candidates_post_dedup),
+                candidate_count_before_rerank=len(candidates),
+            )
+            if self.capture_trace
+            else None
+        )
+        return CandidatePool(candidates, stages, trace)
 
 def build_candidate_text(candidate: RetrievalCandidate) -> str:
     """Build trusted document context, heading breadcrumb, and raw-content input."""
@@ -409,7 +455,16 @@ def execute_rerank(
     rerank_ms = (perf_counter() - started) * 1000
     stages = {**pool.stage_latency_ms, "rerank": rerank_ms}
     stages["total"] = sum(stages.values())
-    return RerankExecution(list(pool.candidates), reranked, stages)
+    trace = (
+        replace(
+            pool.trace,
+            raw_cross_encoder_candidates=tuple(reranked),
+            final_candidates=tuple(reranked),
+        )
+        if pool.trace is not None
+        else None
+    )
+    return RerankExecution(list(pool.candidates), reranked, stages, trace)
 
 
 def _previous_rank(

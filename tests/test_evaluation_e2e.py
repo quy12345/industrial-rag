@@ -10,7 +10,7 @@ import pytest
 from app.application.query_service import QueryExecution, QueryTimings
 from app.contracts.query import Citation, QueryResponse
 from app.domain.generation import TokenUsage
-from app.domain.retrieval import RetrievalCandidate
+from app.domain.retrieval import RetrievalCandidate, RetrievalTrace
 from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
 from evaluation.e2e import (
     aggregate_query_records,
@@ -80,6 +80,10 @@ def _execution(
     pool: list[RetrievalCandidate],
     abstained: bool = False,
     evidence: list[RetrievalCandidate] | None = None,
+    trace: RetrievalTrace | None = None,
+    evidence_context_chars: int = 0,
+    evidence_truncated_source_ids: tuple[str, ...] = (),
+    answer: str | None = None,
 ) -> QueryExecution:
     actual_evidence = evidence if evidence is not None else final
     citations = []
@@ -97,7 +101,11 @@ def _execution(
         ]
     return QueryExecution(
         response=QueryResponse(
-            answer="The documented range is -599 to +599 Hz." if not abstained else "insufficient",
+            answer=(
+                answer or "The documented range is -599 to +599 Hz."
+                if not abstained
+                else "insufficient"
+            ),
             abstained=abstained,
             abstention_reason="llm_insufficient_evidence" if abstained else None,
             citations=citations,
@@ -107,6 +115,9 @@ def _execution(
         candidates=tuple(final),
         candidate_pool=tuple(pool),
         evidence_candidates=tuple(actual_evidence),
+        retrieval_trace=trace,
+        evidence_context_chars=evidence_context_chars,
+        evidence_truncated_source_ids=evidence_truncated_source_ids,
     )
 
 
@@ -456,7 +467,232 @@ def test_document_contamination_metrics_and_gate_are_explicit() -> None:
     assert gates["gates"]["wrong_document_citations"]["passed"] is False
 
 
-def test_v8_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
+def test_retrieval_trace_serializes_only_allowlisted_ids_and_rank_signals() -> None:
+    qrel = _candidate("qrel").model_copy(
+        update={
+            "text": "TRACE-SECRET-EVIDENCE",
+            "dense_rank": 1,
+            "rerank_rank": 1,
+            "metadata": {
+                "document_role": "installation",
+                "query_role": "installation",
+                "query_role_confidence": "strong",
+                "cross_encoder_rank": 1,
+                "role_rank": 1,
+                "private_debug": "TRACE-SECRET-METADATA",
+            },
+        }
+    )
+    duplicate = _candidate("duplicate").model_copy(update={"rrf_rank": 2})
+    pruned_by_selection = _candidate("selection-pruned").model_copy(
+        update={
+            "rrf_rank": 3,
+            "metadata": {
+                "query_role": "TRACE-SECRET-ALLOWLIST-ROLE",
+                "query_role_confidence": "TRACE-SECRET-ALLOWLIST-CONFIDENCE",
+                "cross_encoder_rank": "TRACE-SECRET-ALLOWLIST-RANK",
+            },
+        }
+    )
+    pruned_after_dedup = _candidate("post-dedup-pruned").model_copy(update={"rrf_rank": 4})
+    trace = RetrievalTrace(
+        dense_candidates=(qrel,),
+        sparse_candidates=(duplicate,),
+        fused_candidates=(qrel, duplicate, pruned_by_selection, pruned_after_dedup),
+        selected_candidates_pre_dedup=(qrel, duplicate, pruned_after_dedup),
+        candidate_pool_post_dedup=(qrel, pruned_after_dedup),
+        candidates_before_rerank=(qrel,),
+        raw_cross_encoder_candidates=(qrel,),
+        final_candidates=(qrel,),
+        candidate_count_pre_dedup=3,
+        candidate_count_post_dedup=2,
+        candidate_count_before_rerank=1,
+    )
+
+    record = score_query_execution(
+        _item(),
+        _execution(
+            final=[qrel],
+            pool=[qrel],
+            trace=trace,
+            evidence_context_chars=3_900,
+            evidence_truncated_source_ids=("S2",),
+        ),
+    )
+
+    payload = record["retrieval_trace"]
+    assert payload["status"] == "captured"
+    assert payload["candidate_count_pre_dedup"] == 3
+    assert payload["candidate_count_post_dedup"] == 2
+    assert payload["candidate_count_before_rerank"] == 1
+    assert payload["removed_by_candidate_selection_ids"] == ["selection-pruned"]
+    assert payload["removed_by_same_document_dedup_ids"] == ["duplicate"]
+    assert payload["removed_by_prune_ids"] == ["post-dedup-pruned"]
+    assert payload["refilled_candidate_ids"] == []
+    assert payload["stages"]["dense"]["strict_direct_evidence_rank"] == 1
+    assert payload["stages"]["raw_cross_encoder"]["candidates"][0] == {
+        "chunk_id": "qrel",
+        "document_id": "installation",
+        "ordinal_rank": 1,
+        "dense_rank": 1,
+        "sparse_rank": None,
+        "rrf_rank": None,
+        "rerank_rank": 1,
+        "document_role": "installation",
+        "query_role": "installation",
+        "query_role_confidence": "strong",
+        "cross_encoder_rank": 1,
+        "role_rank": 1,
+    }
+    serialized_trace = json.dumps(payload, sort_keys=True)
+    assert "TRACE-SECRET-EVIDENCE" not in serialized_trace
+    assert "TRACE-SECRET-METADATA" not in serialized_trace
+    assert "TRACE-SECRET-ALLOWLIST" not in serialized_trace
+    assert record["evidence_rendering"] == {
+        "context_chars": 3_900,
+        "truncated": True,
+        "truncated_source_ids": ["S2"],
+    }
+
+
+def test_retrieval_trace_is_explicitly_disabled_when_not_captured() -> None:
+    candidate = _candidate("qrel")
+    record = score_query_execution(
+        _item(),
+        _execution(final=[candidate], pool=[candidate]),
+    )
+
+    assert record["retrieval_trace"] == {"status": "disabled"}
+    assert record["fact_family_id"] is None
+    assert record["evidence_rendering"] == {
+        "context_chars": 0,
+        "truncated": False,
+        "truncated_source_ids": [],
+    }
+
+
+def test_sanitized_record_excludes_raw_dataset_answer_and_evidence_text() -> None:
+    candidate = _candidate("qrel").model_copy(
+        update={"text": "SENTINEL_RAW_EVIDENCE"}
+    )
+    item = _item().model_copy(
+        update={
+            "question": "SENTINEL_RAW_QUESTION",
+            "expected_answer_facts": [
+                ExpectedAnswerFact(
+                    id="safe-fact-id",
+                    aliases=["SENTINEL_RAW_EXPECTED_FACT"],
+                )
+            ],
+        }
+    )
+    record = score_query_execution(
+        item,
+        _execution(
+            final=[candidate],
+            pool=[candidate],
+            answer="SENTINEL_RAW_EXPECTED_FACT",
+        ),
+    )
+
+    persisted = json.dumps(record, sort_keys=True)
+    assert record["answer_fact_results"][0]["selected_group_alternative_count"] == 1
+    for sentinel in (
+        "SENTINEL_RAW_QUESTION",
+        "SENTINEL_RAW_EXPECTED_FACT",
+        "SENTINEL_RAW_EVIDENCE",
+    ):
+        assert sentinel not in persisted
+
+
+def test_exact_content_equivalent_metrics_do_not_relax_strict_quality_gates() -> None:
+    representative = _candidate("programming-copy", document_id="programming")
+    item = _item().model_copy(update={"relevant_chunk_ids": ["installation-copy"]})
+    record = score_query_execution(
+        item,
+        _execution(final=[representative], pool=[representative]),
+        exact_content_equivalence={
+            "installation-copy": ("installation-copy", "programming-copy"),
+            "programming-copy": ("installation-copy", "programming-copy"),
+        },
+    )
+
+    assert record["candidate_direct_evidence_rank"] is None
+    assert record["direct_evidence_rank"] is None
+    assert record["failure_class"] == "candidate_miss"
+    assert record["citation_direct_evidence"] is False
+    assert record["citation_document_correct"] is False
+    assert record["unexpected_citation_document_ids"] == ["programming"]
+    assert record["candidate_exact_equivalent_evidence_rank"] == 1
+    assert record["ranked_exact_equivalent_evidence_rank"] == 1
+    assert record["exact_equivalent_evidence_rank"] == 1
+    assert record["citation_exact_equivalent_evidence"] is True
+    assert record["citation_exact_equivalent_document_correct"] is True
+    assert record["unexpected_citation_document_ids_excluding_exact_equivalents"] == []
+    assert record["wrong_document_retrieval_at_1"] is True
+    assert (
+        record["wrong_document_retrieval_at_1_excluding_exact_equivalents"] is False
+    )
+
+    unsupported = score_query_execution(
+        _item(answerable=False),
+        _execution(final=[_candidate("other")], pool=[_candidate("other")], abstained=True),
+    )
+    metrics = aggregate_query_records([record, unsupported])
+    assert metrics["retrieval"]["candidate_recall"] == 0.0
+    assert metrics["retrieval"]["hit_rate_at_1"] == 0.0
+    assert metrics["retrieval"]["exact_equivalent_candidate_recall"] == 1.0
+    assert metrics["retrieval"]["exact_equivalent_hit_rate_at_1"] == 1.0
+    assert metrics["citations"]["direct_evidence_rate_when_answered"] == 0.0
+    assert metrics["citations"]["exact_equivalent_evidence_rate_when_answered"] == 1.0
+    assert metrics["citations"]["wrong_document_citation_count"] == 1
+    assert (
+        metrics["citations"][
+            "wrong_document_citation_count_excluding_exact_equivalents"
+        ]
+        == 0
+    )
+    assert (
+        metrics["document_contamination"]["wrong_document_retrieval_at_1_count"]
+        == 1
+    )
+    assert (
+        metrics["document_contamination"][
+            "wrong_document_retrieval_at_1_count_excluding_exact_equivalents"
+        ]
+        == 0
+    )
+
+    gates = evaluate_quality_gates(metrics)
+    assert gates["overall_pass"] is False
+    assert gates["gates"]["candidate_recall"]["actual"] == 0.0
+    assert gates["gates"]["wrong_document_citations"]["actual"] == 1.0
+
+
+def test_document_alternative_metadata_cannot_exempt_unrelated_wrong_provenance() -> None:
+    unrelated = _candidate("unrelated", document_id="programming").model_copy(
+        update={
+            "metadata": {
+                "equivalent_chunk_ids": ["unrelated", "other-copy"],
+                "equivalent_document_ids": ["installation", "programming"],
+            }
+        }
+    )
+
+    record = score_query_execution(
+        _item(),
+        _execution(final=[unrelated], pool=[unrelated]),
+    )
+
+    assert record["citation_exact_equivalent_evidence"] is False
+    assert record["citation_exact_equivalent_document_correct"] is False
+    assert record["unexpected_citation_document_ids_excluding_exact_equivalents"] == [
+        "programming"
+    ]
+    assert record["wrong_document_retrieval_at_1_excluding_exact_equivalents"] is True
+
+
+def test_v9_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -468,9 +704,9 @@ def test_v8_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
         ],
     )
     args = evaluate_e2e._parse_args()
-    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 8
-    assert args.output.name == "atv320-calibration-e2e-v8.json"
-    assert args.checkpoint.name == "atv320-calibration-e2e-v8-checkpoint.jsonl"
+    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 9
+    assert args.output.name == "atv320-calibration-e2e-v9.json"
+    assert args.checkpoint.name == "atv320-calibration-e2e-v9-checkpoint.jsonl"
     assert args.semantic_judge == "none"
     settings = evaluate_e2e._runtime_settings(evaluate_e2e.Settings())
     assert settings.rerank_deduplicate_content is True
@@ -494,8 +730,39 @@ def test_heldout_v2_cli_uses_private_sealed_paths(monkeypatch) -> None:
 
     assert args.heldout_v2 == evaluate_e2e.PRIVATE_HELDOUT_DATASET_PATH
     assert args.manifest == evaluate_e2e.PRIVATE_HELDOUT_MANIFEST_PATH
-    assert args.output.name == "atv320-heldout-v2-e2e-v8.json"
-    assert args.checkpoint.name == "atv320-heldout-v2-e2e-v8-checkpoint.jsonl"
+    assert args.output.name == "atv320-heldout-v2-e2e-v9.json"
+    assert args.checkpoint.name == "atv320-heldout-v2-e2e-v9-checkpoint.jsonl"
+
+
+@pytest.mark.parametrize(
+    ("dataset", "expected_manifest", "expected_dataset"),
+    [
+        (
+            "development",
+            evaluate_e2e.ACTIVE_DEVELOPMENT_MANIFEST_PATH,
+            evaluate_e2e.ACTIVE_DEVELOPMENT_PATH,
+        ),
+        (
+            "confirmation",
+            evaluate_e2e.PRIVATE_CONFIRMATION_MANIFEST_PATH,
+            evaluate_e2e.PRIVATE_CONFIRMATION_DATASET_PATH,
+        ),
+    ],
+)
+def test_optimization_cli_uses_versioned_and_sealed_defaults(
+    monkeypatch, dataset, expected_manifest, expected_dataset
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["evaluate_e2e", "--dataset", dataset, "--provider-approval-token", "unused"],
+    )
+
+    args = evaluate_e2e._parse_args()
+
+    assert args.manifest == expected_manifest
+    assert getattr(args, dataset) == expected_dataset
+    assert args.output.name == f"atv320-{dataset}-e2e-v9.json"
+    assert args.checkpoint.name == f"atv320-{dataset}-e2e-v9-checkpoint.jsonl"
 
 
 def test_provider_execution_requires_dataset_specific_approval() -> None:
@@ -526,6 +793,18 @@ def test_provider_execution_requires_dataset_specific_approval() -> None:
         SimpleNamespace(
             dataset="heldout-v2",
             provider_approval_token=evaluate_e2e.HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        )
+    )
+    evaluate_e2e._validate_execution_approval(
+        SimpleNamespace(
+            dataset="development",
+            provider_approval_token=evaluate_e2e.DEVELOPMENT_PROVIDER_APPROVAL_TOKEN,
+        )
+    )
+    evaluate_e2e._validate_execution_approval(
+        SimpleNamespace(
+            dataset="confirmation",
+            provider_approval_token=evaluate_e2e.CONFIRMATION_PROVIDER_APPROVAL_TOKEN,
         )
     )
 
@@ -657,7 +936,37 @@ def test_heldout_v2_manifest_requires_its_sealed_dataset_hash(
     assert manifest["heldout_dataset_sha256"] == dataset_hash
 
 
-def test_item_id_is_calibration_only(monkeypatch) -> None:
+def test_development_manifest_requires_confirmation_hash(monkeypatch, tmp_path) -> None:
+    manifest_path = tmp_path / "development-manifest.json"
+    corpus = {"chunk_count": 2753, "chunk_ids_sha256": "c" * 64}
+    development_hash = "d" * 64
+    confirmation_hash = "e" * 64
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "corpus": corpus,
+                "development_dataset_sha256": development_hash,
+                "confirmation_dataset_sha256": confirmation_hash,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(evaluate_e2e, "chunk_set_metadata", lambda chunks: corpus)
+    monkeypatch.setattr(evaluate_e2e, "dataset_sha256", lambda dataset: development_hash)
+
+    manifest = evaluate_e2e._validate_evaluation_manifest(
+        manifest_path,
+        [],
+        [],
+        dataset_key="development_dataset_sha256",
+    )
+
+    assert evaluate_e2e._sealed_comparison_dataset_sha256(
+        manifest, "development"
+    ) == confirmation_hash
+
+
+def test_item_id_is_rejected_for_sealed_datasets(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -672,6 +981,77 @@ def test_item_id_is_calibration_only(monkeypatch) -> None:
     )
     with pytest.raises(SystemExit):
         evaluate_e2e._parse_args()
+
+
+def test_development_item_id_is_allowed_but_confirmation_partial_run_is_rejected(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "development",
+            "--item-id",
+            "development_001",
+            "--output",
+            "artifacts/metrics/dev-item-001.json",
+            "--checkpoint",
+            "artifacts/metrics/dev-item-001-checkpoint.jsonl",
+            "--provider-approval-token",
+            "unused",
+        ],
+    )
+    assert evaluate_e2e._parse_args().item_id == "development_001"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "development",
+            "--item-id",
+            "development_001",
+            "--provider-approval-token",
+            "unused",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        evaluate_e2e._parse_args()
+    assert "explicit --output and --checkpoint" in capsys.readouterr().err
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "confirmation",
+            "--max-queries",
+            "1",
+            "--provider-approval-token",
+            "unused",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        evaluate_e2e._parse_args()
+    assert "sealed evaluation datasets" in capsys.readouterr().err
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "heldout-v2",
+            "--max-queries",
+            "1",
+            "--provider-approval-token",
+            "unused",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        evaluate_e2e._parse_args()
+    assert "sealed evaluation datasets" in capsys.readouterr().err
 
 
 def test_checkpoint_fails_closed_when_provider_identity_changes(tmp_path) -> None:
