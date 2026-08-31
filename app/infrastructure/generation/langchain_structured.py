@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from threading import Lock
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
 from app.domain.generation import EvidenceBundle, GeneratedAnswer, GenerationResult, TokenUsage
@@ -29,6 +29,8 @@ class LangChainStructuredGenerator:
         system_prompt: str,
         human_prompt: str,
         correction_text_builder: Callable[[Sequence[str]], str],
+        output_schema: type[BaseModel] = GeneratedAnswer,
+        output_mapper: Callable[[BaseModel, EvidenceBundle], GeneratedAnswer] | None = None,
         model_factory: Callable[..., Any] | None = None,
         prompt_factory: Callable[..., Any] | None = None,
     ) -> None:
@@ -36,6 +38,10 @@ class LangChainStructuredGenerator:
         self.system_prompt = system_prompt
         self.human_prompt = human_prompt
         self.correction_text_builder = correction_text_builder
+        if output_schema is not GeneratedAnswer and output_mapper is None:
+            raise ValueError("A custom structured output schema requires an output mapper.")
+        self.output_schema = output_schema
+        self.output_mapper = output_mapper
         self._model_factory = model_factory
         self._prompt_factory = prompt_factory
         self._structured_model: Any | None = None
@@ -91,16 +97,38 @@ class LangChainStructuredGenerator:
                 raise LLMRefusalError("The generation provider refused the request.")
             raise GenerationValidationError("Provider returned no structured answer.")
         try:
-            output = (
+            structured_output = (
                 parsed
-                if isinstance(parsed, GeneratedAnswer)
-                else GeneratedAnswer.model_validate(parsed)
+                if isinstance(parsed, self.output_schema)
+                else self.output_schema.model_validate(parsed)
             )
         except ValidationError as exc:
             raise GenerationValidationError(
-                "Provider output does not match GeneratedAnswer.",
+                f"Provider output does not match {self.output_schema.__name__}.",
                 errors=tuple(error["type"] for error in exc.errors()),
             ) from exc
+        if self.output_mapper is None:
+            if not isinstance(structured_output, GeneratedAnswer):
+                raise GenerationValidationError(
+                    "Structured output has no configured mapper.",
+                    errors=("output_mapper_missing",),
+                )
+            output = structured_output
+        else:
+            try:
+                output = self.output_mapper(structured_output, evidence)
+            except GenerationValidationError:
+                raise
+            except Exception as exc:
+                raise GenerationValidationError(
+                    "Structured output mapping failed.",
+                    errors=(type(exc).__name__,),
+                ) from None
+            if not isinstance(output, GeneratedAnswer):
+                raise GenerationValidationError(
+                    "Structured output mapper returned an invalid result.",
+                    errors=("output_mapper_result_invalid",),
+                )
         return GenerationResult(output=output, usage=_extract_usage(result.get("raw")))
 
     def _get_structured_model(self) -> Any:
@@ -150,7 +178,7 @@ class LangChainStructuredGenerator:
                         )
                     model = factory(**model_kwargs)
                     self._structured_model = model.with_structured_output(
-                        GeneratedAnswer,
+                        self.output_schema,
                         method="json_schema",
                         strict=True,
                         include_raw=True,

@@ -482,6 +482,16 @@ def test_retrieval_evaluation_uses_only_public_domain_contracts() -> None:
     }
 
 
+def test_generation_experiments_use_existing_generation_contracts_only() -> None:
+    graph = _import_graph()
+
+    assert graph["evaluation.generation_experiments"] == {
+        "app.application.generation_prompt",
+        "app.domain.generation",
+        "app.errors",
+    }
+
+
 def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
     graph = _import_graph()
 
@@ -517,6 +527,7 @@ def test_historical_evaluation_helpers_are_outside_the_active_package() -> None:
         "__init__.py",
         "dataset.py",
         "e2e.py",
+        "generation_experiments.py",
         "retrieval.py",
         "semantic.py",
     }

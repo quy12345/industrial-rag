@@ -80,7 +80,13 @@ class FakeModel:
         return self.runnable
 
 
-def _adapter(result=None, *, error=None, **settings_overrides):
+def _adapter(
+    result=None,
+    *,
+    error=None,
+    generator_overrides=None,
+    **settings_overrides,
+):
     prompt = FakePrompt([])
     runnable = FakeRunnable(result, error)
     model = FakeModel(runnable)
@@ -94,6 +100,7 @@ def _adapter(result=None, *, error=None, **settings_overrides):
         Settings(_env_file=None, openai_api_key="secret", **settings_overrides),
         model_factory=model_factory,
         prompt_factory=lambda messages: prompt,
+        **(generator_overrides or {}),
     )
     return adapter, prompt, model, runnable, model_kwargs
 
@@ -323,6 +330,77 @@ def test_adapter_uses_gemini_openai_compatible_chat_completions() -> None:
         "strict": True,
         "include_raw": True,
     }
+
+
+def test_adapter_supports_an_injected_schema_and_mapper_without_changing_defaults() -> None:
+    from evaluation.generation_experiments import (
+        ClaimCoverageAnswer,
+        map_claim_coverage_output,
+    )
+
+    result = {
+        "parsed": {
+            "claims": [
+                {"text": "First fact.", "source_ids": ["S1"]},
+                {"text": "Second fact.", "source_ids": ["S1"]},
+            ],
+            "insufficient_evidence": False,
+        },
+        "parsing_error": None,
+        "raw": SimpleNamespace(usage_metadata=None),
+    }
+    adapter, _, model, _, _ = _adapter(
+        result,
+        generator_overrides={
+            "output_schema": ClaimCoverageAnswer,
+            "output_mapper": map_claim_coverage_output,
+        },
+    )
+
+    generated = adapter.generate(question="Question", evidence=_bundle())
+
+    assert generated.output == GeneratedAnswer(
+        answer="First fact.\nSecond fact.",
+        source_ids=["S1"],
+        insufficient_evidence=False,
+    )
+    schema, structured_kwargs = model.structured_kwargs
+    assert schema is ClaimCoverageAnswer
+    assert structured_kwargs == {
+        "method": "json_schema",
+        "strict": True,
+        "include_raw": True,
+    }
+
+
+def test_adapter_sanitizes_unexpected_mapper_errors() -> None:
+    from pydantic import BaseModel
+
+    class CustomOutput(BaseModel):
+        value: str
+
+    def unsafe_mapper(parsed, evidence):
+        raise RuntimeError(f"do not expose {parsed.value} or {evidence.text}")
+
+    result = {
+        "parsed": {"value": "secret-output"},
+        "parsing_error": None,
+        "raw": SimpleNamespace(usage_metadata=None),
+    }
+    adapter, *_ = _adapter(
+        result,
+        generator_overrides={
+            "output_schema": CustomOutput,
+            "output_mapper": unsafe_mapper,
+        },
+    )
+
+    with pytest.raises(GenerationValidationError) as caught:
+        adapter.generate(question="secret-question", evidence=_bundle())
+
+    assert caught.value.errors == ("RuntimeError",)
+    assert "secret-output" not in str(caught.value)
+    assert "secret-question" not in str(caught.value)
 
 
 def test_correction_feedback_is_added_without_changing_evidence() -> None:
