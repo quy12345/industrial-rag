@@ -12,14 +12,17 @@ from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate, Retri
 from evaluation.retrieval import (
     DEVELOPMENT_RETRIEVAL_VARIANTS,
     aggregate_retrieval_rows,
+    aggregate_retrieval_rows_by_language,
     build_corpus_exact_content_equivalence,
     development_retrieval_variant,
     direct_evidence_rank,
+    evidence_failure_class,
     evidence_rank,
     exact_equivalent_evidence_rank,
     percentile_nearest_rank,
     phrase_matches,
     score_retrieval_execution,
+    select_evaluation_evidence,
 )
 from scripts.evaluation import evaluate_retrieval
 
@@ -27,13 +30,25 @@ from scripts.evaluation import evaluate_retrieval
 def _row(identifier: str, rank: int | None, *, wrong_document: bool = False) -> dict:
     return {
         "id": identifier,
+        "language": "en",
         "candidate_count": 30,
         "final_candidate_count": 30,
+        "evidence_candidate_count": 5,
         "candidate_direct_evidence_rank": rank,
         "final_direct_evidence_rank": rank,
+        "evidence_direct_evidence_rank": rank,
+        "evidence_exact_equivalent_evidence_rank": rank,
         "failure_class": "candidate_miss" if rank is None else "hit",
+        "evidence_failure_class": "candidate_miss" if rank is None else "hit",
         "wrong_document_top1": wrong_document,
         "wrong_document_candidate_count_at_5": int(wrong_document),
+        "wrong_document_evidence_top1": wrong_document,
+        "wrong_document_evidence_candidate_count_at_5": int(wrong_document),
+        "wrong_document_evidence_top1_excluding_exact_equivalents": wrong_document,
+        "wrong_document_evidence_candidate_count_at_5_excluding_exact_equivalents": int(
+            wrong_document
+        ),
+        "evidence_selection": {"duplicate_groups": []},
         "document_context_complete": True,
         "retrieval_ms": 10.0,
         "rerank_ms": 100.0,
@@ -46,12 +61,23 @@ def test_retrieval_aggregation_reports_recall_ranks_contamination_and_latency() 
     assert metrics["raw_component_recall"] == 0.5
     assert metrics["candidate_exact_equivalent_recall"] == 0.5
     assert metrics["hit_rate_at_5"] == 0.5
+    assert metrics["evidence_hit_rate_at_5"] == 0.5
+    assert metrics["evidence_exact_equivalent_hit_rate_at_5"] == 0.5
     assert metrics["mrr_at_5"] == 0.5
     assert metrics["candidate_count_maximum"] == 30
     assert metrics["candidate_count_minimum"] == 30
     assert metrics["candidate_count_average"] == 30
     assert metrics["wrong_document_top1_rate"] == 0.5
     assert metrics["wrong_document_candidate_rate_at_5"] == 0.1
+    assert metrics["wrong_document_evidence_top1_rate"] == 0.5
+    assert metrics["wrong_document_evidence_candidate_rate_at_5"] == 0.1
+    assert (
+        metrics[
+            "wrong_document_evidence_candidate_rate_at_5_excluding_exact_equivalents"
+        ]
+        == 0.1
+    )
+    assert metrics["evidence_failure_classes"] == {"candidate_miss": 1, "hit": 1}
     assert metrics["document_context_complete_rate"] == 1.0
     assert metrics["rerank_latency_ms"]["p95"] == 100.0
 
@@ -59,6 +85,45 @@ def test_retrieval_aggregation_reports_recall_ranks_contamination_and_latency() 
 def test_retrieval_aggregation_rejects_empty_input() -> None:
     with pytest.raises(ValueError, match="at least one"):
         aggregate_retrieval_rows([])
+
+
+def test_evidence_aggregation_handles_real_empty_retrieval_and_language_groups() -> None:
+    empty_execution = QueryRetrievalResult(
+        candidates=[],
+        candidate_pool=[],
+        retrieval_ms=1.0,
+        rerank_ms=2.0,
+    )
+    empty_selection = select_evaluation_evidence(
+        "Which wiring step is required?",
+        empty_execution.candidates,
+    )
+    english = score_retrieval_execution(
+        SimpleNamespace(
+            id="en-empty",
+            fact_family_id="family-empty",
+            language="en",
+            question_type="wiring",
+            relevant_chunk_ids=["missing"],
+            expected_document_ids=["installation"],
+        ),
+        empty_execution,
+        corpus_equivalence={},
+        evidence_selection=empty_selection,
+    )
+    vietnamese = _row("vi-hit", 1)
+    vietnamese["language"] = "vi"
+
+    overall = aggregate_retrieval_rows([english])
+    per_language = aggregate_retrieval_rows_by_language([english, vietnamese])
+
+    assert overall["wrong_document_evidence_candidate_rate_at_5"] == 0.0
+    assert per_language["en"]["evidence_hit_rate_at_5"] == 0.0
+    assert per_language["vi"]["evidence_hit_rate_at_5"] == 1.0
+
+
+def test_evidence_failure_class_treats_selected_qrel_as_a_hit() -> None:
+    assert evidence_failure_class(6, 6, 1) == "hit"
 
 
 def test_retrieval_metric_primitives_are_deterministic() -> None:
@@ -126,8 +191,9 @@ def test_retrieval_evaluator_hashes_existing_canonical_behavior_owners() -> None
     } <= identity["files"].keys()
     assert identity["files_sha256"] == evaluate_retrieval._json_sha256(expected)
     assert identity == evaluate_retrieval._source_identity()
-    assert evaluate_retrieval.ARTIFACT_SCHEMA_VERSION == 3
-    assert evaluate_retrieval.DEFAULT_OUTPUT.name == "atv320-retrieval-evaluation-v3.json"
+    assert "evidence_policy" in identity["files"]
+    assert evaluate_retrieval.ARTIFACT_SCHEMA_VERSION == 4
+    assert evaluate_retrieval.DEFAULT_OUTPUT.name == "atv320-retrieval-evaluation-v4.json"
 
 
 def test_six_development_variants_are_preregistered_and_behaviorally_distinct() -> None:
@@ -193,10 +259,10 @@ def test_retrieval_variant_cli_is_development_only_and_uses_distinct_paths() -> 
         ]
     )
     assert development.output.name == (
-        "atv320-development-retrieval-refill-query-expansion-v2-v3.json"
+        "atv320-development-retrieval-refill-query-expansion-v2-v4.json"
     )
     assert development.checkpoint.name == (
-        "atv320-development-retrieval-refill-query-expansion-v2-v3-checkpoint.jsonl"
+        "atv320-development-retrieval-refill-query-expansion-v2-v4-checkpoint.jsonl"
     )
     assert (
         evaluate_retrieval._active_retrieval_variant(
@@ -219,12 +285,12 @@ def test_retrieval_checkpoint_fails_closed_across_variants_and_legacy_schema(
 ) -> None:
     checkpoint = tmp_path / "retrieval-checkpoint.jsonl"
     baseline = {
-        "artifact_schema_version": 3,
+        "artifact_schema_version": 4,
         "variant": "baseline",
         "selected_item_ids": ["dev-001"],
     }
     refill = {
-        "artifact_schema_version": 3,
+        "artifact_schema_version": 4,
         "variant": "refill",
         "selected_item_ids": ["dev-001"],
     }
@@ -239,7 +305,7 @@ def test_retrieval_checkpoint_fails_closed_across_variants_and_legacy_schema(
         evaluate_retrieval._load_checkpoint(
             checkpoint,
             {
-                "artifact_schema_version": 2,
+                "artifact_schema_version": 3,
                 "variant": "baseline",
                 "selected_item_ids": ["dev-001"],
             },
@@ -292,14 +358,14 @@ def test_retrieval_scoring_trace_excludes_question_text_and_candidate_content() 
     candidate = RetrievalCandidate(
         chunk_id="chunk-1",
         document_id="installation",
-        filename="manual.pdf",
+        filename="TRACE-SECRET-FILENAME.pdf",
         text="TRACE-SECRET-EVIDENCE",
         page_numbers=[1],
         headings=["TRACE-SECRET-HEADING"],
         content_type="text",
         metadata={
             "document_role": "installation",
-            "document_title": "Installation manual",
+            "document_title": "TRACE-SECRET-TITLE",
             "private": "TRACE-SECRET-METADATA",
         },
         score=1.0,
@@ -325,6 +391,7 @@ def test_retrieval_scoring_trace_excludes_question_text_and_candidate_content() 
             fact_family_id="family-001",
             language="en",
             question_type="safety",
+            question="TRACE-SECRET-QUESTION: which wiring step is required?",
             relevant_chunk_ids=["chunk-1"],
             expected_document_ids=["installation"],
         ),
@@ -336,8 +403,118 @@ def test_retrieval_scoring_trace_excludes_question_text_and_candidate_content() 
             trace=trace,
         ),
         corpus_equivalence={},
+        evidence_selection=select_evaluation_evidence(
+            "TRACE-SECRET-QUESTION: which wiring step is required?",
+            [candidate],
+        ),
     )
 
     serialized = json.dumps(record, sort_keys=True)
     assert record["raw_dense_direct_evidence_rank"] == 1
+    assert record["evidence_direct_evidence_rank"] == 1
+    assert record["evidence_exact_equivalent_evidence_rank"] == 1
+    assert record["evidence_failure_class"] == "hit"
+    assert record["evidence_selection"] == {
+        "policy_id": "canonical-evidence-top5-v1",
+        "top_k": 5,
+        "candidate_count": 1,
+        "candidates": [
+            {
+                "chunk_id": "chunk-1",
+                "document_id": "installation",
+                "ordinal_rank": 1,
+                "page_numbers": [1],
+                "exact_content_provenance": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "document_id": "installation",
+                        "page_numbers": [1],
+                        "heading_count": 1,
+                    }
+                ],
+            }
+        ],
+        "duplicate_groups": [],
+    }
     assert "TRACE-SECRET" not in serialized
+
+
+def test_evaluation_evidence_boundary_has_a_fixed_top_five_limit() -> None:
+    candidates = [
+        RetrievalCandidate(
+            chunk_id=f"chunk-{index}",
+            document_id="installation",
+            filename="manual.pdf",
+            text=f"Unique evidence {index}.",
+            page_numbers=[index],
+            headings=["Safety"],
+            content_type="text",
+            metadata={"document_role": "installation"},
+            score=1.0,
+            rerank_rank=index,
+        )
+        for index in range(1, 7)
+    ]
+
+    selection = select_evaluation_evidence("Which wiring step is required?", candidates)
+
+    assert [candidate.chunk_id for candidate in selection.candidates] == [
+        "chunk-1",
+        "chunk-2",
+        "chunk-3",
+        "chunk-4",
+        "chunk-5",
+    ]
+
+
+def test_retrieval_scoring_distinguishes_strict_and_exact_duplicate_provenance() -> None:
+    programming_copy = RetrievalCandidate(
+        chunk_id="programming-copy",
+        document_id="programming",
+        filename="programming.pdf",
+        text="Disconnect all power.",
+        page_numbers=[9],
+        headings=["Safety"],
+        content_type="text",
+        metadata={
+            "document_role": "programming",
+            "document_title": "Programming manual",
+        },
+        score=1.0,
+        rerank_rank=1,
+    )
+    execution = QueryRetrievalResult(
+        candidates=[programming_copy],
+        candidate_pool=[programming_copy],
+        retrieval_ms=1.0,
+        rerank_ms=2.0,
+    )
+    selection = select_evaluation_evidence(
+        "Give the safety requirement.",
+        execution.candidates,
+    )
+
+    record = score_retrieval_execution(
+        SimpleNamespace(
+            id="dev-duplicate",
+            fact_family_id="family-duplicate",
+            language="en",
+            question_type="safety",
+            relevant_chunk_ids=["installation-copy"],
+            expected_document_ids=["installation"],
+        ),
+        execution,
+        corpus_equivalence={
+            "installation-copy": ("installation-copy", "programming-copy"),
+            "programming-copy": ("installation-copy", "programming-copy"),
+        },
+        evidence_selection=selection,
+    )
+
+    assert record["evidence_direct_evidence_rank"] is None
+    assert record["evidence_exact_equivalent_evidence_rank"] == 1
+    assert record["wrong_document_evidence_top1"] is True
+    assert (
+        record["wrong_document_evidence_top1_excluding_exact_equivalents"]
+        is False
+    )

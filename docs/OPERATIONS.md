@@ -128,9 +128,18 @@ docker compose run --rm evaluation python -m scripts.evaluation.evaluate_retriev
 The command uses Qdrant plus local embedding/reranker models but makes zero generator or judge calls
 and never writes a collection. Each variant makes separate trace-only dense and sparse probes to
 rank 100; normal fusion still consumes only dense top 60 and sparse top 40, the reranker still sees
-at most 30 candidates, and probe latency is excluded from the runtime-quality comparison. Schema-v3
+at most 30 candidates, and probe latency is excluded from the runtime-quality comparison. Schema-v4
 output and checkpoint names include the variant ID, and a checkpoint from another variant or the old
-schema fails closed. Non-baseline variants are rejected for the legacy suite, and the command has no
+schema fails closed. The v4 evaluator additionally applies the canonical evidence selector with a
+fixed diagnostic `top_k=5`. Its artifact retains stable chunk/document IDs, page numbers, heading
+counts, and exact-duplicate alternatives, but excludes the question, chunk text, headings, filename,
+and unlisted metadata. Strict wrong-document rates remain authoritative; parallel
+exact-content-equivalent rates explain repeated manual content without relaxing those strict
+metrics. This fixed evaluation boundary does not reduce the API's supported `top_k` range of 1–10.
+The command labels its result `retrieval gates PASS/FAIL`: schema-v4 evidence metrics are diagnostic
+and do not affect the exit code until promotion criteria have been selected on reviewed development
+data.
+Non-baseline variants are rejected for the legacy suite, and the command has no
 confirmation or held-out dataset choice. The current
 repository does not yet contain the reviewed development/confirmation payloads, so no variant run,
 winner, or quality improvement is claimed by this implementation alone.

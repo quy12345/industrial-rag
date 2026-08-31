@@ -474,6 +474,7 @@ def test_retrieval_evaluation_uses_only_public_domain_contracts() -> None:
 
     assert graph["evaluation.retrieval"] == {
         "app.domain.content_identity",
+        "app.domain.evidence",
         "app.domain.policies.fusion",
         "app.domain.policies.query_analysis",
         "app.domain.retrieval",

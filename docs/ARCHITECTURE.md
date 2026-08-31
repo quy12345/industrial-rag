@@ -140,16 +140,20 @@ remains optional for legacy items. Their answerable records must cover `mounting
 answerable confirmation items per type. Pair validation rejects overlapping item IDs, normalized
 exact questions, or fact families.
 
-The provider-free retrieval evaluator emits sanitized schema-v3 checkpoints and artifacts for the
+The provider-free retrieval evaluator emits sanitized schema-v4 checkpoints and artifacts for the
 legacy baseline or one of six development-only variants. The legacy baseline keeps its normal
 component limits. For development only, a trace-only probe measures raw dense and sparse
 reachability to rank 100 without changing the normal 60/40 component inputs, fusion, or the
 30-candidate reranker budget. The evaluator also reports fusion and dedup boundaries, refill IDs, raw
-cross-encoder rank, final policy rank, and strict versus exact-content-equivalent outcomes. The E2E
-evaluator emits sanitized schema-v9 checkpoints and
-artifacts. Strict qrel identity, expected-document metrics, failure classification, and
-deterministic release gates remain authoritative and are not relaxed by exact-content diagnostics.
-Current production composition does not capture the trace.
+cross-encoder rank, final policy rank, and strict versus exact-content-equivalent outcomes. Schema v4
+also applies the canonical evidence selector at a fixed evaluation-only top five and records only
+stable IDs, document IDs, pages, heading counts, and exact-duplicate alternatives. The production
+API retains its existing `top_k` range; this diagnostic cap is not a runtime configuration change.
+Evidence metrics in this schema are measured diagnostics, not additional exit-code gates; promotion
+criteria remain deferred until a reviewed development winner exists. The E2E evaluator emits
+sanitized schema-v9 checkpoints and artifacts. Strict qrel identity, expected-document metrics,
+failure classification, and deterministic release gates remain authoritative and are not relaxed by
+exact-content diagnostics. Current production composition does not capture the trace.
 
 ## Invariants
 

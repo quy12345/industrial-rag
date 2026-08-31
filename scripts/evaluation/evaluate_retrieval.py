@@ -39,6 +39,8 @@ from evaluation.dataset import (
 )
 from evaluation.retrieval import (
     DEVELOPMENT_RETRIEVAL_VARIANTS,
+    EVIDENCE_SELECTION_POLICY_ID,
+    EVIDENCE_SELECTION_TOP_K,
     DevelopmentRetrievalVariant,
     aggregate_retrieval_rows,
     aggregate_retrieval_rows_by_language,
@@ -46,6 +48,7 @@ from evaluation.retrieval import (
     development_retrieval_variant,
     evaluate_retrieval_quality_gates,
     score_retrieval_execution,
+    select_evaluation_evidence,
 )
 
 LEGACY_CALIBRATION_PATH = Path("data/eval/phase7/calibration.jsonl")
@@ -53,16 +56,17 @@ LEGACY_TEST_PATH = Path("data/eval/phase7/test.jsonl")
 DEVELOPMENT_PATH = Path("data/eval/atv320/development-v1.jsonl")
 DEVELOPMENT_MANIFEST_PATH = Path("data/eval/atv320/development-v1-manifest.json")
 FROZEN_CHUNKS_PATH = Path("artifacts/phase7/frozen-chunks.jsonl")
-ARTIFACT_SCHEMA_VERSION = 3
-DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-retrieval-evaluation-v3.json")
+ARTIFACT_SCHEMA_VERSION = 4
+DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-retrieval-evaluation-v4.json")
 DEFAULT_CHECKPOINT = Path(
-    "artifacts/metrics/atv320-retrieval-evaluation-v3-checkpoint.jsonl"
+    "artifacts/metrics/atv320-retrieval-evaluation-v4-checkpoint.jsonl"
 )
 SOURCE_IDENTITY_PATHS = {
     "content_identity": Path("app/domain/content_identity.py"),
     "dataset_contract": Path("evaluation/dataset.py"),
     "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
     "evaluation_command": Path("scripts/evaluation/evaluate_retrieval.py"),
+    "evidence_policy": Path("app/domain/evidence.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
     "list_completeness_policy": Path("app/domain/policies/list_completeness.py"),
     "query_analysis_policy": Path("app/domain/policies/query_analysis.py"),
@@ -106,7 +110,13 @@ def main() -> int:
         "runtime": runtime_identity,
         "source_identity": _source_identity(),
         "libraries": _library_versions(),
-        "trace_policy": "sanitized_ids_counts_ranks_and_allowlisted_role_signals",
+        "trace_policy": (
+            "sanitized_ids_counts_ranks_role_signals_and_evidence_provenance"
+        ),
+        "evidence_selection_policy": {
+            "id": EVIDENCE_SELECTION_POLICY_ID,
+            "top_k": EVIDENCE_SELECTION_TOP_K,
+        },
     }
     rows = _load_checkpoint(args.checkpoint, identity)
     completed_ids = {str(row["id"]) for row in rows}
@@ -122,11 +132,16 @@ def main() -> int:
         if item.id in completed_ids:
             continue
         execution = retriever.retrieve(item.question, document_id=None)
+        evidence_selection = select_evaluation_evidence(
+            item.question,
+            execution.candidates,
+        )
         rows.append(
             score_retrieval_execution(
                 item,
                 execution,
                 corpus_equivalence=corpus_equivalence,
+                evidence_selection=evidence_selection,
             )
         )
         _write_checkpoint(args.checkpoint, identity, rows)
@@ -154,15 +169,20 @@ def main() -> int:
         "overall": overall,
         "per_language": per_language,
         "quality_gates": quality_gates,
+        "quality_gate_scope": "candidate_and_ranked_retrieval_only",
+        "evidence_diagnostics_status": "measured_not_gated",
         "per_query": rows,
         "provider_calls": 0,
         "confirmation_queries_executed": 0,
         "held_out_queries_executed": 0,
         "sanitization": {
-            "question": "excluded",
+            "question": "used_in_memory_for_selection_then_excluded",
             "answer": "not_applicable",
             "evidence_text": "excluded",
             "expected_fact_text": "excluded",
+            "evidence_provenance": (
+                "stable_ids_document_ids_pages_and_heading_counts_only"
+            ),
             "unlisted_candidate_metadata": "excluded",
         },
     }
@@ -170,7 +190,7 @@ def main() -> int:
     passed = all(quality_gates.values())
     status = "PASS" if passed else "FAIL"
     print(
-        f"ATV320 {args.dataset} provider-free retrieval evaluation {status}: "
+        f"ATV320 {args.dataset} provider-free retrieval gates {status}: "
         f"{args.output}"
     )
     return 0 if passed else 2
@@ -318,7 +338,7 @@ def _file_sha256(path: Path) -> str:
 
 
 def _source_identity() -> dict[str, Any]:
-    """Hash every canonical behavior owner used by the v3 evaluator."""
+    """Hash every canonical behavior owner used by the v4 evaluator."""
 
     files = {name: _file_sha256(path) for name, path in SOURCE_IDENTITY_PATHS.items()}
     return {

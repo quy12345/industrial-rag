@@ -41,7 +41,8 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
 - validate either the legacy frozen pair or the development/confirmation optimization pair;
 - evaluate the frozen legacy retrieval baseline or one of six preregistered development-only
   retrieval variants, with trace-only dense/sparse top-100 ceiling probes limited to development,
-  and write a sanitized schema-v3 checkpoint/artifact;
+  apply the canonical evaluation-only evidence top five, and write a sanitized schema-v4
+  checkpoint/artifact;
 - run approval-gated end-to-end generation evaluation.
 
 Reusable current contracts live in `evaluation/dataset.py`, `evaluation/retrieval.py`,

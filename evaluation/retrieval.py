@@ -11,6 +11,11 @@ from types import MappingProxyType
 from typing import Any, Literal, Protocol
 
 from app.domain.content_identity import evidence_content_fingerprint
+from app.domain.evidence import (
+    EvidenceSelection,
+    collect_exact_content_provenance,
+    select_evidence_candidates,
+)
 from app.domain.policies.fusion import ATV320_FUSION_PROFILE, FusionProfile
 from app.domain.policies.query_analysis import (
     QUERY_EXPANSION_PROFILE,
@@ -31,6 +36,8 @@ DevelopmentRetrievalVariantId = Literal[
     "dense-reserve-d20-s5",
     "sparse-reserve-d5-s20",
 ]
+EVIDENCE_SELECTION_POLICY_ID = "canonical-evidence-top5-v1"
+EVIDENCE_SELECTION_TOP_K = 5
 
 
 @dataclass(frozen=True)
@@ -389,6 +396,7 @@ def score_retrieval_execution(
     execution: QueryRetrievalResult,
     *,
     corpus_equivalence: Mapping[str, Sequence[str]],
+    evidence_selection: EvidenceSelection,
 ) -> dict[str, Any]:
     """Score one retrieval execution without retaining question or chunk content."""
 
@@ -407,6 +415,13 @@ def score_retrieval_execution(
         relevant,
         equivalence=corpus_equivalence,
     )
+    evidence_candidates = evidence_selection.candidates
+    evidence_rank = direct_evidence_rank(evidence_candidates, relevant)
+    evidence_exact_rank = exact_equivalent_evidence_rank(
+        evidence_candidates,
+        relevant,
+        equivalence=corpus_equivalence,
+    )
     trace = execution.trace
     dense_rank = (
         direct_evidence_rank(trace.dense_candidates, relevant) if trace is not None else None
@@ -414,6 +429,19 @@ def score_retrieval_execution(
     sparse_rank = (
         direct_evidence_rank(trace.sparse_candidates, relevant) if trace is not None else None
     )
+    expected_documents = set(item.expected_document_ids)
+    strict_wrong_document_evidence = [
+        candidate.document_id not in expected_documents
+        for candidate in evidence_candidates
+    ]
+    content_wrong_document_evidence = [
+        not _candidate_matches_expected_document_or_exact_equivalent(
+            candidate,
+            expected_document_ids=expected_documents,
+            exact_relevant_chunk_ids=exact_relevant,
+        )
+        for candidate in evidence_candidates
+    ]
     return {
         "id": item.id,
         "fact_family_id": item.fact_family_id,
@@ -421,6 +449,7 @@ def score_retrieval_execution(
         "question_type": item.question_type,
         "candidate_count": len(candidate_pool),
         "final_candidate_count": len(execution.candidates),
+        "evidence_candidate_count": len(evidence_candidates),
         "raw_dense_direct_evidence_rank": dense_rank,
         "raw_sparse_direct_evidence_rank": sparse_rank,
         "raw_component_direct_evidence": dense_rank is not None or sparse_rank is not None,
@@ -428,12 +457,31 @@ def score_retrieval_execution(
         "final_direct_evidence_rank": final_rank,
         "candidate_exact_equivalent_evidence_rank": candidate_exact_rank,
         "final_exact_equivalent_evidence_rank": final_exact_rank,
+        "evidence_direct_evidence_rank": evidence_rank,
+        "evidence_exact_equivalent_evidence_rank": evidence_exact_rank,
         "failure_class": retrieval_failure_class(candidate_rank, final_rank),
+        "evidence_failure_class": evidence_failure_class(
+            candidate_rank,
+            final_rank,
+            evidence_rank,
+        ),
         "wrong_document_top1": bool(execution.candidates)
         and execution.candidates[0].document_id not in item.expected_document_ids,
         "wrong_document_candidate_count_at_5": sum(
             candidate.document_id not in item.expected_document_ids
             for candidate in execution.candidates[:5]
+        ),
+        "wrong_document_evidence_top1": bool(strict_wrong_document_evidence)
+        and strict_wrong_document_evidence[0],
+        "wrong_document_evidence_candidate_count_at_5": sum(
+            strict_wrong_document_evidence
+        ),
+        "wrong_document_evidence_top1_excluding_exact_equivalents": bool(
+            content_wrong_document_evidence
+        )
+        and content_wrong_document_evidence[0],
+        "wrong_document_evidence_candidate_count_at_5_excluding_exact_equivalents": sum(
+            content_wrong_document_evidence
         ),
         "document_context_complete": all(
             candidate.metadata.get("document_role")
@@ -446,9 +494,23 @@ def score_retrieval_execution(
             relevant_chunk_ids=relevant,
             exact_relevant_chunk_ids=exact_relevant,
         ),
+        "evidence_selection": _sanitized_evidence_selection(evidence_selection),
         "retrieval_ms": execution.retrieval_ms,
         "rerank_ms": execution.rerank_ms,
     }
+
+
+def select_evaluation_evidence(
+    question: str,
+    candidates: Sequence[RetrievalCandidate],
+) -> EvidenceSelection:
+    """Apply the sealed provider-free evidence boundary without qrel inputs."""
+
+    return select_evidence_candidates(
+        question,
+        candidates,
+        top_k=EVIDENCE_SELECTION_TOP_K,
+    )
 
 
 def evaluate_retrieval_quality_gates(
@@ -513,6 +575,79 @@ def retrieval_failure_class(candidate_rank: int | None, final_rank: int | None) 
     return "hit"
 
 
+def evidence_failure_class(
+    candidate_rank: int | None,
+    final_rank: int | None,
+    evidence_rank: int | None,
+) -> str:
+    """Classify the first boundary that lost strict qrel provenance."""
+
+    if evidence_rank is not None:
+        return "hit"
+    if candidate_rank is None:
+        return "candidate_miss"
+    if final_rank is None or final_rank > 20:
+        return "reranker_miss_top20"
+    if final_rank > 5:
+        return "reranker_miss_top5"
+    return "evidence_selection_miss"
+
+
+def _sanitized_evidence_selection(
+    selection: EvidenceSelection,
+) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    for ordinal, candidate in enumerate(selection.candidates, start=1):
+        provenance = collect_exact_content_provenance([candidate])
+        candidates.append(
+            {
+                "chunk_id": candidate.chunk_id,
+                "document_id": candidate.document_id,
+                "ordinal_rank": ordinal,
+                "page_numbers": sorted(set(candidate.page_numbers)),
+                "exact_content_provenance": [
+                    {
+                        "chunk_id": entry["chunk_id"],
+                        "document_id": entry["document_id"],
+                        "page_numbers": list(entry["page_numbers"]),
+                        "heading_count": len(entry["headings"]),
+                    }
+                    for entry in provenance
+                ],
+            }
+        )
+    duplicate_groups = [
+        {
+            "representative_chunk_id": group.representative_chunk_id,
+            "equivalent_chunk_ids": list(group.equivalent_chunk_ids),
+            "equivalent_document_ids": list(group.equivalent_document_ids),
+        }
+        for group in selection.duplicate_groups
+    ]
+    return {
+        "policy_id": EVIDENCE_SELECTION_POLICY_ID,
+        "top_k": EVIDENCE_SELECTION_TOP_K,
+        "candidate_count": len(selection.candidates),
+        "candidates": candidates,
+        "duplicate_groups": duplicate_groups,
+    }
+
+
+def _candidate_matches_expected_document_or_exact_equivalent(
+    candidate: RetrievalCandidate,
+    *,
+    expected_document_ids: set[str],
+    exact_relevant_chunk_ids: set[str],
+) -> bool:
+    if candidate.document_id in expected_document_ids:
+        return True
+    return bool(
+        _result_chunk_ids(candidate, include_exact_equivalents=True).intersection(
+            exact_relevant_chunk_ids
+        )
+    )
+
+
 def _required_rank(rows: list[dict[str, Any]], identifier: str) -> int:
     for row in rows:
         if row["id"] == identifier:
@@ -535,11 +670,20 @@ def aggregate_retrieval_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         row.get("final_exact_equivalent_evidence_rank", rank)
         for row, rank in zip(rows, final_ranks, strict=True)
     ]
+    evidence_ranks = [row["evidence_direct_evidence_rank"] for row in rows]
+    exact_evidence_ranks = [
+        row["evidence_exact_equivalent_evidence_rank"] for row in rows
+    ]
     raw_component_hits = [
         bool(row.get("raw_component_direct_evidence", rank is not None))
         for row, rank in zip(rows, candidate_ranks, strict=True)
     ]
     candidate_counts = [int(row["candidate_count"]) for row in rows]
+    evidence_candidate_counts = [int(row["evidence_candidate_count"]) for row in rows]
+    evidence_candidate_total = sum(evidence_candidate_counts)
+    final_top5_total = sum(
+        min(int(row["final_candidate_count"]), 5) for row in rows
+    )
     rerank_values = [float(row["rerank_ms"]) for row in rows]
     retrieval_values = [float(row["retrieval_ms"]) for row in rows]
     return {
@@ -556,22 +700,82 @@ def aggregate_retrieval_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             rank is not None and rank <= 5 for rank in exact_final_ranks
         )
         / len(rows),
+        "evidence_hit_rate_at_5": sum(
+            rank is not None and rank <= 5 for rank in evidence_ranks
+        )
+        / len(rows),
+        "evidence_exact_equivalent_hit_rate_at_5": sum(
+            rank is not None and rank <= 5 for rank in exact_evidence_ranks
+        )
+        / len(rows),
+        "evidence_mrr_at_5": sum(
+            1 / rank if rank is not None and rank <= 5 else 0
+            for rank in evidence_ranks
+        )
+        / len(rows),
         "mrr_at_5": sum(1 / rank if rank is not None and rank <= 5 else 0 for rank in final_ranks)
         / len(rows),
         "candidate_count_minimum": min(candidate_counts),
         "candidate_count_average": sum(candidate_counts) / len(candidate_counts),
         "candidate_count_maximum": max(candidate_counts),
+        "evidence_candidate_count_minimum": min(evidence_candidate_counts),
+        "evidence_candidate_count_average": (
+            evidence_candidate_total / len(evidence_candidate_counts)
+        ),
+        "evidence_candidate_count_maximum": max(evidence_candidate_counts),
         "wrong_document_top1_rate": sum(bool(row["wrong_document_top1"]) for row in rows)
         / len(rows),
         "wrong_document_candidate_rate_at_5": sum(
             int(row["wrong_document_candidate_count_at_5"]) for row in rows
         )
-        / sum(min(int(row["final_candidate_count"]), 5) for row in rows),
+        / final_top5_total
+        if final_top5_total
+        else 0.0,
+        "wrong_document_evidence_top1_rate": sum(
+            bool(row["wrong_document_evidence_top1"]) for row in rows
+        )
+        / len(rows),
+        "wrong_document_evidence_candidate_rate_at_5": (
+            sum(
+                int(row["wrong_document_evidence_candidate_count_at_5"])
+                for row in rows
+            )
+            / evidence_candidate_total
+            if evidence_candidate_total
+            else 0.0
+        ),
+        "wrong_document_evidence_top1_rate_excluding_exact_equivalents": sum(
+            bool(row["wrong_document_evidence_top1_excluding_exact_equivalents"])
+            for row in rows
+        )
+        / len(rows),
+        "wrong_document_evidence_candidate_rate_at_5_excluding_exact_equivalents": (
+            sum(
+                int(
+                    row[
+                        "wrong_document_evidence_candidate_count_at_5_excluding_exact_equivalents"
+                    ]
+                )
+                for row in rows
+            )
+            / evidence_candidate_total
+            if evidence_candidate_total
+            else 0.0
+        ),
+        "cross_document_duplicate_group_count": sum(
+            len(row["evidence_selection"]["duplicate_groups"]) for row in rows
+        ),
+        "query_count_with_cross_document_duplicates": sum(
+            bool(row["evidence_selection"]["duplicate_groups"]) for row in rows
+        ),
         "document_context_complete_rate": sum(
             bool(row["document_context_complete"]) for row in rows
         )
         / len(rows),
         "failure_classes": dict(sorted(Counter(row["failure_class"] for row in rows).items())),
+        "evidence_failure_classes": dict(
+            sorted(Counter(row["evidence_failure_class"] for row in rows).items())
+        ),
         "retrieval_latency_ms": _latency_summary(retrieval_values),
         "rerank_latency_ms": _latency_summary(rerank_values),
     }
@@ -588,6 +792,7 @@ def aggregate_retrieval_rows_by_language(
     result: dict[str, dict[str, float | int]] = {}
     for language, group in sorted(groups.items()):
         total_top5 = sum(min(int(row["final_candidate_count"]), 5) for row in group)
+        total_evidence = sum(int(row["evidence_candidate_count"]) for row in group)
         result[language] = {
             "query_count": len(group),
             "raw_component_recall": sum(
@@ -633,10 +838,59 @@ def aggregate_retrieval_rows_by_language(
                 for row in group
             )
             / len(group),
+            "evidence_hit_rate_at_5": sum(
+                row["evidence_direct_evidence_rank"] is not None
+                and row["evidence_direct_evidence_rank"] <= 5
+                for row in group
+            )
+            / len(group),
+            "evidence_exact_equivalent_hit_rate_at_5": sum(
+                row["evidence_exact_equivalent_evidence_rank"] is not None
+                and row["evidence_exact_equivalent_evidence_rank"] <= 5
+                for row in group
+            )
+            / len(group),
             "wrong_document_candidate_rate_at_5": sum(
                 int(row["wrong_document_candidate_count_at_5"]) for row in group
             )
-            / total_top5,
+            / total_top5
+            if total_top5
+            else 0.0,
+            "wrong_document_evidence_candidate_rate_at_5": (
+                sum(
+                    int(row["wrong_document_evidence_candidate_count_at_5"])
+                    for row in group
+                )
+                / total_evidence
+                if total_evidence
+                else 0.0
+            ),
+            "wrong_document_evidence_top1_rate": sum(
+                bool(row["wrong_document_evidence_top1"]) for row in group
+            )
+            / len(group),
+            "wrong_document_evidence_top1_rate_excluding_exact_equivalents": sum(
+                bool(
+                    row[
+                        "wrong_document_evidence_top1_excluding_exact_equivalents"
+                    ]
+                )
+                for row in group
+            )
+            / len(group),
+            "wrong_document_evidence_candidate_rate_at_5_excluding_exact_equivalents": (
+                sum(
+                    int(
+                        row[
+                            "wrong_document_evidence_candidate_count_at_5_excluding_exact_equivalents"
+                        ]
+                    )
+                    for row in group
+                )
+                / total_evidence
+                if total_evidence
+                else 0.0
+            ),
         }
     return result
 
