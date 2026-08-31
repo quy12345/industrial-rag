@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
 
 from app.domain.content_identity import evidence_content_fingerprint
 from app.domain.policies.query_roles import QueryRole, QueryRoleInference, infer_query_role
@@ -16,6 +16,16 @@ EvidenceGateReason = Literal[
     "invalid_candidate_metadata",
     "configured_score_gate_failed",
 ]
+
+
+class ExactContentProvenance(TypedDict):
+    """Compact text-free source identity for one exact-content alternative."""
+
+    chunk_id: str
+    document_id: str
+    filename: str
+    page_numbers: tuple[int, ...]
+    headings: tuple[str, ...]
 
 
 class EvidenceSelectionError(ValueError):
@@ -68,6 +78,40 @@ class EvidenceGate:
         if self.score_threshold is not None and candidates[0].score < self.score_threshold:
             return EvidenceGateDecision(False, "configured_score_gate_failed")
         return EvidenceGateDecision(True)
+
+
+def collect_exact_content_provenance(
+    candidates: Sequence[RetrievalCandidate],
+) -> tuple[ExactContentProvenance, ...]:
+    """Flatten compact provenance carried through exact-content deduplication.
+
+    Candidate text is deliberately excluded. A candidate's direct identity is
+    authoritative for its own chunk ID, while valid provenance inherited from an
+    earlier same-document deduplication remains available to later boundaries.
+    """
+
+    provenance_by_chunk_id: dict[str, ExactContentProvenance] = {}
+    direct_provenance: dict[str, ExactContentProvenance] = {}
+    for candidate in candidates:
+        inherited = candidate.metadata.get("exact_content_provenance", ())
+        if isinstance(inherited, (list, tuple)):
+            for raw_entry in inherited:
+                entry = _normalized_provenance_entry(raw_entry)
+                if entry is not None:
+                    provenance_by_chunk_id.setdefault(entry["chunk_id"], entry)
+        direct_provenance[candidate.chunk_id] = {
+            "chunk_id": candidate.chunk_id,
+            "document_id": candidate.document_id,
+            "filename": candidate.filename,
+            "page_numbers": tuple(sorted(set(candidate.page_numbers))),
+            "headings": tuple(candidate.headings),
+        }
+
+    provenance_by_chunk_id.update(direct_provenance)
+    return tuple(
+        provenance_by_chunk_id[chunk_id]
+        for chunk_id in sorted(provenance_by_chunk_id)
+    )
 
 
 def select_evidence_candidates(
@@ -143,8 +187,13 @@ def select_evidence_candidates_for_role(
             preferred or members,
             key=lambda member: (member[0], member[1].chunk_id),
         )
-        equivalent_ids = tuple(sorted(member[1].chunk_id for member in members))
-        equivalent_documents = tuple(sorted(document_ids))
+        provenance = collect_exact_content_provenance(
+            [member[1] for member in members]
+        )
+        equivalent_ids = tuple(entry["chunk_id"] for entry in provenance)
+        equivalent_documents = tuple(
+            sorted({entry["document_id"] for entry in provenance})
+        )
         metadata = dict(representative.metadata)
         metadata.update(
             {
@@ -152,6 +201,7 @@ def select_evidence_candidates_for_role(
                 "evidence_representative_original_rank": representative_ordinal,
                 "equivalent_chunk_ids": equivalent_ids,
                 "equivalent_document_ids": equivalent_documents,
+                "exact_content_provenance": provenance,
                 "exact_cross_document_duplicate": len(equivalent_documents) > 1,
             }
         )
@@ -170,10 +220,47 @@ def select_evidence_candidates_for_role(
         )
 
     selected.sort(key=lambda member: (member[0], member[1].chunk_id))
+    selected_candidates = tuple(candidate for _, candidate in selected[:top_k])
+    selected_ids = {candidate.chunk_id for candidate in selected_candidates}
     return EvidenceSelection(
-        candidates=tuple(candidate for _, candidate in selected[:top_k]),
-        duplicate_groups=tuple(diagnostics),
+        candidates=selected_candidates,
+        duplicate_groups=tuple(
+            group
+            for group in diagnostics
+            if group.representative_chunk_id in selected_ids
+        ),
     )
+
+
+def _normalized_provenance_entry(value: object) -> ExactContentProvenance | None:
+    if not isinstance(value, Mapping):
+        return None
+    chunk_id = value.get("chunk_id")
+    document_id = value.get("document_id")
+    filename = value.get("filename")
+    if not all(
+        isinstance(field, str) and field.strip()
+        for field in (chunk_id, document_id, filename)
+    ):
+        return None
+    raw_pages = value.get("page_numbers")
+    raw_headings = value.get("headings")
+    if not isinstance(raw_pages, (list, tuple)) or any(
+        type(page) is not int or page <= 0 for page in raw_pages
+    ):
+        return None
+    if not isinstance(raw_headings, (list, tuple)) or any(
+        not isinstance(heading, str) or not heading.strip()
+        for heading in raw_headings
+    ):
+        return None
+    return {
+        "chunk_id": chunk_id,
+        "document_id": document_id,
+        "filename": filename,
+        "page_numbers": tuple(sorted(set(raw_pages))),
+        "headings": tuple(raw_headings),
+    }
 
 
 def _valid_candidate_metadata(

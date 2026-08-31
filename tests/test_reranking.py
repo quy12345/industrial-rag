@@ -349,6 +349,22 @@ def test_content_dedup_collapses_only_exact_normalized_text_and_preserves_signal
     assert result[0].sparse_rank == 2
     assert result[0].metadata["equivalent_chunk_ids"] == ["a", "b"]
     assert result[0].metadata["equivalent_chunk_count"] == 2
+    assert result[0].metadata["exact_content_provenance"] == (
+        {
+            "chunk_id": "a",
+            "document_id": "manual-a",
+            "filename": "manual.pdf",
+            "page_numbers": (1,),
+            "headings": ("Safety", "Limits"),
+        },
+        {
+            "chunk_id": "b",
+            "document_id": "manual-a",
+            "filename": "manual.pdf",
+            "page_numbers": (1,),
+            "headings": ("Safety", "Limits"),
+        },
+    )
     assert first.metadata == {"marker": "a"}
 
 

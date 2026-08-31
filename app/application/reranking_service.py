@@ -9,6 +9,7 @@ from time import perf_counter
 from typing import Literal
 
 from app.domain.content_identity import evidence_content_fingerprint
+from app.domain.evidence import collect_exact_content_provenance
 from app.domain.policies.fusion import (
     FusionPolicyError,
     FusionProfile,
@@ -441,13 +442,15 @@ def deduplicate_candidates_by_content(
     for document_id, fingerprint in order:
         equivalents = groups[(document_id, fingerprint)]
         representative = equivalents[0]
-        equivalent_ids = sorted({candidate.chunk_id for candidate in equivalents})
+        provenance = collect_exact_content_provenance(equivalents)
+        equivalent_ids = [entry["chunk_id"] for entry in provenance]
         metadata = dict(representative.metadata)
         metadata.update(
             {
                 "content_fingerprint": fingerprint,
                 "equivalent_chunk_ids": equivalent_ids,
                 "equivalent_chunk_count": len(equivalent_ids),
+                "exact_content_provenance": provenance,
             }
         )
         deduplicated.append(

@@ -195,6 +195,21 @@ artifact SHA-256 is `c975ef742c44bc73a2986ed622b3d26d7054b8d900214a955b5ce461a3b
 **Commit/artifact** -> `artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; proposed Conventional Commit
 `feat: add reproducible ragas semantic evaluation`.
 
+### Repeated evidence lost an intermediate source identity
+
+**Symptom** -> Same-document exact duplicates were collapsed before reranking, then a later
+cross-document collapse retained only the representative and the other manual's chunk ID; an
+intermediate page/source ID disappeared from diagnostics. **Root cause** -> The evidence selector
+rebuilt `equivalent_chunk_ids` from immediate candidates instead of flattening provenance produced
+by the earlier deduplication boundary. It also reported duplicate groups that were outside the final
+generation context. **Fix** -> Carry compact, text-free provenance through both boundaries, flatten
+it deterministically by chunk ID, and expose diagnostics only for selected evidence. **Proof** ->
+Offline characterization tests cover nested provenance, selected-only groups, unchanged candidate
+ordering, and the public `top_k=10` behavior; the provider-free schema-v4 evaluator records strict
+and exact-content-equivalent evidence outcomes without raw content. **Commit/artifact** -> proposed
+commits `fix: preserve complete evidence provenance` and `feat: trace evidence selection boundaries`;
+no integration artifact is claimed yet.
+
 ## Portfolio conclusions
 
 - Correct evaluation labels are as important as the retrieval implementation.

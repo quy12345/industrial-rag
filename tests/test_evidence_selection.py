@@ -93,6 +93,123 @@ def test_same_document_duplicate_content_is_preserved() -> None:
     assert selection.duplicate_groups == ()
 
 
+def test_cross_document_group_flattens_nested_same_document_provenance() -> None:
+    installation = _candidate(
+        "installation-a",
+        document_id="installation",
+        role="installation",
+    ).model_copy(
+        update={
+            "metadata": {
+                "document_role": "installation",
+                "equivalent_chunk_ids": ["installation-a", "installation-b"],
+                "exact_content_provenance": (
+                    {
+                        "chunk_id": "installation-a",
+                        "document_id": "installation",
+                        "filename": "installation.pdf",
+                        "page_numbers": (1,),
+                        "headings": ("Safety",),
+                    },
+                    {
+                        "chunk_id": "installation-b",
+                        "document_id": "installation",
+                        "filename": "installation.pdf",
+                        "page_numbers": (2,),
+                        "headings": ("Electrical safety",),
+                    },
+                ),
+            }
+        }
+    )
+    programming = _candidate(
+        "programming-copy",
+        document_id="programming",
+        role="programming",
+    )
+
+    selection = select_evidence_candidates(
+        "Which wiring terminal is required?",
+        [programming, installation],
+        top_k=1,
+    )
+
+    representative = selection.candidates[0]
+    assert representative.chunk_id == "installation-a"
+    assert representative.metadata["equivalent_chunk_ids"] == (
+        "installation-a",
+        "installation-b",
+        "programming-copy",
+    )
+    assert selection.duplicate_groups[0].equivalent_chunk_ids == (
+        "installation-a",
+        "installation-b",
+        "programming-copy",
+    )
+    assert representative.metadata["exact_content_provenance"][1] == {
+        "chunk_id": "installation-b",
+        "document_id": "installation",
+        "filename": "installation.pdf",
+        "page_numbers": (2,),
+        "headings": ("Electrical safety",),
+    }
+
+
+def test_duplicate_diagnostics_include_only_groups_selected_for_generation() -> None:
+    selected_programming = _candidate(
+        "selected-programming", document_id="programming", role="programming"
+    )
+    selected_installation = _candidate(
+        "selected-installation", document_id="installation", role="installation"
+    )
+    omitted_programming = _candidate(
+        "omitted-programming",
+        document_id="programming",
+        role="programming",
+        text="Second repeated fact.",
+    )
+    omitted_installation = _candidate(
+        "omitted-installation",
+        document_id="installation",
+        role="installation",
+        text="Second repeated fact.",
+    )
+
+    selection = select_evidence_candidates(
+        "Which wiring terminal is required?",
+        [
+            selected_programming,
+            selected_installation,
+            omitted_programming,
+            omitted_installation,
+        ],
+        top_k=1,
+    )
+
+    assert [candidate.chunk_id for candidate in selection.candidates] == [
+        "selected-installation"
+    ]
+    assert [group.representative_chunk_id for group in selection.duplicate_groups] == [
+        "selected-installation"
+    ]
+
+
+def test_evidence_selector_preserves_the_public_top_k_ten_behavior() -> None:
+    candidates = [
+        _candidate(
+            f"chunk-{index}",
+            document_id="installation",
+            role="installation",
+            text=f"Unique evidence {index}.",
+        )
+        for index in range(10)
+    ]
+
+    selection = select_evidence_candidates("wiring", candidates, top_k=10)
+
+    assert len(selection.candidates) == 10
+
+
 def test_selection_rejects_invalid_inputs_without_fallback() -> None:
     candidate = _candidate("first", document_id="installation", role="installation")
 
