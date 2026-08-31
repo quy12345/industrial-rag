@@ -16,6 +16,7 @@ from app.application.reranking_service import (
     build_candidate_pool,
     build_candidate_text,
     deduplicate_candidates_by_content,
+    refill_candidates_after_content_dedup,
     rerank_candidates,
 )
 from app.config import Settings
@@ -351,6 +352,139 @@ def test_content_dedup_collapses_only_exact_normalized_text_and_preserves_signal
     assert first.metadata == {"marker": "a"}
 
 
+def test_refill_skips_same_document_duplicates_but_keeps_provenance_and_near_matches() -> None:
+    selected_same = _candidate("selected-same", rrf_rank=2).model_copy(
+        update={"text": " SAME\ncontent "}
+    )
+    selected_other = _candidate("selected-other", rrf_rank=4).model_copy(
+        update={"text": "other content"}
+    )
+    deduplicated = deduplicate_candidates_by_content([selected_same, selected_other])
+    fused = [
+        _candidate("same-document", rrf_rank=1).model_copy(update={"text": "same content"}),
+        selected_same,
+        _candidate("cross-document", rrf_rank=3, document_id="manual-b").model_copy(
+            update={"text": "same content"}
+        ),
+        selected_other,
+        _candidate("near-match", rrf_rank=5).model_copy(update={"text": "same contents"}),
+    ]
+
+    result, refilled_ids = refill_candidates_after_content_dedup(
+        deduplicated,
+        selected_candidate_ids={"selected-same", "selected-other"},
+        fused_candidates=fused,
+        max_candidates=4,
+    )
+
+    assert [candidate.chunk_id for candidate in result] == [
+        "selected-same",
+        "cross-document",
+        "selected-other",
+        "near-match",
+    ]
+    assert refilled_ids == ("cross-document", "near-match")
+    assert result[1].metadata["equivalent_chunk_ids"] == ["cross-document"]
+
+
+def test_refill_uses_rrf_rank_then_chunk_id_and_never_exceeds_budget() -> None:
+    selected = _candidate("selected", rrf_rank=1)
+    deduplicated = deduplicate_candidates_by_content([selected])
+    fused = [
+        _candidate("tail-b", rrf_rank=2),
+        selected,
+        _candidate("tail-a", rrf_rank=2),
+    ]
+
+    result, refilled_ids = refill_candidates_after_content_dedup(
+        deduplicated,
+        selected_candidate_ids={"selected"},
+        fused_candidates=fused,
+        max_candidates=2,
+    )
+
+    assert [candidate.chunk_id for candidate in result] == ["selected", "tail-a"]
+    assert refilled_ids == ("tail-a",)
+
+
+def test_refill_restores_a_realistic_thirty_candidate_budget_after_dedup() -> None:
+    selected = [
+        _candidate(f"selected-{index:02d}", rrf_rank=index + 1).model_copy(
+            update={"text": f"unique content {index}"}
+        )
+        for index in range(26)
+    ]
+    selected.extend(
+        _candidate(f"duplicate-{index:02d}", rrf_rank=27 + index).model_copy(
+            update={"text": f" UNIQUE   CONTENT {index} "}
+        )
+        for index in range(4)
+    )
+    fused = [
+        *selected,
+        *[
+            _candidate(f"tail-{index:02d}", rrf_rank=31 + index).model_copy(
+                update={"text": f"tail content {index}"}
+            )
+            for index in range(4)
+        ],
+    ]
+
+    result, refilled_ids = refill_candidates_after_content_dedup(
+        deduplicate_candidates_by_content(selected),
+        selected_candidate_ids={candidate.chunk_id for candidate in selected},
+        fused_candidates=fused,
+        max_candidates=30,
+    )
+
+    assert len(deduplicate_candidates_by_content(selected)) == 26
+    assert len(result) == 30
+    assert refilled_ids == ("tail-00", "tail-01", "tail-02", "tail-03")
+
+
+def test_refill_returns_smaller_pool_when_the_fused_tail_is_exhausted() -> None:
+    selected = _candidate("selected", rrf_rank=1).model_copy(update={"text": "same"})
+    duplicate = _candidate("duplicate", rrf_rank=2).model_copy(update={"text": " SAME "})
+
+    result, refilled_ids = refill_candidates_after_content_dedup(
+        deduplicate_candidates_by_content([selected]),
+        selected_candidate_ids={"selected"},
+        fused_candidates=[selected, duplicate],
+        max_candidates=3,
+    )
+
+    assert [candidate.chunk_id for candidate in result] == ["selected"]
+    assert refilled_ids == ()
+
+
+@pytest.mark.parametrize(
+    ("candidates", "fused", "max_candidates", "message"),
+    [
+        ([], [], 0, "greater than 0"),
+        (
+            [_candidate("a", rrf_rank=1), _candidate("b", rrf_rank=2)],
+            [],
+            1,
+            "exceeds the refill budget",
+        ),
+        ([], [_candidate("missing-rank")], 1, "one-based RRF ranks"),
+    ],
+)
+def test_refill_rejects_invalid_candidate_contracts(
+    candidates: list[RetrievalCandidate],
+    fused: list[RetrievalCandidate],
+    max_candidates: int,
+    message: str,
+) -> None:
+    with pytest.raises(RerankingError, match=message):
+        refill_candidates_after_content_dedup(
+            candidates,
+            selected_candidate_ids={candidate.chunk_id for candidate in candidates},
+            fused_candidates=fused,
+            max_candidates=max_candidates,
+        )
+
+
 def test_pipeline_content_dedup_is_opt_in() -> None:
     def fake_dense(*args, **kwargs):
         return [_dense("dense").model_copy(update={"text": "same"})]
@@ -369,6 +503,183 @@ def test_pipeline_content_dedup_is_opt_in() -> None:
     execution = pipeline.search("q", strategy="union")
     assert len(execution.candidates_before_rerank) == 1
     assert "content_deduplication" in execution.stage_latency_ms
+
+
+def test_pipeline_refill_requires_content_deduplication() -> None:
+    with pytest.raises(RerankingError, match="requires exact-content deduplication"):
+        RerankPipeline(
+            dense_searcher=DenseSearchStub(lambda *args, **kwargs: []),
+            sparse_searcher=SparseSearchStub(lambda *args, **kwargs: []),
+            cross_encoder=FakeCrossEncoder(),
+            dense_collection="v1",
+            hybrid_collection="v2",
+            refill_after_content_dedup=True,
+        )
+
+
+def test_diagnostic_component_probe_requires_trace_and_a_larger_limit() -> None:
+    common = {
+        "dense_searcher": DenseSearchStub(lambda *args, **kwargs: []),
+        "sparse_searcher": SparseSearchStub(lambda *args, **kwargs: []),
+        "cross_encoder": FakeCrossEncoder(),
+        "dense_collection": "v1",
+        "hybrid_collection": "v2",
+    }
+
+    with pytest.raises(RerankingError, match="requires trace capture"):
+        RerankPipeline(**common, diagnostic_component_limit=100)
+    with pytest.raises(RerankingError, match="exceed both normal component limits"):
+        RerankPipeline(
+            **common,
+            dense_candidate_limit=60,
+            sparse_candidate_limit=40,
+            capture_trace=True,
+            diagnostic_component_limit=60,
+        )
+
+
+def test_diagnostic_component_probe_does_not_expand_the_reranker_pool() -> None:
+    calls: list[tuple[str, int]] = []
+
+    def fake_dense(*args, limit, **kwargs):
+        calls.append(("dense", limit))
+        results = [_dense("dense-normal", 0.9)]
+        if limit == 100:
+            results.append(_dense("dense-probe", 0.8))
+        return results
+
+    def fake_sparse(*args, limit, **kwargs):
+        calls.append(("sparse", limit))
+        results = [_candidate("sparse-normal", sparse_rank=1)]
+        if limit == 100:
+            results.append(_candidate("sparse-probe", sparse_rank=2))
+        return results
+
+    baseline = RerankPipeline(
+        dense_searcher=DenseSearchStub(fake_dense),
+        sparse_searcher=SparseSearchStub(fake_sparse),
+        cross_encoder=FakeCrossEncoder(),
+        dense_collection="v1",
+        hybrid_collection="v2",
+        dense_candidate_limit=60,
+        sparse_candidate_limit=40,
+        capture_trace=True,
+    ).prepare_pool("q", strategy="union")
+    calls.clear()
+    pool = RerankPipeline(
+        dense_searcher=DenseSearchStub(fake_dense),
+        sparse_searcher=SparseSearchStub(fake_sparse),
+        cross_encoder=FakeCrossEncoder(),
+        dense_collection="v1",
+        hybrid_collection="v2",
+        dense_candidate_limit=60,
+        sparse_candidate_limit=40,
+        capture_trace=True,
+        diagnostic_component_limit=100,
+    ).prepare_pool("q", strategy="union")
+
+    assert calls == [("dense", 60), ("sparse", 40), ("dense", 100), ("sparse", 100)]
+    assert [candidate.model_dump() for candidate in pool.candidates] == [
+        candidate.model_dump() for candidate in baseline.candidates
+    ]
+    assert len(pool.candidates) <= 30
+    assert pool.trace is not None
+    assert [candidate.chunk_id for candidate in pool.trace.dense_candidates] == [
+        "dense-normal",
+        "dense-probe",
+    ]
+    assert [candidate.chunk_id for candidate in pool.trace.sparse_candidates] == [
+        "sparse-normal",
+        "sparse-probe",
+    ]
+    assert "diagnostic_dense_retrieval" in pool.stage_latency_ms
+    assert "diagnostic_sparse_retrieval" in pool.stage_latency_ms
+    assert "diagnostic_candidate_context" in pool.stage_latency_ms
+
+
+def test_pipeline_refill_is_opt_in_and_trace_preserves_dedup_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_dense(*args, **kwargs):
+        return [
+            _dense("dense-duplicate", 0.9).model_copy(update={"text": "same content"}),
+            _dense("dense-tail", 0.8).model_copy(update={"text": "dense tail"}),
+        ]
+
+    def fake_sparse(*args, **kwargs):
+        return [
+            _candidate("sparse-duplicate", sparse_rank=1).model_copy(
+                update={"text": " SAME  CONTENT "}
+            ),
+            _candidate("sparse-tail", sparse_rank=2).model_copy(
+                update={"text": "sparse tail"}
+            ),
+        ]
+
+    profile = FusionProfile(
+        name="refill-test",
+        rrf_k=40,
+        dense_weight=1.0,
+        sparse_weight=1.0,
+        fusion_role_multiplier=0.0,
+        dense_reserve=1,
+        sparse_reserve=1,
+        max_candidates=3,
+        post_rerank_role_multiplier=0.0,
+    )
+
+    def prepare(*, refill: bool, capture_trace: bool):
+        return RerankPipeline(
+            dense_searcher=DenseSearchStub(fake_dense),
+            sparse_searcher=SparseSearchStub(fake_sparse),
+            cross_encoder=FakeCrossEncoder(),
+            dense_collection="v1",
+            hybrid_collection="v2",
+            deduplicate_content=True,
+            refill_after_content_dedup=refill,
+            fusion_profile=profile,
+            capture_trace=capture_trace,
+        ).prepare_pool("q", strategy="union")
+
+    baseline = prepare(refill=False, capture_trace=False)
+    without_trace = prepare(refill=True, capture_trace=False)
+    fusion_calls = 0
+    from app.application import reranking_service
+
+    original_fuse = reranking_service.fuse_weighted_rrf
+
+    def counted_fuse(*args, **kwargs):
+        nonlocal fusion_calls
+        fusion_calls += 1
+        return original_fuse(*args, **kwargs)
+
+    monkeypatch.setattr(reranking_service, "fuse_weighted_rrf", counted_fuse)
+    traced = prepare(refill=True, capture_trace=True)
+
+    assert [candidate.chunk_id for candidate in baseline.candidates] == [
+        "dense-duplicate",
+        "dense-tail",
+    ]
+    assert [candidate.chunk_id for candidate in without_trace.candidates] == [
+        "dense-duplicate",
+        "dense-tail",
+        "sparse-tail",
+    ]
+    assert [candidate.model_dump() for candidate in traced.candidates] == [
+        candidate.model_dump() for candidate in without_trace.candidates
+    ]
+    assert fusion_calls == 1
+    assert traced.trace is not None
+    assert traced.trace.candidate_count_pre_dedup == 3
+    assert traced.trace.candidate_count_post_dedup == 2
+    assert traced.trace.candidate_count_before_rerank == 3
+    assert traced.trace.refilled_candidate_ids == ("sparse-tail",)
+    assert "candidate_refill" in traced.stage_latency_ms
+    assert [candidate.chunk_id for candidate in traced.trace.candidate_pool_post_dedup] == [
+        "dense-duplicate",
+        "dense-tail",
+    ]
+    assert traced.trace.candidates_before_rerank == tuple(traced.candidates)
 
 
 def test_pipeline_trace_captures_boundaries_without_changing_candidates(

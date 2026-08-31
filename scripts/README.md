@@ -39,7 +39,9 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
 `scripts/evaluation/` owns three current adapters:
 
 - validate either the legacy frozen pair or the development/confirmation optimization pair;
-- evaluate retrieval and write the versioned retrieval artifact;
+- evaluate the frozen legacy retrieval baseline or one of six preregistered development-only
+  retrieval variants, with trace-only dense/sparse top-100 ceiling probes limited to development,
+  and write a sanitized schema-v3 checkpoint/artifact;
 - run approval-gated end-to-end generation evaluation.
 
 Reusable current contracts live in `evaluation/dataset.py`, `evaluation/retrieval.py`,
@@ -54,7 +56,9 @@ regression evidence, not tuning data. The E2E adapter declares sanitized artifac
 explicitly opts into retrieval tracing; normal production composition leaves tracing disabled. A
 schema declaration is not proof of execution: the latest executed held-out artifact remains v8,
 and no v9 held-out result is claimed. See [Operations](../docs/OPERATIONS.md) for dataset-suite
-validation, the two-run calibration preflight, and artifact provenance.
+validation, provider-free development variants, the two-run calibration preflight, and artifact
+provenance. Retrieval variants never appear in production settings or the E2E command, and the
+retrieval evaluator accepts no confirmation or held-out input.
 
 ## Archive
 

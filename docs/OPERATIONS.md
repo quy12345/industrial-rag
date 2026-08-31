@@ -97,6 +97,49 @@ Development permits `--item-id` or `--max-queries` diagnostics only when both `-
 `--checkpoint` are explicit, preventing a partial trace from replacing or blocking the default full
 development artifact.
 
+## Provider-free retrieval variants
+
+Q02 preregisters exactly six development variants; the CLI accepts no arbitrary weights, reserve
+counts, or glossary terms:
+
+| Variant | Query profile | Refill after same-document dedup | Dense/sparse reserves |
+| --- | --- | --- | --- |
+| `baseline` | `vi_technical_glossary_v1` | no | 5 / 24 |
+| `refill` | `vi_technical_glossary_v1` | yes | 5 / 24 |
+| `query-expansion-v2` | `vi_technical_glossary_v2` | no | 5 / 24 |
+| `refill-query-expansion-v2` | `vi_technical_glossary_v2` | yes | 5 / 24 |
+| `dense-reserve-d20-s5` | `vi_technical_glossary_v1` | no | 20 / 5 |
+| `sparse-reserve-d5-s20` | `vi_technical_glossary_v1` | no | 5 / 20 |
+
+The v2 lexical policy affects sparse search only. It matches complete Vietnamese phrases across
+NFC, NFD, and conservative accentless input while retaining the original query, identifiers,
+numbers, and units. Dense retrieval and the cross-encoder continue to receive the original query.
+
+After all 180 optimization records have been human-reviewed, approved, and sealed, start Qdrant and
+run each variant against the full development split. For example:
+
+```powershell
+docker compose up -d qdrant
+docker compose run --rm evaluation python -m scripts.evaluation.evaluate_retrieval `
+  --dataset development `
+  --retrieval-variant refill
+```
+
+The command uses Qdrant plus local embedding/reranker models but makes zero generator or judge calls
+and never writes a collection. Each variant makes separate trace-only dense and sparse probes to
+rank 100; normal fusion still consumes only dense top 60 and sparse top 40, the reranker still sees
+at most 30 candidates, and probe latency is excluded from the runtime-quality comparison. Schema-v3
+output and checkpoint names include the variant ID, and a checkpoint from another variant or the old
+schema fails closed. Non-baseline variants are rejected for the legacy suite, and the command has no
+confirmation or held-out dataset choice. The current
+repository does not yet contain the reviewed development/confirmation payloads, so no variant run,
+winner, or quality improvement is claimed by this implementation alone.
+
+Use the trace to check the raw ceiling first: qrel absence from both diagnostic dense top 100 and
+sparse top 100 means refill, RRF reserves, and lexical fusion cannot recover it. Stop this tuning
+path and prepare a separately approved shadow model/index proposal; do not mutate the current
+collection.
+
 Sealed held-out v2 likewise rejects `--item-id` and `--max-queries`; checkpoint resume is the only
 supported way to continue an interrupted full sealed run.
 

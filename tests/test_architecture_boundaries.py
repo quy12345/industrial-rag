@@ -469,10 +469,16 @@ def test_runtime_composes_canonical_reranking_service_not_evaluation_facade() ->
     assert "app.reranking" not in graph["app.composition.retrieval"]
 
 
-def test_retrieval_evaluation_uses_only_public_content_identity() -> None:
+def test_retrieval_evaluation_uses_only_public_domain_contracts() -> None:
     graph = _import_graph()
 
-    assert graph["evaluation.retrieval"] == {"app.domain.content_identity"}
+    assert graph["evaluation.retrieval"] == {
+        "app.domain.content_identity",
+        "app.domain.policies.fusion",
+        "app.domain.policies.query_analysis",
+        "app.domain.retrieval",
+        "app.domain.retrieval_contracts",
+    }
 
 
 def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:

@@ -72,12 +72,14 @@ class RerankPipeline:
         rrf_k: int = 60,
         rerank_batch_size: int = 16,
         deduplicate_content: bool = False,
+        refill_after_content_dedup: bool = False,
         document_contexts: Mapping[str, Mapping[str, str]] | None = None,
         sparse_query_transform: Callable[[str], str] | None = None,
         union_rrf_prune_limit: int | None = None,
         fusion_profile: FusionProfile | None = None,
         query_role_inferer: Callable[[str], QueryRoleInference] = infer_query_role,
         capture_trace: bool = False,
+        diagnostic_component_limit: int | None = None,
     ) -> None:
         self.dense_searcher = dense_searcher
         self.sparse_searcher = sparse_searcher
@@ -89,12 +91,29 @@ class RerankPipeline:
         self.rrf_k = rrf_k
         self.rerank_batch_size = rerank_batch_size
         self.deduplicate_content = deduplicate_content
+        if refill_after_content_dedup and not deduplicate_content:
+            raise RerankingError(
+                "Candidate refill requires exact-content deduplication to be enabled."
+            )
+        self.refill_after_content_dedup = refill_after_content_dedup
         self.document_contexts = dict(document_contexts or {})
         self.sparse_query_transform = sparse_query_transform
         self.union_rrf_prune_limit = union_rrf_prune_limit
         self.fusion_profile = fusion_profile
         self.query_role_inferer = query_role_inferer
         self.capture_trace = capture_trace
+        if diagnostic_component_limit is not None:
+            if not capture_trace:
+                raise RerankingError(
+                    "Diagnostic component retrieval requires trace capture to be enabled."
+                )
+            if diagnostic_component_limit <= max(
+                dense_candidate_limit, sparse_candidate_limit
+            ):
+                raise RerankingError(
+                    "Diagnostic component limit must exceed both normal component limits."
+                )
+        self.diagnostic_component_limit = diagnostic_component_limit
 
     def search(
         self, question: str, *, strategy: RerankStrategy, document_id: str | None = None
@@ -179,6 +198,35 @@ class RerankPipeline:
         )
         stages["sparse_retrieval"] = (perf_counter() - sparse_started) * 1000
 
+        diagnostic_dense_results = dense_results
+        diagnostic_sparse_candidates = sparse_candidates
+        if self.diagnostic_component_limit is not None:
+            if strategy in ("hybrid", "union"):
+                diagnostic_dense_started = perf_counter()
+                diagnostic_dense_results = self.dense_searcher.search(
+                    question,
+                    collection_name=(
+                        self.hybrid_collection
+                        if strategy == "hybrid"
+                        else self.dense_collection
+                    ),
+                    limit=self.diagnostic_component_limit,
+                    document_id=document_id,
+                )
+                stages["diagnostic_dense_retrieval"] = (
+                    perf_counter() - diagnostic_dense_started
+                ) * 1000
+            diagnostic_sparse_started = perf_counter()
+            diagnostic_sparse_candidates = self.sparse_searcher.search(
+                sparse_query,
+                collection_name=self.hybrid_collection,
+                limit=self.diagnostic_component_limit,
+                document_id=document_id,
+            )
+            stages["diagnostic_sparse_retrieval"] = (
+                perf_counter() - diagnostic_sparse_started
+            ) * 1000
+
         preparation_started = perf_counter()
         pending_prune_limit: int | None = None
         dense_candidates = [
@@ -189,13 +237,15 @@ class RerankPipeline:
             _with_document_context(candidate, self.document_contexts.get(candidate.document_id))
             for candidate in sparse_candidates
         ]
+        diagnostic_dense_candidates = dense_candidates
+        contextual_diagnostic_sparse_candidates = contextual_sparse_candidates
         fused_candidates: list[RetrievalCandidate] = []
         if strategy == "union" and self.fusion_profile is not None:
             role_started = perf_counter()
             query_role = self.query_role_inferer(question)
             stages["query_role_inference"] = (perf_counter() - role_started) * 1000
             try:
-                if self.capture_trace:
+                if self.capture_trace or self.refill_after_content_dedup:
                     fused_candidates = fuse_weighted_rrf(
                         dense_candidates,
                         contextual_sparse_candidates,
@@ -207,7 +257,11 @@ class RerankPipeline:
                     contextual_sparse_candidates,
                     profile=self.fusion_profile,
                     query_role=query_role.role,
-                    fused_candidates=(fused_candidates if self.capture_trace else None),
+                    fused_candidates=(
+                        fused_candidates
+                        if self.capture_trace or self.refill_after_content_dedup
+                        else None
+                    ),
                 )
             except FusionPolicyError as exc:
                 raise RerankingError(str(exc)) from exc
@@ -242,24 +296,63 @@ class RerankPipeline:
                 for candidate in candidates
             ]
         stages[preparation_stage] = (perf_counter() - preparation_started) * 1000
+        if self.diagnostic_component_limit is not None:
+            diagnostic_context_started = perf_counter()
+            diagnostic_dense_candidates = [
+                _with_document_context(
+                    candidate,
+                    self.document_contexts.get(candidate.document_id),
+                )
+                for candidate in dense_results_to_candidates(diagnostic_dense_results)
+            ]
+            contextual_diagnostic_sparse_candidates = [
+                _with_document_context(
+                    candidate,
+                    self.document_contexts.get(candidate.document_id),
+                )
+                for candidate in diagnostic_sparse_candidates
+            ]
+            stages["diagnostic_candidate_context"] = (
+                perf_counter() - diagnostic_context_started
+            ) * 1000
+        selected_candidate_ids = {candidate.chunk_id for candidate in candidates}
         selected_candidates_pre_dedup = list(candidates) if self.capture_trace else []
+        refilled_candidate_ids: tuple[str, ...] = ()
         if self.deduplicate_content:
             deduplication_started = perf_counter()
             candidates = deduplicate_candidates_by_content(candidates)
-            stages["content_deduplication"] = (perf_counter() - deduplication_started) * 1000
-        candidates_post_dedup = list(candidates) if self.capture_trace else []
+            stages["content_deduplication"] = (
+                perf_counter() - deduplication_started
+            ) * 1000
+            candidates_post_dedup = list(candidates) if self.capture_trace else []
+            if (
+                self.refill_after_content_dedup
+                and strategy == "union"
+                and self.fusion_profile is not None
+            ):
+                refill_started = perf_counter()
+                candidates, refilled_candidate_ids = refill_candidates_after_content_dedup(
+                    candidates,
+                    selected_candidate_ids=selected_candidate_ids,
+                    fused_candidates=fused_candidates,
+                    max_candidates=self.fusion_profile.max_candidates,
+                )
+                stages["candidate_refill"] = (perf_counter() - refill_started) * 1000
+        else:
+            candidates_post_dedup = list(candidates) if self.capture_trace else []
         if pending_prune_limit is not None:
             candidates = candidates[:pending_prune_limit]
         if strategy == "sparse" and "union_preparation" in stages:
             stages.pop("union_preparation")
         trace = (
             RetrievalTrace(
-                dense_candidates=tuple(dense_candidates),
-                sparse_candidates=tuple(contextual_sparse_candidates),
+                dense_candidates=tuple(diagnostic_dense_candidates),
+                sparse_candidates=tuple(contextual_diagnostic_sparse_candidates),
                 fused_candidates=tuple(fused_candidates),
                 selected_candidates_pre_dedup=tuple(selected_candidates_pre_dedup),
                 candidate_pool_post_dedup=tuple(candidates_post_dedup),
                 candidates_before_rerank=tuple(candidates),
+                refilled_candidate_ids=refilled_candidate_ids,
                 candidate_count_pre_dedup=len(selected_candidates_pre_dedup),
                 candidate_count_post_dedup=len(candidates_post_dedup),
                 candidate_count_before_rerank=len(candidates),
@@ -268,6 +361,7 @@ class RerankPipeline:
             else None
         )
         return CandidatePool(candidates, stages, trace)
+
 
 def build_candidate_text(candidate: RetrievalCandidate) -> str:
     """Build trusted document context, heading breadcrumb, and raw-content input."""
@@ -382,6 +476,59 @@ def deduplicate_candidates_by_content(
             )
         )
     return deduplicated
+
+
+def refill_candidates_after_content_dedup(
+    candidates: Sequence[RetrievalCandidate],
+    *,
+    selected_candidate_ids: set[str],
+    fused_candidates: Sequence[RetrievalCandidate],
+    max_candidates: int,
+) -> tuple[list[RetrievalCandidate], tuple[str, ...]]:
+    """Fill deduplication vacancies from the deterministic weighted-RRF tail.
+
+    Content identity remains document-scoped: equal text from different manuals
+    preserves both provenance choices, while an equal-text candidate from the same
+    manual cannot consume another reranker slot.
+    """
+
+    if max_candidates <= 0:
+        raise RerankingError("Refill candidate budget must be greater than 0.")
+    if len(candidates) > max_candidates:
+        raise RerankingError("Deduplicated candidate pool exceeds the refill budget.")
+    if any(candidate.rrf_rank is None for candidate in fused_candidates):
+        raise RerankingError("Refill candidates require one-based RRF ranks.")
+
+    refilled = list(candidates)
+    content_keys = {
+        (candidate.document_id, evidence_content_fingerprint(candidate.text))
+        for candidate in refilled
+    }
+    refilled_candidate_ids: list[str] = []
+    fused_tail = sorted(
+        fused_candidates,
+        key=lambda candidate: (candidate.rrf_rank or 2**31, candidate.chunk_id),
+    )
+    for candidate in fused_tail:
+        if len(refilled) >= max_candidates:
+            break
+        if candidate.chunk_id in selected_candidate_ids:
+            continue
+        content_key = (
+            candidate.document_id,
+            evidence_content_fingerprint(candidate.text),
+        )
+        if content_key in content_keys:
+            continue
+        normalized_candidate = deduplicate_candidates_by_content((candidate,))[0]
+        refilled.append(normalized_candidate)
+        content_keys.add(content_key)
+        refilled_candidate_ids.append(candidate.chunk_id)
+
+    refilled.sort(
+        key=lambda candidate: (candidate.rrf_rank or 2**31, candidate.chunk_id)
+    )
+    return refilled, tuple(refilled_candidate_ids)
 
 
 def rerank_candidates(

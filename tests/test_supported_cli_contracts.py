@@ -36,7 +36,17 @@ SUPPORTED_CLI_OPTIONS = [
     ),
     (
         "scripts.evaluation.evaluate_retrieval",
-        {"--calibration", "--test", "--chunks", "--output"},
+        {
+            "--dataset",
+            "--calibration",
+            "--test",
+            "--development",
+            "--manifest",
+            "--chunks",
+            "--retrieval-variant",
+            "--checkpoint",
+            "--output",
+        },
     ),
     (
         "scripts.operations.index_corpus",

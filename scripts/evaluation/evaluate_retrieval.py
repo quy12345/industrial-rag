@@ -1,178 +1,314 @@
-"""Run the provider-free ATV320 retrieval and local reranker evaluation."""
+"""Run provider-free ATV320 retrieval experiments against frozen collections.
+
+Artifacts contain only stable IDs, ranks, timings, and configuration identity.
+They never contain questions, chunk text, expected phrases, or model output.
+"""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
+import platform
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.application.reranking_service import CANDIDATE_TEXT_FORMAT
 from app.config import Settings
-from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
-from app.infrastructure.corpus_artifacts import load_frozen_chunks, write_json_atomic
+from app.domain.retrieval_contracts import (
+    ATV320_RETRIEVAL_CONTRACT,
+    FrozenRetrievalContract,
+)
+from app.infrastructure.corpus_artifacts import (
+    load_frozen_chunks,
+    write_json_atomic,
+    write_jsonl_atomic,
+)
 from evaluation.dataset import (
+    DatasetValidationError,
+    EvaluationItem,
     dataset_sha256,
     read_dataset,
+    validate_dataset,
     validate_dataset_splits,
+    validate_evaluation_manifest,
 )
 from evaluation.retrieval import (
+    DEVELOPMENT_RETRIEVAL_VARIANTS,
+    DevelopmentRetrievalVariant,
     aggregate_retrieval_rows,
     aggregate_retrieval_rows_by_language,
-    direct_evidence_rank,
+    build_corpus_exact_content_equivalence,
+    development_retrieval_variant,
+    evaluate_retrieval_quality_gates,
+    score_retrieval_execution,
 )
 
+LEGACY_CALIBRATION_PATH = Path("data/eval/phase7/calibration.jsonl")
+LEGACY_TEST_PATH = Path("data/eval/phase7/test.jsonl")
+DEVELOPMENT_PATH = Path("data/eval/atv320/development-v1.jsonl")
+DEVELOPMENT_MANIFEST_PATH = Path("data/eval/atv320/development-v1-manifest.json")
+FROZEN_CHUNKS_PATH = Path("artifacts/phase7/frozen-chunks.jsonl")
+ARTIFACT_SCHEMA_VERSION = 3
+DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-retrieval-evaluation-v3.json")
+DEFAULT_CHECKPOINT = Path(
+    "artifacts/metrics/atv320-retrieval-evaluation-v3-checkpoint.jsonl"
+)
 SOURCE_IDENTITY_PATHS = {
+    "content_identity": Path("app/domain/content_identity.py"),
     "dataset_contract": Path("evaluation/dataset.py"),
+    "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
+    "evaluation_command": Path("scripts/evaluation/evaluate_retrieval.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
+    "list_completeness_policy": Path("app/domain/policies/list_completeness.py"),
     "query_analysis_policy": Path("app/domain/policies/query_analysis.py"),
+    "query_role_policy": Path("app/domain/policies/query_roles.py"),
+    "reranker_adapter": Path("app/infrastructure/models/reranker.py"),
     "reranking_service": Path("app/application/reranking_service.py"),
     "retrieval_composition": Path("app/composition/retrieval.py"),
     "retrieval_contract": Path("app/domain/retrieval_contracts.py"),
     "retrieval_metrics": Path("evaluation/retrieval.py"),
+    "retrieval_types": Path("app/domain/retrieval.py"),
+    "search_adapters": Path("app/infrastructure/qdrant/search.py"),
+    "sparse_search_adapter": Path("app/infrastructure/qdrant/hybrid.py"),
 }
-ARTIFACT_SCHEMA_VERSION = 2
-DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-retrieval-evaluation-v2.json")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--calibration", type=Path, default=Path("data/eval/phase7/calibration.jsonl")
-    )
-    parser.add_argument("--test", type=Path, default=Path("data/eval/phase7/test.jsonl"))
-    parser.add_argument(
-        "--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl")
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=DEFAULT_OUTPUT,
-    )
-    args = parser.parse_args()
-
-    calibration = read_dataset(args.calibration)
-    test = read_dataset(args.test)
+    args = _parse_args()
+    variant = _active_retrieval_variant(args.dataset, args.retrieval_variant)
     chunks = load_frozen_chunks(args.chunks)
-    validation = validate_dataset_splits(calibration, test, chunks)
-    selected = [item for item in calibration if item.answerable]
-    settings = _runtime_settings(Settings())
+    try:
+        dataset, selected, validation, sealed_hash = _load_selected_dataset(
+            args,
+            chunks,
+        )
+    except DatasetValidationError as exc:
+        raise SystemExit(f"ATV320 retrieval evaluation input is invalid: {exc}") from None
+
+    contract = variant.apply(ATV320_RETRIEVAL_CONTRACT)
+    settings = _runtime_settings(Settings(), contract)
+    corpus_equivalence = build_corpus_exact_content_equivalence(chunks)
+    runtime_identity = _runtime_identity(contract, variant)
+    identity = {
+        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "dataset": args.dataset,
+        "dataset_sha256": dataset_sha256(dataset),
+        "sealed_comparison_dataset_sha256": sealed_hash,
+        "selected_item_ids": [item.id for item in selected],
+        "corpus": validation["corpus"],
+        "contract_chunk_ids_sha256": contract.chunk_ids_sha256,
+        "retrieval_variant": variant.identity(),
+        "runtime": runtime_identity,
+        "source_identity": _source_identity(),
+        "libraries": _library_versions(),
+        "trace_policy": "sanitized_ids_counts_ranks_and_allowlisted_role_signals",
+    }
+    rows = _load_checkpoint(args.checkpoint, identity)
+    completed_ids = {str(row["id"]) for row in rows}
 
     from app.composition.retrieval import build_query_retriever
 
-    retriever = build_query_retriever(settings, contract=ATV320_RETRIEVAL_CONTRACT)
-
-    rows: list[dict[str, Any]] = []
+    retriever = build_query_retriever(
+        settings,
+        contract=contract,
+        capture_trace=True,
+    )
     for item in selected:
+        if item.id in completed_ids:
+            continue
         execution = retriever.retrieve(item.question, document_id=None)
-        candidate_pool = execution.candidate_pool or execution.candidates
-        relevant = set(item.relevant_chunk_ids)
-        candidate_rank = direct_evidence_rank(candidate_pool, relevant)
-        final_rank = direct_evidence_rank(execution.candidates, relevant)
         rows.append(
-            {
-                "id": item.id,
-                "language": item.language,
-                "candidate_count": len(candidate_pool),
-                "final_candidate_count": len(execution.candidates),
-                "candidate_direct_evidence_rank": candidate_rank,
-                "final_direct_evidence_rank": final_rank,
-                "failure_class": _failure_class(candidate_rank, final_rank),
-                "wrong_document_top1": bool(execution.candidates)
-                and execution.candidates[0].document_id not in item.expected_document_ids,
-                "wrong_document_candidate_count_at_5": sum(
-                    candidate.document_id not in item.expected_document_ids
-                    for candidate in execution.candidates[:5]
-                ),
-                "document_context_complete": all(
-                    candidate.metadata.get("document_role")
-                    in {"installation", "programming"}
-                    and bool(candidate.metadata.get("document_title"))
-                    for candidate in execution.candidates
-                ),
-                "retrieval_ms": execution.retrieval_ms,
-                "rerank_ms": execution.rerank_ms,
-            }
+            score_retrieval_execution(
+                item,
+                execution,
+                corpus_equivalence=corpus_equivalence,
+            )
         )
+        _write_checkpoint(args.checkpoint, identity, rows)
 
+    if len(rows) != len(selected):
+        raise RuntimeError("Retrieval checkpoint count does not match the selected dataset.")
     overall = aggregate_retrieval_rows(rows)
     per_language = aggregate_retrieval_rows_by_language(rows)
-    runtime_identity = {
-        "dense_candidate_limit": ATV320_RETRIEVAL_CONTRACT.dense_candidate_limit,
-        "sparse_candidate_limit": ATV320_RETRIEVAL_CONTRACT.sparse_candidate_limit,
-        "rrf_k": ATV320_RETRIEVAL_CONTRACT.rrf_k,
-        "rrf_prune_limit": ATV320_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
-        "fusion_profile": (
-            None
-            if ATV320_RETRIEVAL_CONTRACT.fusion_profile is None
-            else ATV320_RETRIEVAL_CONTRACT.fusion_profile.name
-        ),
-        "query_expansion_profile": ATV320_RETRIEVAL_CONTRACT.query_expansion_profile,
-        "reranker": ATV320_RETRIEVAL_CONTRACT.rerank_model,
-        "candidate_text_format": CANDIDATE_TEXT_FORMAT,
-    }
-    source_identity = _source_identity()
+    quality_gates = evaluate_retrieval_quality_gates(
+        args.dataset,
+        rows=rows,
+        overall=overall,
+        per_language=per_language,
+    )
     payload = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "timestamp": datetime.now(UTC).isoformat(),
-        "scope": "approved answerable calibration rows only",
-        "calibration_dataset_sha256": dataset_sha256(calibration),
-        "held_out_dataset_sha256": dataset_sha256(test),
-        "corpus": validation["corpus"],
-        "runtime": runtime_identity,
-        "source_identity": {
-            "runtime_configuration_sha256": _json_sha256(runtime_identity),
-            "files": source_identity,
-        },
+        "scope": (
+            "approved answerable calibration rows only"
+            if args.dataset == "legacy"
+            else "approved answerable development rows only"
+        ),
+        "run_identity": identity,
+        "dataset_validation": validation,
         "overall": overall,
         "per_language": per_language,
-        "quality_gates": {
-            "candidate_recall_12_of_12": overall["candidate_recall"] == 1.0,
-            "hit_rate_at_5_at_least_11_of_12": overall["hit_rate_at_5"] >= 11 / 12,
-            "mrr_at_5_at_least_0_875": overall["mrr_at_5"] >= 0.875,
-            "reranker_input_at_most_30": overall["candidate_count_maximum"] <= 30,
-            "wrong_document_top1_zero": overall["wrong_document_top1_rate"] == 0.0,
-            "wrong_document_candidate_rate_at_5_at_most_0_15": (
-                overall["wrong_document_candidate_rate_at_5"] <= 0.15
-            ),
-            "document_context_complete": overall["document_context_complete_rate"] == 1.0,
-            "english_hit_rate_at_5_6_of_6": per_language["en"]["hit_rate_at_5"] == 1.0,
-            "vietnamese_hit_rate_at_5_at_least_5_of_6": per_language["vi"]["hit_rate_at_5"]
-            >= 5 / 6,
-            "english_wrong_document_top5_at_most_5_of_30": (
-                per_language["en"]["wrong_document_candidate_rate_at_5"] <= 5 / 30
-            ),
-            "vietnamese_wrong_document_top5_at_most_5_of_30": (
-                per_language["vi"]["wrong_document_candidate_rate_at_5"] <= 5 / 30
-            ),
-            "calibration_010_rank_at_most_5": _rank(rows, "phase7_calibration_010") <= 5,
-        },
+        "quality_gates": quality_gates,
         "per_query": rows,
         "provider_calls": 0,
+        "confirmation_queries_executed": 0,
         "held_out_queries_executed": 0,
         "sanitization": {
             "question": "excluded",
-            "answer": "not applicable",
-            "evidence": "excluded",
+            "answer": "not_applicable",
+            "evidence_text": "excluded",
+            "expected_fact_text": "excluded",
+            "unlisted_candidate_metadata": "excluded",
         },
     }
     write_json_atomic(args.output, payload)
-    passed = all(payload["quality_gates"].values())
+    passed = all(quality_gates.values())
     status = "PASS" if passed else "FAIL"
-    print(f"ATV320 provider-free retrieval evaluation {status}: {args.output}")
+    print(
+        f"ATV320 {args.dataset} provider-free retrieval evaluation {status}: "
+        f"{args.output}"
+    )
     return 0 if passed else 2
 
 
-def _rank(rows: list[dict[str, Any]], identifier: str) -> int:
-    for row in rows:
-        if row["id"] == identifier:
-            return int(row["final_direct_evidence_rank"] or 2**31)
-    raise ValueError(f"Required calibration row missing: {identifier}")
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dataset",
+        choices=("legacy", "development"),
+        default="legacy",
+        help="Use the frozen legacy calibration pair or the inspectable development split.",
+    )
+    parser.add_argument("--calibration", type=Path, default=LEGACY_CALIBRATION_PATH)
+    parser.add_argument("--test", type=Path, default=LEGACY_TEST_PATH)
+    parser.add_argument("--development", type=Path, default=DEVELOPMENT_PATH)
+    parser.add_argument("--manifest", type=Path, default=DEVELOPMENT_MANIFEST_PATH)
+    parser.add_argument("--chunks", type=Path, default=FROZEN_CHUNKS_PATH)
+    parser.add_argument(
+        "--retrieval-variant",
+        choices=tuple(DEVELOPMENT_RETRIEVAL_VARIANTS),
+        default="baseline",
+        help="Preregistered retrieval policy; non-baseline choices are development-only.",
+    )
+    parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
+    return parser
 
 
-def _json_sha256(value: dict[str, Any]) -> str:
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.dataset != "development" and args.retrieval_variant != "baseline":
+        parser.error("Non-baseline retrieval variants are permitted only for development")
+    if args.output is None:
+        args.output = _default_output(args.dataset, args.retrieval_variant)
+    if args.checkpoint is None:
+        args.checkpoint = _default_checkpoint(args.dataset, args.retrieval_variant)
+    return args
+
+
+def _default_output(dataset: str, variant: str) -> Path:
+    if dataset == "legacy":
+        return DEFAULT_OUTPUT
+    return Path(
+        "artifacts/metrics/"
+        f"atv320-development-retrieval-{variant}-v{ARTIFACT_SCHEMA_VERSION}.json"
+    )
+
+
+def _default_checkpoint(dataset: str, variant: str) -> Path:
+    if dataset == "legacy":
+        return DEFAULT_CHECKPOINT
+    return Path(
+        "artifacts/metrics/"
+        f"atv320-development-retrieval-{variant}-v{ARTIFACT_SCHEMA_VERSION}"
+        "-checkpoint.jsonl"
+    )
+
+
+def _active_retrieval_variant(
+    dataset: str,
+    identifier: str,
+) -> DevelopmentRetrievalVariant:
+    variant = development_retrieval_variant(identifier)
+    if dataset == "development":
+        return variant
+    if dataset != "legacy" or identifier != "baseline":
+        raise ValueError("Retrieval variants other than baseline are development-only.")
+    return replace(variant, diagnostic_component_limit=None)
+
+
+def _load_selected_dataset(
+    args: argparse.Namespace,
+    chunks: list[Any],
+) -> tuple[list[EvaluationItem], list[EvaluationItem], dict[str, Any], str]:
+    if args.dataset == "legacy":
+        calibration = read_dataset(args.calibration)
+        test = read_dataset(args.test)
+        validation = validate_dataset_splits(calibration, test, chunks)
+        return (
+            calibration,
+            [item for item in calibration if item.answerable],
+            validation,
+            str(validation["test_dataset_sha256"]),
+        )
+
+    development = read_dataset(args.development)
+    validation = validate_dataset(development, chunks, kind="development")
+    if any(item.review_status != "approved" for item in development):
+        raise DatasetValidationError(
+            "Development retrieval evaluation requires every item to be approved."
+        )
+    manifest = validate_evaluation_manifest(
+        args.manifest,
+        chunks,
+        development,
+        dataset_key="development_dataset_sha256",
+    )
+    return (
+        development,
+        [item for item in development if item.answerable],
+        validation,
+        str(manifest["confirmation_dataset_sha256"]),
+    )
+
+
+def _runtime_identity(
+    contract: FrozenRetrievalContract,
+    variant: DevelopmentRetrievalVariant,
+) -> dict[str, Any]:
+    return {
+        "contract_id": contract.contract_id,
+        "dense_collection": contract.dense_collection,
+        "hybrid_collection": contract.hybrid_collection,
+        "dense_candidate_limit": contract.dense_candidate_limit,
+        "sparse_candidate_limit": contract.sparse_candidate_limit,
+        "rrf_k": contract.rrf_k,
+        "candidate_budget": contract.union_rrf_prune_limit,
+        "diagnostic_component_limit": contract.diagnostic_component_limit,
+        "dense_model": contract.dense_model,
+        "dense_dimension": contract.dense_dimension,
+        "sparse_model": contract.sparse_model,
+        "bm25_k": contract.bm25_k,
+        "bm25_b": contract.bm25_b,
+        "bm25_avg_len": contract.bm25_avg_len,
+        "bm25_disable_stemmer": contract.bm25_disable_stemmer,
+        "reranker": contract.rerank_model,
+        "rerank_batch_size": contract.frozen_rerank_batch_size,
+        "freeze_rerank_threads": contract.freeze_rerank_threads,
+        "rerank_threads": contract.frozen_rerank_threads,
+        "deduplicate_exact_content": True,
+        "candidate_text_format": CANDIDATE_TEXT_FORMAT,
+        "retrieval_variant": variant.identity(),
+    }
+
+
+def _json_sha256(value: Mapping[str, Any]) -> str:
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -181,31 +317,75 @@ def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _source_identity() -> dict[str, str]:
-    """Hash the canonical behavior owners used by this evaluator."""
+def _source_identity() -> dict[str, Any]:
+    """Hash every canonical behavior owner used by the v3 evaluator."""
 
-    return {name: _file_sha256(path) for name, path in SOURCE_IDENTITY_PATHS.items()}
-
-
-def _failure_class(candidate_rank: int | None, final_rank: int | None) -> str:
-    if candidate_rank is None:
-        return "candidate_miss"
-    if final_rank is None or final_rank > 20:
-        return "reranker_miss_top20"
-    if final_rank > 5:
-        return "reranker_miss_top5"
-    return "hit"
+    files = {name: _file_sha256(path) for name, path in SOURCE_IDENTITY_PATHS.items()}
+    return {
+        "files": files,
+        "files_sha256": _json_sha256(files),
+    }
 
 
-def _runtime_settings(settings: Settings) -> Settings:
+def _library_versions() -> dict[str, str]:
+    versions = {"python": platform.python_version()}
+    for name in ("fastembed", "onnxruntime", "qdrant-client"):
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = "not-installed"
+    return versions
+
+
+def _load_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        return []
+    try:
+        header = json.loads(lines[0])
+        rows = [json.loads(line) for line in lines[1:]]
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Malformed ATV320 retrieval checkpoint: {path}") from exc
+    if header != {"run_identity": identity}:
+        raise RuntimeError(
+            "Existing ATV320 retrieval checkpoint belongs to a different frozen run."
+        )
+    row_ids = [row.get("id") for row in rows]
+    if len(row_ids) != len(set(row_ids)):
+        raise RuntimeError("Existing ATV320 retrieval checkpoint has duplicate item IDs.")
+    selected_ids = identity.get("selected_item_ids")
+    if not isinstance(selected_ids, list) or any(
+        not isinstance(item_id, str) for item_id in selected_ids
+    ):
+        raise RuntimeError("ATV320 retrieval run identity has invalid selected item IDs.")
+    allowed_ids = set(selected_ids)
+    if any(row_id not in allowed_ids for row_id in row_ids):
+        raise RuntimeError("Existing ATV320 retrieval checkpoint has an unexpected item ID.")
+    return rows
+
+
+def _write_checkpoint(
+    path: Path,
+    identity: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> None:
+    write_jsonl_atomic(path, [{"run_identity": identity}, *rows])
+
+
+def _runtime_settings(
+    settings: Settings,
+    contract: FrozenRetrievalContract = ATV320_RETRIEVAL_CONTRACT,
+) -> Settings:
     return settings.model_copy(
         update={
-            "qdrant_collection": ATV320_RETRIEVAL_CONTRACT.dense_collection,
-            "qdrant_hybrid_collection": ATV320_RETRIEVAL_CONTRACT.hybrid_collection,
-            "bm25_avg_len": ATV320_RETRIEVAL_CONTRACT.bm25_avg_len,
-            "dense_candidate_limit": ATV320_RETRIEVAL_CONTRACT.dense_candidate_limit,
-            "sparse_candidate_limit": ATV320_RETRIEVAL_CONTRACT.sparse_candidate_limit,
-            "rrf_k": ATV320_RETRIEVAL_CONTRACT.rrf_k,
+            "qdrant_collection": contract.dense_collection,
+            "qdrant_hybrid_collection": contract.hybrid_collection,
+            "bm25_avg_len": contract.bm25_avg_len,
+            "dense_candidate_limit": contract.dense_candidate_limit,
+            "sparse_candidate_limit": contract.sparse_candidate_limit,
+            "rrf_k": contract.rrf_k,
             "retrieval_strategy": "union",
             "rerank_enabled": True,
             "rerank_deduplicate_content": True,

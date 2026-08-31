@@ -526,6 +526,41 @@ def dataset_sha256(items: Sequence[EvaluationItem]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def validate_evaluation_manifest(
+    path: Path,
+    chunks: Sequence[DocumentChunk],
+    dataset: Sequence[EvaluationItem],
+    *,
+    dataset_key: str,
+) -> dict[str, Any]:
+    """Validate one split and the opaque hash of its sealed comparison split."""
+
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Unable to load ATV320 evaluation manifest: {path}"
+        ) from exc
+    expected = {
+        "corpus": chunk_set_metadata(chunks),
+        dataset_key: dataset_sha256(dataset),
+    }
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            raise RuntimeError(f"ATV320 evaluation manifest mismatch: {key}")
+    sealed_key = {
+        "calibration_dataset_sha256": "test_dataset_sha256",
+        "development_dataset_sha256": "confirmation_dataset_sha256",
+        "confirmation_dataset_sha256": "development_dataset_sha256",
+    }.get(dataset_key, dataset_key)
+    sealed_hash = manifest.get(sealed_key)
+    if not isinstance(sealed_hash, str) or len(sealed_hash) != 64:
+        raise RuntimeError(
+            f"ATV320 manifest has no valid sealed comparison hash: {sealed_key}"
+        )
+    return manifest
+
+
 def build_exact_content_equivalence(
     chunks: Sequence[DocumentChunk],
 ) -> dict[str, tuple[str, ...]]:

@@ -43,6 +43,7 @@ from evaluation.dataset import (
     dataset_sha256,
     read_dataset,
     validate_dataset,
+    validate_evaluation_manifest,
 )
 from evaluation.e2e import (
     FACT_EVALUATOR_ID,
@@ -487,7 +488,7 @@ def _load_selected_dataset(
     validation = validate_dataset(dataset, chunks, kind=validation_kind)
     if any(item.review_status != "approved" for item in dataset):
         raise SystemExit("ATV320 evaluation requires an explicitly approved dataset.")
-    manifest = _validate_evaluation_manifest(
+    manifest = validate_evaluation_manifest(
         args.manifest,
         chunks,
         dataset,
@@ -531,34 +532,6 @@ def _runtime_settings(settings: Settings) -> Settings:
             "rerank_deduplicate_content": True,
         }
     )
-
-
-def _validate_evaluation_manifest(
-    path: Path,
-    chunks: list[Any],
-    dataset: list[Any],
-    *,
-    dataset_key: str,
-) -> dict[str, Any]:
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Unable to load ATV320 evaluation manifest: {path}") from exc
-    expected = {"corpus": chunk_set_metadata(chunks), dataset_key: dataset_sha256(dataset)}
-    for key, value in expected.items():
-        if manifest.get(key) != value:
-            raise RuntimeError(f"ATV320 evaluation manifest mismatch: {key}")
-    sealed_key = {
-        "calibration_dataset_sha256": "test_dataset_sha256",
-        "development_dataset_sha256": "confirmation_dataset_sha256",
-        "confirmation_dataset_sha256": "development_dataset_sha256",
-    }.get(dataset_key, dataset_key)
-    sealed_hash = manifest.get(sealed_key)
-    if not isinstance(sealed_hash, str) or len(sealed_hash) != 64:
-        raise RuntimeError(
-            f"ATV320 manifest has no valid sealed comparison hash: {sealed_key}"
-        )
-    return manifest
 
 
 def _sealed_comparison_dataset_sha256(
@@ -628,6 +601,8 @@ def _runtime_profile() -> dict[str, Any]:
         "dense_candidate_limit": contract.dense_candidate_limit,
         "sparse_candidate_limit": contract.sparse_candidate_limit,
         "candidate_budget": contract.union_rrf_prune_limit,
+        "refill_after_content_dedup": contract.refill_after_content_dedup,
+        "diagnostic_component_limit": contract.diagnostic_component_limit,
         "rrf_k": contract.rrf_k,
         "rerank_batch_size": contract.frozen_rerank_batch_size,
         "rerank_threads": contract.frozen_rerank_threads,

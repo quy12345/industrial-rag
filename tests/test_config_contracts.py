@@ -97,6 +97,8 @@ def test_contract_snapshot_is_exact_and_immutable() -> None:
             "list_completeness_enabled": False,
             "relation_list_completeness_enabled": True,
         },
+        "refill_after_content_dedup": False,
+        "diagnostic_component_limit": None,
         "frozen_rerank_batch_size": 8,
         "freeze_rerank_threads": True,
         "frozen_rerank_threads": None,

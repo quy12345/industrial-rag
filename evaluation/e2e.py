@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.application.query_service import QueryExecution
-from app.domain.retrieval import RetrievalCandidate, RetrievalTrace
+from app.domain.retrieval import RetrievalCandidate
 from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
 from evaluation.retrieval import (
     direct_evidence_rank,
@@ -24,6 +24,7 @@ from evaluation.retrieval import (
     expand_exact_content_ids,
     percentile_nearest_rank,
     phrase_matches,
+    retrieval_trace_payload,
 )
 
 FACT_EVALUATOR_ID = "phase7_deterministic_typed_facts_v2"
@@ -138,7 +139,7 @@ def score_query_execution(
             for group in execution.evidence_duplicate_groups
         ],
         "generation_attempts": execution.generation_attempts,
-        "retrieval_trace": _retrieval_trace_payload(
+        "retrieval_trace": retrieval_trace_payload(
             execution.retrieval_trace,
             relevant_chunk_ids=relevant if item.answerable else set(),
             exact_relevant_chunk_ids=exact_relevant if item.answerable else set(),
@@ -1006,119 +1007,6 @@ def _candidate_matches_expected_document_or_exact_equivalent(
     if candidate_chunk_ids.intersection(exact_relevant_chunk_ids):
         return True
     return False
-
-
-def _retrieval_trace_payload(
-    trace: RetrievalTrace | None,
-    *,
-    relevant_chunk_ids: set[str],
-    exact_relevant_chunk_ids: set[str],
-) -> dict[str, Any]:
-    """Serialize only allowlisted IDs and rank signals from an opt-in trace."""
-
-    if trace is None:
-        return {"status": "disabled"}
-    stages = {
-        "dense": trace.dense_candidates,
-        "sparse": trace.sparse_candidates,
-        "raw_fusion": trace.fused_candidates,
-        "selected_pre_dedup": trace.selected_candidates_pre_dedup,
-        "candidate_pool_post_dedup": trace.candidate_pool_post_dedup,
-        "candidates_before_rerank": trace.candidates_before_rerank,
-        "raw_cross_encoder": trace.raw_cross_encoder_candidates,
-        "post_policy": trace.final_candidates,
-    }
-    fused_ids = {candidate.chunk_id for candidate in trace.fused_candidates}
-    selected_ids = {
-        candidate.chunk_id for candidate in trace.selected_candidates_pre_dedup
-    }
-    post_dedup_ids = {
-        candidate.chunk_id for candidate in trace.candidate_pool_post_dedup
-    }
-    before_rerank_ids = {
-        candidate.chunk_id for candidate in trace.candidates_before_rerank
-    }
-    return {
-        "status": "captured",
-        "candidate_count_pre_dedup": trace.candidate_count_pre_dedup,
-        "candidate_count_post_dedup": trace.candidate_count_post_dedup,
-        "candidate_count_before_rerank": trace.candidate_count_before_rerank,
-        "removed_by_candidate_selection_ids": sorted(fused_ids - selected_ids),
-        "removed_by_same_document_dedup_ids": sorted(selected_ids - post_dedup_ids),
-        "removed_by_prune_ids": sorted(post_dedup_ids - before_rerank_ids),
-        "refilled_candidate_ids": list(trace.refilled_candidate_ids),
-        "stages": {
-            name: _retrieval_trace_stage_payload(
-                candidates,
-                relevant_chunk_ids=relevant_chunk_ids,
-                exact_relevant_chunk_ids=exact_relevant_chunk_ids,
-            )
-            for name, candidates in stages.items()
-        },
-    }
-
-
-def _retrieval_trace_stage_payload(
-    candidates: Sequence[RetrievalCandidate],
-    *,
-    relevant_chunk_ids: set[str],
-    exact_relevant_chunk_ids: set[str],
-) -> dict[str, Any]:
-    return {
-        "count": len(candidates),
-        "strict_direct_evidence_rank": direct_evidence_rank(
-            candidates, relevant_chunk_ids
-        ),
-        "exact_equivalent_evidence_rank": exact_equivalent_evidence_rank(
-            candidates, exact_relevant_chunk_ids
-        ),
-        "candidates": [
-            {
-                "chunk_id": candidate.chunk_id,
-                "document_id": candidate.document_id,
-                "ordinal_rank": ordinal,
-                "dense_rank": candidate.dense_rank,
-                "sparse_rank": candidate.sparse_rank,
-                "rrf_rank": candidate.rrf_rank,
-                "rerank_rank": candidate.rerank_rank,
-                "document_role": _trace_metadata_value(
-                    candidate, "document_role"
-                ),
-                "query_role": _trace_metadata_value(candidate, "query_role"),
-                "query_role_confidence": _trace_metadata_value(
-                    candidate, "query_role_confidence"
-                ),
-                "cross_encoder_rank": _trace_metadata_value(
-                    candidate, "cross_encoder_rank"
-                ),
-                "role_rank": _trace_metadata_value(candidate, "role_rank"),
-            }
-            for ordinal, candidate in enumerate(candidates, start=1)
-        ],
-    }
-
-
-def _trace_metadata_value(
-    candidate: RetrievalCandidate,
-    key: str,
-) -> str | int | None:
-    value = candidate.metadata.get(key)
-    if key in {"document_role", "query_role"}:
-        return (
-            value
-            if isinstance(value, str)
-            and value in {"installation", "programming", "neutral"}
-            else None
-        )
-    if key == "query_role_confidence":
-        return (
-            value
-            if isinstance(value, str) and value in {"strong", "weak", "neutral"}
-            else None
-        )
-    if key in {"cross_encoder_rank", "role_rank"}:
-        return value if type(value) is int and value >= 1 else None
-    return None
 
 
 def _failure_class(

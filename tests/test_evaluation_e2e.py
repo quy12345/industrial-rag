@@ -11,6 +11,7 @@ from app.application.query_service import QueryExecution, QueryTimings
 from app.contracts.query import Citation, QueryResponse
 from app.domain.generation import TokenUsage
 from app.domain.retrieval import RetrievalCandidate, RetrievalTrace
+from evaluation import dataset as evaluation_dataset
 from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
 from evaluation.e2e import (
     aggregate_query_records,
@@ -827,7 +828,7 @@ def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         evaluate_e2e,
-        "_validate_evaluation_manifest",
+        "validate_evaluation_manifest",
         lambda path, chunks, dataset, *, dataset_key: {
             "test_dataset_sha256": "a" * 64
         },
@@ -866,7 +867,7 @@ def test_heldout_v2_loader_uses_only_private_sealed_inputs(
     monkeypatch.setattr(evaluate_e2e, "validate_dataset", fake_validate_dataset)
     monkeypatch.setattr(
         evaluate_e2e,
-        "_validate_evaluation_manifest",
+        "validate_evaluation_manifest",
         lambda path, chunks, dataset, *, dataset_key: observed.update(
             manifest_path=path,
             dataset_key=dataset_key,
@@ -923,10 +924,10 @@ def test_heldout_v2_manifest_requires_its_sealed_dataset_hash(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(evaluate_e2e, "chunk_set_metadata", lambda chunks: corpus)
-    monkeypatch.setattr(evaluate_e2e, "dataset_sha256", lambda dataset: dataset_hash)
+    monkeypatch.setattr(evaluation_dataset, "chunk_set_metadata", lambda chunks: corpus)
+    monkeypatch.setattr(evaluation_dataset, "dataset_sha256", lambda dataset: dataset_hash)
 
-    manifest = evaluate_e2e._validate_evaluation_manifest(
+    manifest = evaluation_dataset.validate_evaluation_manifest(
         manifest_path,
         [],
         [],
@@ -951,10 +952,14 @@ def test_development_manifest_requires_confirmation_hash(monkeypatch, tmp_path) 
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(evaluate_e2e, "chunk_set_metadata", lambda chunks: corpus)
-    monkeypatch.setattr(evaluate_e2e, "dataset_sha256", lambda dataset: development_hash)
+    monkeypatch.setattr(evaluation_dataset, "chunk_set_metadata", lambda chunks: corpus)
+    monkeypatch.setattr(
+        evaluation_dataset,
+        "dataset_sha256",
+        lambda dataset: development_hash,
+    )
 
-    manifest = evaluate_e2e._validate_evaluation_manifest(
+    manifest = evaluation_dataset.validate_evaluation_manifest(
         manifest_path,
         [],
         [],

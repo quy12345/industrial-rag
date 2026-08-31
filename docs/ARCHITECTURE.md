@@ -68,11 +68,19 @@ attempt may repair invalid source labels without rerunning retrieval; a second i
 safe abstention. Generation cannot run before the evidence gate passes.
 
 Retrieval tracing is an explicit observer boundary. The normal production composition uses the
-default `capture_trace=False` and does not opt in; the current E2E evaluator opts in when it builds
-the retriever. An enabled trace keeps immutable candidate snapshots in memory across dense, sparse,
+default `capture_trace=False` and does not opt in; the current E2E and provider-free retrieval
+evaluators opt in when they build a retriever. An enabled trace keeps immutable candidate snapshots
+in memory across dense, sparse,
 fusion, pre/post-deduplication, raw cross-encoder, and final policy stages. Evaluation serializes
 only allowlisted IDs, counts, ranks, and role signals, never candidate text. Enabling the observer
 does not change final retrieval ordering or scores, and the public HTTP response remains unchanged.
+
+Candidate refill and lexical query expansion v2 are also opt-in evaluation policies. Their six
+preregistered combinations live in `evaluation/retrieval.py`; they are applied only to a copied
+retrieval contract for the inspectable development split. `Settings`, Compose, FastAPI, E2E,
+confirmation, and held-out execution expose no variant selector. The active
+`ATV320_RETRIEVAL_CONTRACT` remains on query-expansion v1 with refill disabled until a winner passes
+development and later confirmation gates.
 
 ## Ingestion and indexing flow
 
@@ -132,11 +140,16 @@ remains optional for legacy items. Their answerable records must cover `mounting
 answerable confirmation items per type. Pair validation rejects overlapping item IDs, normalized
 exact questions, or fact families.
 
-The E2E evaluator emits sanitized schema-v9 checkpoints and artifacts. Its per-query trace exposes
-retrieval-boundary diagnostics and exact-content-equivalent ranks/document provenance for analysis.
-Strict qrel identity, expected-document metrics, failure classification, and deterministic release
-gates remain authoritative and are not relaxed by those diagnostics. Current production composition
-does not capture the trace.
+The provider-free retrieval evaluator emits sanitized schema-v3 checkpoints and artifacts for the
+legacy baseline or one of six development-only variants. The legacy baseline keeps its normal
+component limits. For development only, a trace-only probe measures raw dense and sparse
+reachability to rank 100 without changing the normal 60/40 component inputs, fusion, or the
+30-candidate reranker budget. The evaluator also reports fusion and dedup boundaries, refill IDs, raw
+cross-encoder rank, final policy rank, and strict versus exact-content-equivalent outcomes. The E2E
+evaluator emits sanitized schema-v9 checkpoints and
+artifacts. Strict qrel identity, expected-document metrics, failure classification, and
+deterministic release gates remain authoritative and are not relaxed by exact-content diagnostics.
+Current production composition does not capture the trace.
 
 ## Invariants
 

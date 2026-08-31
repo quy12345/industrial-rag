@@ -16,6 +16,7 @@ from app.composition.retrieval import (
     _validate_frozen_collection,
 )
 from app.config import Settings, resolve_retrieval_runtime, validate_retrieval_settings
+from app.domain.policies.query_analysis import QUERY_EXPANSION_PROFILE_V2
 from app.domain.reranking import RerankingError
 from app.domain.retrieval import QueryRetrievalResult, RetrievalCandidate, RetrievalTrace
 from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
@@ -64,6 +65,9 @@ def test_union_adapter_preserves_full_order_and_stage_timings() -> None:
                     "sparse_retrieval": 1.0,
                     "union_preparation": 0.5,
                     "content_deduplication": 0.25,
+                    "diagnostic_dense_retrieval": 1000.0,
+                    "diagnostic_sparse_retrieval": 1000.0,
+                    "diagnostic_candidate_context": 1000.0,
                     "rerank": 4.0,
                     "total": 7.5,
                 },
@@ -188,6 +192,8 @@ def test_runtime_metadata_preserves_the_exact_frozen_profile() -> None:
         "rerank_batch_size": 8,
         "rerank_threads": None,
         "deduplicate_content": True,
+        "refill_after_content_dedup": False,
+        "diagnostic_component_limit": None,
         "query_expansion_profile": "vi_technical_glossary_v1",
         "union_rrf_prune_limit": 30,
         "fusion_profile": {
@@ -322,6 +328,36 @@ def test_runtime_composition_injects_canonical_search_adapters(monkeypatch) -> N
     assert captured["dense_searcher"] is dense_searcher
     assert captured["sparse_searcher"] is sparse_searcher
     assert captured["capture_trace"] is True
+    assert captured["refill_after_content_dedup"] is False
+    assert captured["diagnostic_component_limit"] is None
     assert "client" not in captured
     assert "dense_embedding_model" not in captured
     assert "sparse_embedding_model" not in captured
+
+    captured.clear()
+    experimental_contract = replace(
+        contract,
+        query_expansion_profile=QUERY_EXPANSION_PROFILE_V2,
+        refill_after_content_dedup=True,
+        diagnostic_component_limit=100,
+    )
+    runtime.build_union_rerank_runtime(
+        settings,
+        contract=experimental_contract,
+        capture_trace=True,
+    )
+    assert captured["refill_after_content_dedup"] is True
+    assert captured["diagnostic_component_limit"] == 100
+    assert captured["sparse_query_transform"]("Dien ap phai la bao nhieu?").endswith(
+        "voltage"
+    )
+
+
+def test_unknown_query_expansion_profile_fails_before_runtime_construction() -> None:
+    settings, contract = resolve_retrieval_runtime(Settings())
+
+    with pytest.raises(RetrievalUnavailableError, match="Unsupported query expansion profile"):
+        runtime.build_union_rerank_runtime(
+            settings,
+            contract=replace(contract, query_expansion_profile="unknown-profile"),
+        )

@@ -45,6 +45,8 @@ class FrozenRetrievalContract:
     union_rrf_prune_limit: int | None = None
     query_expansion_profile: str | None = None
     fusion_profile: FusionProfile | None = None
+    refill_after_content_dedup: bool = False
+    diagnostic_component_limit: int | None = None
     frozen_rerank_batch_size: int | None = None
     freeze_rerank_threads: bool = False
     frozen_rerank_threads: int | None = None

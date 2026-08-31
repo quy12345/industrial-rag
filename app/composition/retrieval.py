@@ -12,7 +12,8 @@ from app.application.reranking_service import RerankPipeline
 from app.config import Settings, validate_retrieval_settings
 from app.domain.policies.query_analysis import (
     QUERY_EXPANSION_PROFILE,
-    augment_vietnamese_technical_query,
+    QUERY_EXPANSION_PROFILE_V2,
+    expand_query_for_profile,
 )
 from app.domain.reranking import RerankingError
 from app.domain.retrieval import (
@@ -64,6 +65,7 @@ class UnionRerankRetriever:
                 "rrf_pruning",
                 "query_role_inference",
                 "coverage_preserving_weighted_rrf",
+                "candidate_refill",
                 "role_aware_rank_fusion",
             }
         )
@@ -152,6 +154,7 @@ def build_query_retriever(
 ) -> QueryRetriever:
     """Validate the selected runtime and build only dependencies that strategy needs."""
 
+    _query_transform_for_profile(contract.query_expansion_profile)
     validate_retrieval_settings(settings, contract)
     if settings.retrieval_strategy == "union":
         pipeline, _ = build_union_rerank_runtime(
@@ -204,6 +207,9 @@ def build_union_rerank_runtime(
     validate_retrieval_settings(settings, contract)
     if settings.retrieval_strategy != "union" or not settings.rerank_enabled:
         raise RetrievalUnavailableError("Union runtime requires configured reranking.")
+    sparse_query_transform = _query_transform_for_profile(
+        contract.query_expansion_profile
+    )
     try:
         client = create_qdrant_client(settings)
         validate_hybrid_collection(
@@ -265,15 +271,13 @@ def build_union_rerank_runtime(
             rrf_k=settings.rrf_k,
             rerank_batch_size=contract.frozen_rerank_batch_size or settings.rerank_batch_size,
             deduplicate_content=settings.rerank_deduplicate_content,
+            refill_after_content_dedup=contract.refill_after_content_dedup,
             document_contexts=contract.document_context_by_id,
-            sparse_query_transform=(
-                _expand_query
-                if contract.query_expansion_profile == QUERY_EXPANSION_PROFILE
-                else None
-            ),
+            sparse_query_transform=sparse_query_transform,
             union_rrf_prune_limit=contract.union_rrf_prune_limit,
             fusion_profile=contract.fusion_profile,
             capture_trace=capture_trace,
+            diagnostic_component_limit=contract.diagnostic_component_limit,
         )
         return pipeline, _runtime_metadata(settings, contract, dense_dimension=dimension)
     except RetrievalUnavailableError:
@@ -323,6 +327,8 @@ def _runtime_metadata(
             else settings.rerank_threads
         ),
         "deduplicate_content": settings.rerank_deduplicate_content,
+        "refill_after_content_dedup": contract.refill_after_content_dedup,
+        "diagnostic_component_limit": contract.diagnostic_component_limit,
         "query_expansion_profile": contract.query_expansion_profile,
         "union_rrf_prune_limit": contract.union_rrf_prune_limit,
         "fusion_profile": (
@@ -351,8 +357,35 @@ def _runtime_metadata(
 def _expand_query(question: str) -> str:
     """Apply the frozen lexical profile to sparse retrieval only."""
 
-    expanded, _ = augment_vietnamese_technical_query(question)
+    expanded, _ = expand_query_for_profile(
+        question,
+        profile=QUERY_EXPANSION_PROFILE,
+    )
     return expanded
+
+
+def _expand_query_v2(question: str) -> str:
+    """Apply the preregistered v2 lexical profile to sparse retrieval only."""
+
+    expanded, _ = expand_query_for_profile(
+        question,
+        profile=QUERY_EXPANSION_PROFILE_V2,
+    )
+    return expanded
+
+
+def _query_transform_for_profile(
+    profile: str | None,
+) -> Callable[[str], str] | None:
+    if profile is None:
+        return None
+    if profile == QUERY_EXPANSION_PROFILE:
+        return _expand_query
+    if profile == QUERY_EXPANSION_PROFILE_V2:
+        return _expand_query_v2
+    raise RetrievalUnavailableError(
+        f"Unsupported query expansion profile: {profile}"
+    )
 
 
 def _validate_frozen_collection(
