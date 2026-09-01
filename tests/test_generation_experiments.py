@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import replace
+
 import pytest
 from pydantic import ValidationError
 
@@ -18,6 +22,7 @@ from evaluation.generation_experiments import (
     ClaimCoverageAnswer,
     GroundedClaim,
     generation_experiment_for,
+    generation_experiment_identity,
     map_claim_coverage_output,
 )
 
@@ -79,6 +84,47 @@ def test_claim_prompt_is_generic_and_contains_no_evaluation_answers() -> None:
         "qrel",
     ):
         assert forbidden not in normalized
+
+
+def test_experiment_identity_hashes_prompts_and_names_mapper_without_raw_content() -> None:
+    experiment = generation_experiment_for(CLAIM_COVERAGE_GENERATION_VARIANT)
+
+    identity = generation_experiment_identity(experiment)
+
+    schema_payload = json.dumps(
+        ClaimCoverageAnswer.model_json_schema(),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert identity == {
+        "identifier": CLAIM_COVERAGE_GENERATION_VARIANT,
+        "system_prompt_sha256": hashlib.sha256(
+            experiment.system_prompt.encode("utf-8")
+        ).hexdigest(),
+        "human_prompt_sha256": hashlib.sha256(
+            experiment.human_prompt.encode("utf-8")
+        ).hexdigest(),
+        "output_schema": "ClaimCoverageAnswer",
+        "output_schema_sha256": hashlib.sha256(
+            schema_payload.encode("utf-8")
+        ).hexdigest(),
+        "output_mapper": (
+            "evaluation.generation_experiments.map_claim_coverage_output"
+        ),
+        "output_contract_id": "grounded-claims-v1",
+        "render_policy_id": "newline-first-source-order-v1",
+    }
+    assert experiment.system_prompt not in identity.values()
+    assert experiment.human_prompt not in identity.values()
+
+    baseline_identity = generation_experiment_identity(
+        generation_experiment_for(BASELINE_GENERATION_VARIANT)
+    )
+    assert baseline_identity["output_mapper"] == "none"
+    assert generation_experiment_identity(
+        replace(experiment, render_policy_id="changed-policy")
+    ) != identity
 
 
 @pytest.mark.parametrize(

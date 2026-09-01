@@ -19,17 +19,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from app.application.generation_prompt import (
-    HUMAN_PROMPT,
-    SYSTEM_PROMPT,
-    build_correction_text,
-    format_evidence,
-)
+from app.application.generation_prompt import build_correction_text, format_evidence
 from app.application.query_service import QueryExecution, QueryService
 from app.application.reranking_service import CANDIDATE_TEXT_FORMAT
 from app.config import Settings
 from app.domain.evidence import EvidenceGate
-from app.domain.generation import GeneratedAnswer
 from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.infrastructure.corpus_artifacts import (
     chunk_set_metadata,
@@ -46,10 +40,17 @@ from evaluation.dataset import (
     validate_evaluation_manifest,
 )
 from evaluation.e2e import (
+    CLAIM_COMPLETENESS_EVALUATOR_ID,
     FACT_EVALUATOR_ID,
-    aggregate_query_records,
-    evaluate_quality_gates,
+    aggregate_repeated_query_records,
     score_query_execution,
+)
+from evaluation.generation_experiments import (
+    BASELINE_GENERATION_VARIANT,
+    GENERATION_EXPERIMENTS,
+    GenerationExperiment,
+    generation_experiment_for,
+    generation_experiment_identity,
 )
 from evaluation.retrieval import build_corpus_exact_content_equivalence
 from evaluation.semantic import (
@@ -85,8 +86,8 @@ PRIVATE_CONFIRMATION_MANIFEST_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v
 PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
-ARTIFACT_SCHEMA_VERSION = 9
-SOURCE_IDENTITY_VERSION = 5
+ARTIFACT_SCHEMA_VERSION = 10
+SOURCE_IDENTITY_VERSION = 6
 SOURCE_IDENTITY_PATHS = {
     "citation_policy": Path("app/domain/citations.py"),
     "content_identity": Path("app/domain/content_identity.py"),
@@ -98,6 +99,7 @@ SOURCE_IDENTITY_PATHS = {
     "fusion_policy": Path("app/domain/policies/fusion.py"),
     "generation_adapter": Path("app/infrastructure/generation/langchain_structured.py"),
     "generation_contract": Path("app/domain/generation.py"),
+    "generation_experiments": Path("evaluation/generation_experiments.py"),
     "generation_prompt_policy": Path("app/application/generation_prompt.py"),
     "list_completeness_policy": Path("app/domain/policies/list_completeness.py"),
     "query_analysis_policy": Path("app/domain/policies/query_analysis.py"),
@@ -118,6 +120,7 @@ SOURCE_IDENTITY_PATHS = {
 def main() -> int:
     args = _parse_args()
     _validate_execution_approval(args)
+    experiment = generation_experiment_for(args.generation_variant)
     chunks = load_frozen_chunks(args.chunks)
     dataset, validation, manifest = _load_selected_dataset(args, chunks)
     selected = list(dataset)
@@ -154,12 +157,7 @@ def main() -> int:
             )
         ),
         evidence_gate=EvidenceGate(score_threshold=settings.evidence_score_threshold),
-        generator=LangChainStructuredGenerator(
-            settings,
-            system_prompt=SYSTEM_PROMPT,
-            human_prompt=HUMAN_PROMPT,
-            correction_text_builder=build_correction_text,
-        ),
+        generator=_build_generation_adapter(settings, experiment),
         settings=settings,
     )
     full_dataset_hash = dataset_sha256(dataset)
@@ -180,9 +178,18 @@ def main() -> int:
         "candidate_text_format": CANDIDATE_TEXT_FORMAT,
         "generation_provider": settings.generation_provider,
         "generation_model": settings.generation_model,
-        "generation_configuration": _generation_configuration(settings),
+        "generation_configuration": _generation_configuration(settings, experiment),
+        "generation_experiment": generation_experiment_identity(experiment),
+        "answer_boundary_configuration": _answer_boundary_configuration(
+            settings,
+            top_k=args.top_k,
+        ),
+        "repeat_schedule": {
+            "count": args.repeat_count,
+            "ordering": "repeat-major-dataset-order",
+        },
         "semantic_evaluation": semantic_run_identity(args.semantic_judge),
-        "source_identity": _source_identity(),
+        "source_identity": _source_identity(experiment),
         "runtime_profile": _runtime_profile(),
         "libraries": _library_versions(semantic_mode=args.semantic_judge),
         "sealed_comparison_dataset_sha256": _sealed_comparison_dataset_sha256(
@@ -191,9 +198,12 @@ def main() -> int:
         "deduplicate_exact_content": settings.rerank_deduplicate_content,
     }
     records = _load_checkpoint(args.checkpoint, identity)
-    completed_ids = {record["id"] for record in records}
-    for item in selected:
-        if item.id in completed_ids:
+    schedule = _execution_schedule(selected, repeat_count=args.repeat_count)
+    _validate_checkpoint_prefix(records, schedule)
+    observed_keys = [_checkpoint_key(record) for record in records]
+    completed_keys = set(observed_keys)
+    for repeat_index, item in schedule:
+        if (item.id, repeat_index) in completed_keys:
             continue
         try:
             execution = service.execute(
@@ -206,6 +216,7 @@ def main() -> int:
                 execution,
                 exact_content_equivalence=exact_content_equivalence,
             )
+            record["repeat_index"] = repeat_index
             if semantic_judge is not None:
                 record["semantic_evaluation"] = _score_semantic_execution(
                     item,
@@ -222,10 +233,16 @@ def main() -> int:
         records.append(record)
         _write_checkpoint(args.checkpoint, identity, records)
 
-    if len(records) != len(selected):
+    if len(records) != len(schedule):
         raise RuntimeError("Checkpoint result count does not match the selected dataset.")
     complete_evaluation = len(selected) == len(dataset)
-    overall = aggregate_query_records(records) if complete_evaluation else None
+    run_aggregate = _aggregate_run_records(
+        records,
+        repeat_count=args.repeat_count,
+        complete_evaluation=complete_evaluation,
+    )
+    overall = run_aggregate["overall"]
+    repeated_runs = run_aggregate["repeated_runs"]
     semantic_evaluation = (
         {"status": "disabled", "run_identity": semantic_run_identity("none")}
         if semantic_judge is None
@@ -235,26 +252,23 @@ def main() -> int:
             "aggregate": aggregate_semantic_records(records),
         }
     )
-    quality_gates = (
-        evaluate_quality_gates(overall)
-        if overall is not None
-        else {
-            "overall_pass": False,
-            "status": "NOT_EVALUATED_PARTIAL_SELECTION",
-            "gates": {},
-        }
-    )
+    quality_gates = run_aggregate["quality_gates"]
     output = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "timestamp": datetime.now(UTC).isoformat(),
         "run_identity": identity,
         "dataset_validation": validation,
         "overall": overall,
+        "repeated_runs": repeated_runs,
         "semantic_evaluation": semantic_evaluation,
         "quality_gates": quality_gates,
         "evaluation_methodology": {
             "headline_answer_metric": "deterministic_fact_accuracy_when_answered",
             "fact_evaluator_id": FACT_EVALUATOR_ID,
+            "claim_completeness_evaluator_id": CLAIM_COMPLETENESS_EVALUATOR_ID,
+            "generation_variant": experiment.identifier,
+            "repeat_schedule": "repeat-major-dataset-order",
+            "repeat_aggregation": "per_run_only_not_pooled",
             "strict_phrase_accuracy": "diagnostic_only",
             "token_coverage": "diagnostic_only",
             "retrieval_relevance": "stable relevant_chunk_ids only",
@@ -282,6 +296,7 @@ def main() -> int:
     quality_status = "PASS" if quality_passed else "FAIL"
     print(
         f"ATV320 {args.dataset} E2E evaluation completed; "
+        f"variant {experiment.identifier} r{args.repeat_count}; "
         f"quality gates {quality_status}: {args.output}"
     )
     return 0 if quality_passed else 2
@@ -306,6 +321,19 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl"))
     parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--top-k", type=int, default=5, choices=range(1, 11))
+    parser.add_argument(
+        "--generation-variant",
+        choices=tuple(GENERATION_EXPERIMENTS),
+        default=BASELINE_GENERATION_VARIANT,
+        help="Preregistered generation contract used only by this evaluation run.",
+    )
+    parser.add_argument(
+        "--repeat-count",
+        type=int,
+        choices=(1, 3),
+        default=1,
+        help="Evaluate once, or repeat the complete development split three times.",
+    )
     parser.add_argument(
         "--provider-approval-token",
         required=True,
@@ -340,6 +368,19 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--item-id is permitted only for calibration or development diagnostics")
     if args.item_id is not None and args.max_queries is not None:
         parser.error("--item-id and --max-queries are mutually exclusive")
+    if (
+        args.generation_variant != BASELINE_GENERATION_VARIANT
+        and args.dataset != "development"
+    ):
+        parser.error("Experimental generation variants are development-only")
+    if args.repeat_count == 3 and args.dataset != "development":
+        parser.error("--repeat-count 3 is permitted only for the development dataset")
+    if args.repeat_count == 3 and (
+        args.item_id is not None or args.max_queries is not None
+    ):
+        parser.error("--repeat-count 3 requires the complete development dataset")
+    if args.repeat_count == 3 and args.semantic_judge != "none":
+        parser.error("Semantic evaluation cannot be combined with repeated generation runs")
     if args.dataset in {"confirmation", "heldout-v2"} and args.max_queries is not None:
         parser.error("--max-queries is not permitted for sealed evaluation datasets")
     if (
@@ -358,11 +399,13 @@ def _parse_args() -> argparse.Namespace:
         }.get(args.dataset, ACTIVE_MANIFEST_PATH)
     if args.output is None:
         args.output = Path(
-            f"artifacts/metrics/atv320-{args.dataset}-e2e-v{ARTIFACT_SCHEMA_VERSION}.json"
+            f"artifacts/metrics/atv320-{args.dataset}-{args.generation_variant}"
+            f"-r{args.repeat_count}-e2e-v{ARTIFACT_SCHEMA_VERSION}.json"
         )
     if args.checkpoint is None:
         args.checkpoint = Path(
-            f"artifacts/metrics/atv320-{args.dataset}-e2e-v{ARTIFACT_SCHEMA_VERSION}"
+            f"artifacts/metrics/atv320-{args.dataset}-{args.generation_variant}"
+            f"-r{args.repeat_count}-e2e-v{ARTIFACT_SCHEMA_VERSION}"
             "-checkpoint.jsonl"
         )
     return args
@@ -534,6 +577,22 @@ def _runtime_settings(settings: Settings) -> Settings:
     )
 
 
+def _build_generation_adapter(
+    settings: Settings,
+    experiment: GenerationExperiment,
+) -> LangChainStructuredGenerator:
+    """Compose the selected evaluation-only generation contract without model I/O."""
+
+    return LangChainStructuredGenerator(
+        settings,
+        system_prompt=experiment.system_prompt,
+        human_prompt=experiment.human_prompt,
+        correction_text_builder=build_correction_text,
+        output_schema=experiment.output_schema,
+        output_mapper=experiment.output_mapper,
+    )
+
+
 def _sealed_comparison_dataset_sha256(
     manifest: Mapping[str, Any], dataset: str
 ) -> str:
@@ -550,7 +609,10 @@ def _sealed_comparison_dataset_sha256(
     return value
 
 
-def _generation_configuration(settings: Settings) -> dict[str, Any]:
+def _generation_configuration(
+    settings: Settings,
+    experiment: GenerationExperiment,
+) -> dict[str, Any]:
     base_url_host = (
         urlparse(settings.gemini_base_url).netloc
         if settings.generation_provider == "gemini"
@@ -573,7 +635,7 @@ def _generation_configuration(settings: Settings) -> dict[str, Any]:
         "provider_max_retries": settings.openai_max_retries,
         "store": settings.openai_store,
         "structured_output": {
-            "schema": GeneratedAnswer.__name__,
+            "schema": experiment.output_schema.__name__,
             "method": "json_schema",
             "strict": True,
             "include_raw": True,
@@ -582,15 +644,84 @@ def _generation_configuration(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _source_identity() -> dict[str, Any]:
-    """Hash canonical behavior owners under the explicit v5 provenance schema."""
+def _answer_boundary_configuration(
+    settings: Settings,
+    *,
+    top_k: int,
+) -> dict[str, int | float | None]:
+    """Seal every resolved setting that changes answer evidence or citations."""
+
+    return {
+        "evidence_top_k": top_k,
+        "evidence_score_threshold": settings.evidence_score_threshold,
+        "generation_max_context_chars": settings.generation_max_context_chars,
+        "citation_excerpt_max_chars": settings.citation_excerpt_max_chars,
+    }
+
+
+def _source_identity(
+    experiment: GenerationExperiment | None = None,
+) -> dict[str, Any]:
+    """Hash canonical behavior owners under the explicit v6 provenance schema."""
+
+    selected = experiment or generation_experiment_for(BASELINE_GENERATION_VARIANT)
 
     return {
         "version": SOURCE_IDENTITY_VERSION,
         "files": {
             name: _file_sha256(path) for name, path in SOURCE_IDENTITY_PATHS.items()
         },
-        "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
+        "system_prompt_sha256": hashlib.sha256(
+            selected.system_prompt.encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+def _aggregate_run_records(
+    records: list[dict[str, Any]],
+    *,
+    repeat_count: int,
+    complete_evaluation: bool,
+) -> dict[str, Any]:
+    if not complete_evaluation:
+        return {
+            "overall": None,
+            "repeated_runs": None,
+            "quality_gates": {
+                "overall_pass": False,
+                "status": "NOT_EVALUATED_PARTIAL_SELECTION",
+                "gates": {},
+            },
+        }
+    repeated_runs = aggregate_repeated_query_records(
+        records,
+        repeat_count=repeat_count,
+    )
+    if repeat_count == 1:
+        first_run = repeated_runs["per_repeat"][0]
+        return {
+            "overall": first_run["overall"],
+            "repeated_runs": repeated_runs,
+            "quality_gates": first_run["quality_gates"],
+        }
+    per_repeat = [
+        {
+            "repeat_index": row["repeat_index"],
+            "quality_gates": row["quality_gates"],
+        }
+        for row in repeated_runs["per_repeat"]
+    ]
+    return {
+        "overall": None,
+        "repeated_runs": repeated_runs,
+        "quality_gates": {
+            "overall_pass": all(
+                row["quality_gates"]["overall_pass"] for row in per_repeat
+            ),
+            "status": "ALL_REPEATS_EVALUATED",
+            "selection_policy": "all_repeats_must_pass",
+            "per_repeat": per_repeat,
+        },
     }
 
 
@@ -616,6 +747,7 @@ def _library_versions(*, semantic_mode: str = "none") -> dict[str, str]:
         "langchain-core",
         "langchain-openai",
         "onnxruntime",
+        "pydantic",
         "qdrant-client",
     ]
     if semantic_mode == "ragas":
@@ -648,14 +780,55 @@ def _load_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any
         raise RuntimeError(f"Malformed ATV320 checkpoint: {path}") from exc
     if header != {"run_identity": identity}:
         raise RuntimeError("Existing ATV320 checkpoint belongs to a different frozen run.")
-    if len({record.get("id") for record in records}) != len(records):
-        raise RuntimeError("Existing ATV320 checkpoint has duplicate item IDs.")
+    keys = [_checkpoint_key(record) for record in records]
+    if len(set(keys)) != len(records):
+        raise RuntimeError("Existing ATV320 checkpoint has duplicate item/repeat keys.")
     return records
 
 
 def _write_checkpoint(path: Path, identity: dict[str, Any], records: list[dict[str, Any]]) -> None:
     payload = [{"run_identity": identity}, *records]
     write_jsonl_atomic(path, payload)
+
+
+def _execution_schedule(
+    items: list[EvaluationItem],
+    *,
+    repeat_count: int,
+) -> list[tuple[int, EvaluationItem]]:
+    """Return a deterministic repeat-major schedule for resumable provider calls."""
+
+    return [
+        (repeat_index, item)
+        for repeat_index in range(1, repeat_count + 1)
+        for item in items
+    ]
+
+
+def _checkpoint_key(record: Mapping[str, Any]) -> tuple[str, int]:
+    if not isinstance(record, Mapping):
+        raise RuntimeError("Existing ATV320 checkpoint contains a malformed record.")
+    item_id = record.get("id")
+    repeat_index = record.get("repeat_index")
+    if not isinstance(item_id, str) or not item_id:
+        raise RuntimeError("Existing ATV320 checkpoint record has no stable item ID.")
+    if type(repeat_index) is not int or repeat_index not in {1, 2, 3}:
+        raise RuntimeError(
+            "Existing ATV320 checkpoint record has an invalid repeat index."
+        )
+    return item_id, repeat_index
+
+
+def _validate_checkpoint_prefix(
+    records: list[dict[str, Any]],
+    schedule: list[tuple[int, EvaluationItem]],
+) -> None:
+    expected_keys = [(item.id, repeat_index) for repeat_index, item in schedule]
+    observed_keys = [_checkpoint_key(record) for record in records]
+    if observed_keys != expected_keys[: len(observed_keys)]:
+        raise RuntimeError(
+            "Existing ATV320 checkpoint does not match repeat-major dataset order."
+        )
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -171,3 +173,38 @@ def generation_experiment_for(identifier: str) -> GenerationExperiment:
         return GENERATION_EXPERIMENTS[identifier]
     except KeyError as exc:
         raise ValueError(f"Unknown generation experiment: {identifier}") from exc
+
+
+def generation_experiment_identity(
+    experiment: GenerationExperiment,
+) -> dict[str, str]:
+    """Return a sanitized identity that invalidates incompatible checkpoints."""
+
+    return {
+        "identifier": experiment.identifier,
+        "system_prompt_sha256": hashlib.sha256(
+            experiment.system_prompt.encode("utf-8")
+        ).hexdigest(),
+        "human_prompt_sha256": hashlib.sha256(
+            experiment.human_prompt.encode("utf-8")
+        ).hexdigest(),
+        "output_schema": experiment.output_schema.__name__,
+        "output_schema_sha256": hashlib.sha256(
+            json.dumps(
+                experiment.output_schema.model_json_schema(),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "output_mapper": (
+            "none"
+            if experiment.output_mapper is None
+            else (
+                f"{experiment.output_mapper.__module__}."
+                f"{experiment.output_mapper.__qualname__}"
+            )
+        ),
+        "output_contract_id": experiment.output_contract_id,
+        "render_policy_id": experiment.render_policy_id,
+    }

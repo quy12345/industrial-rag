@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -14,10 +15,19 @@ from app.domain.retrieval import RetrievalCandidate, RetrievalTrace
 from evaluation import dataset as evaluation_dataset
 from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
 from evaluation.e2e import (
+    CLAIM_COMPLETENESS_EVALUATOR_ID,
     aggregate_query_records,
+    aggregate_repeated_query_records,
     evaluate_quality_gates,
+    retrieval_evidence_fingerprint,
     score_expected_answer_fact,
     score_query_execution,
+)
+from evaluation.generation_experiments import (
+    BASELINE_GENERATION_VARIANT,
+    CLAIM_COVERAGE_GENERATION_VARIANT,
+    generation_experiment_for,
+    generation_experiment_identity,
 )
 from scripts.evaluation import evaluate_e2e
 
@@ -219,6 +229,247 @@ def test_answerable_abstention_does_not_claim_answer_or_citation_success() -> No
     assert record["answer_fact_results"] == []
     assert record["missing_answer_fact_ids"] == []
     assert record["citation_direct_evidence"] is False
+
+
+def test_claim_completeness_scores_answered_abstained_and_unanswerable_records() -> None:
+    answered = score_query_execution(
+        _item(),
+        _execution(
+            final=[_candidate("qrel")],
+            pool=[_candidate("qrel")],
+            evidence_context_chars=100,
+            evidence_truncated_source_ids=("S1",),
+        ),
+    )
+    abstained = score_query_execution(
+        _item(),
+        _execution(
+            final=[_candidate("qrel")],
+            pool=[_candidate("qrel")],
+            abstained=True,
+        ),
+    )
+    unsupported = score_query_execution(
+        _item(answerable=False),
+        _execution(
+            final=[_candidate("other")],
+            pool=[_candidate("other")],
+            abstained=True,
+        ),
+    )
+
+    assert answered["claim_completeness"] == {
+        "evaluator_id": CLAIM_COMPLETENESS_EVALUATOR_ID,
+        "status": "scored",
+        "expected_fact_count": 1,
+        "matched_fact_count": 1,
+        "missing_fact_count": 0,
+        "coverage": 1.0,
+        "complete": True,
+        "expected_by_fact_type": {"text": 1},
+        "matched_by_fact_type": {"text": 1},
+        "evidence_boundary": {
+            "direct_qrel_in_evidence": True,
+            "exact_equivalent_only": False,
+            "qrel_source_truncated": True,
+        },
+    }
+    assert abstained["claim_completeness"]["status"] == "abstained"
+    assert abstained["claim_completeness"]["matched_fact_count"] == 0
+    assert abstained["claim_completeness"]["missing_fact_count"] == 1
+    assert abstained["claim_completeness"]["coverage"] == 0.0
+    assert abstained["claim_completeness"]["complete"] is False
+    assert abstained["claim_completeness"]["matched_by_fact_type"] == {"text": 0}
+    assert unsupported["claim_completeness"] == {
+        "evaluator_id": CLAIM_COMPLETENESS_EVALUATOR_ID,
+        "status": "not_applicable",
+        "expected_fact_count": 0,
+        "matched_fact_count": None,
+        "missing_fact_count": None,
+        "coverage": None,
+        "complete": None,
+        "expected_by_fact_type": {},
+        "matched_by_fact_type": {},
+        "evidence_boundary": None,
+    }
+
+
+def test_claim_completeness_uses_all_answerable_items_as_the_primary_denominator() -> None:
+    complete = score_query_execution(
+        _item(), _execution(final=[_candidate("qrel")], pool=[_candidate("qrel")])
+    )
+    abstained = score_query_execution(
+        _item().model_copy(update={"id": "answerable-abstained"}),
+        _execution(
+            final=[_candidate("qrel")],
+            pool=[_candidate("qrel")],
+            abstained=True,
+        ),
+    )
+    unsupported = score_query_execution(
+        _item(answerable=False),
+        _execution(
+            final=[_candidate("other")],
+            pool=[_candidate("other")],
+            abstained=True,
+        ),
+    )
+
+    metrics = aggregate_query_records([complete, abstained, unsupported])
+    completeness = metrics["claim_completeness"]
+
+    assert completeness["evaluator_id"] == CLAIM_COMPLETENESS_EVALUATOR_ID
+    assert completeness["answerable_count"] == 2
+    assert completeness["answered_count"] == 1
+    assert completeness["complete_answer_rate_when_answered"] == 1.0
+    assert completeness["complete_answer_coverage_all_answerable"] == 0.5
+    assert completeness["fact_coverage_all_answerable"] == 0.5
+    assert completeness["per_fact_type"]["text"] == {
+        "expected_count": 2,
+        "matched_count": 1,
+        "coverage": 0.5,
+    }
+    assert metrics["per_language"]["en"]["claim_completeness"][
+        "complete_answer_coverage_all_answerable"
+    ] == 0.5
+
+
+def test_claim_completeness_reports_partial_facts_and_evidence_boundaries() -> None:
+    two_fact_item = _item().model_copy(
+        update={
+            "expected_answer_facts": [
+                *_item().expected_answer_facts,
+                ExpectedAnswerFact(
+                    id="parameter-code",
+                    aliases=["ABC"],
+                    type="identifier",
+                    acceptable_values=["ABC"],
+                ),
+            ]
+        }
+    )
+    direct = score_query_execution(
+        two_fact_item,
+        _execution(final=[_candidate("qrel")], pool=[_candidate("qrel")]),
+    )
+    completeness = direct["claim_completeness"]
+    assert completeness["expected_fact_count"] == 2
+    assert completeness["matched_fact_count"] == 1
+    assert completeness["missing_fact_count"] == 1
+    assert completeness["coverage"] == 0.5
+    assert completeness["complete"] is False
+
+    exact_item = _item().model_copy(update={"id": "exact-equivalent"})
+    exact = score_query_execution(
+        exact_item,
+        _execution(final=[_candidate("copy")], pool=[_candidate("copy")]),
+        exact_content_equivalence={
+            "qrel": ("qrel", "copy"),
+            "copy": ("qrel", "copy"),
+        },
+    )
+    missed = score_query_execution(
+        _item().model_copy(update={"id": "no-qrel"}),
+        _execution(final=[_candidate("other")], pool=[_candidate("other")]),
+    )
+    unsupported = score_query_execution(
+        _item(answerable=False),
+        _execution(
+            final=[_candidate("other")],
+            pool=[_candidate("other")],
+            abstained=True,
+        ),
+    )
+
+    by_boundary = aggregate_query_records(
+        [direct, exact, missed, unsupported]
+    )["claim_completeness_by_evidence_boundary"]
+    assert set(by_boundary) == {
+        "direct_qrel_complete",
+        "exact_equivalent_only",
+        "no_qrel_in_evidence",
+    }
+    assert by_boundary["direct_qrel_complete"]["answerable_count"] == 1
+    assert by_boundary["exact_equivalent_only"]["answerable_count"] == 1
+    assert by_boundary["no_qrel_in_evidence"]["answerable_count"] == 1
+
+
+def test_repeat_aggregation_is_run_scoped_and_rejects_retrieval_drift() -> None:
+    complete = score_query_execution(
+        _item(), _execution(final=[_candidate("qrel")], pool=[_candidate("qrel")])
+    )
+    missed = score_query_execution(
+        _item(),
+        _execution(
+            final=[_candidate("qrel")],
+            pool=[_candidate("qrel")],
+            answer="unsupported answer",
+        ),
+    )
+    unsupported = score_query_execution(
+        _item(answerable=False),
+        _execution(
+            final=[_candidate("other")],
+            pool=[_candidate("other")],
+            abstained=True,
+        ),
+    )
+    records = []
+    for repeat_index, answerable in ((1, complete), (2, missed), (3, complete)):
+        for record in (answerable, unsupported):
+            copied = deepcopy(record)
+            copied["repeat_index"] = repeat_index
+            records.append(copied)
+
+    repeated = aggregate_repeated_query_records(records, repeat_count=3)
+
+    assert repeated["repeat_count"] == 3
+    assert repeated["ordering"] == "repeat-major-dataset-order"
+    assert [row["repeat_index"] for row in repeated["per_repeat"]] == [1, 2, 3]
+    assert repeated["stability"]["deterministic_fact_accuracy_when_answered"] == {
+        "minimum": 0.0,
+        "median": 1.0,
+        "maximum": 1.0,
+    }
+    assert len(retrieval_evidence_fingerprint(complete)) == 64
+    assert retrieval_evidence_fingerprint(complete) == retrieval_evidence_fingerprint(missed)
+
+    run_aggregate = evaluate_e2e._aggregate_run_records(
+        records,
+        repeat_count=3,
+        complete_evaluation=True,
+    )
+    assert run_aggregate["overall"] is None
+    assert run_aggregate["repeated_runs"] == repeated
+    assert run_aggregate["quality_gates"]["overall_pass"] is False
+    assert run_aggregate["quality_gates"]["selection_policy"] == (
+        "all_repeats_must_pass"
+    )
+    assert len(run_aggregate["quality_gates"]["per_repeat"]) == 3
+
+    single_run_records = []
+    for record in (complete, unsupported):
+        copied = deepcopy(record)
+        copied["repeat_index"] = 1
+        single_run_records.append(copied)
+    single_run = evaluate_e2e._aggregate_run_records(
+        single_run_records,
+        repeat_count=1,
+        complete_evaluation=True,
+    )
+    assert single_run["overall"] == aggregate_query_records(single_run_records)
+    assert single_run["repeated_runs"]["repeat_count"] == 1
+    assert single_run["quality_gates"]["overall_pass"] is True
+
+    drifted = deepcopy(records)
+    drifted[-2]["evidence_candidate_ids"] = ["changed-evidence"]
+    with pytest.raises(ValueError, match="retrieval/evidence fingerprint drift"):
+        aggregate_repeated_query_records(drifted, repeat_count=3)
+
+    contract_drifted = deepcopy(records)
+    contract_drifted[-2]["evaluation_contract_fingerprint"] = "0" * 64
+    with pytest.raises(ValueError, match="evaluation contract fingerprint drift"):
+        aggregate_repeated_query_records(contract_drifted, repeat_count=3)
 
 
 def test_answer_fact_uses_language_aliases_not_evidence_phrase() -> None:
@@ -693,7 +944,7 @@ def test_document_alternative_metadata_cannot_exempt_unrelated_wrong_provenance(
     assert record["wrong_document_retrieval_at_1_excluding_exact_equivalents"] is True
 
 
-def test_v9_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
+def test_v10_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -705,9 +956,14 @@ def test_v9_cli_uses_versioned_artifact_paths(monkeypatch) -> None:
         ],
     )
     args = evaluate_e2e._parse_args()
-    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 9
-    assert args.output.name == "atv320-calibration-e2e-v9.json"
-    assert args.checkpoint.name == "atv320-calibration-e2e-v9-checkpoint.jsonl"
+    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 10
+    assert args.generation_variant == BASELINE_GENERATION_VARIANT
+    assert args.repeat_count == 1
+    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v10.json"
+    assert (
+        args.checkpoint.name
+        == "atv320-calibration-baseline-v1-r1-e2e-v10-checkpoint.jsonl"
+    )
     assert args.semantic_judge == "none"
     settings = evaluate_e2e._runtime_settings(evaluate_e2e.Settings())
     assert settings.rerank_deduplicate_content is True
@@ -731,8 +987,11 @@ def test_heldout_v2_cli_uses_private_sealed_paths(monkeypatch) -> None:
 
     assert args.heldout_v2 == evaluate_e2e.PRIVATE_HELDOUT_DATASET_PATH
     assert args.manifest == evaluate_e2e.PRIVATE_HELDOUT_MANIFEST_PATH
-    assert args.output.name == "atv320-heldout-v2-e2e-v9.json"
-    assert args.checkpoint.name == "atv320-heldout-v2-e2e-v9-checkpoint.jsonl"
+    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v10.json"
+    assert (
+        args.checkpoint.name
+        == "atv320-heldout-v2-baseline-v1-r1-e2e-v10-checkpoint.jsonl"
+    )
 
 
 @pytest.mark.parametrize(
@@ -762,8 +1021,162 @@ def test_optimization_cli_uses_versioned_and_sealed_defaults(
 
     assert args.manifest == expected_manifest
     assert getattr(args, dataset) == expected_dataset
-    assert args.output.name == f"atv320-{dataset}-e2e-v9.json"
-    assert args.checkpoint.name == f"atv320-{dataset}-e2e-v9-checkpoint.jsonl"
+    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v10.json"
+    assert (
+        args.checkpoint.name
+        == f"atv320-{dataset}-baseline-v1-r1-e2e-v10-checkpoint.jsonl"
+    )
+
+
+def test_development_cli_selects_claim_variant_and_repeat_schedule(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "development",
+            "--generation-variant",
+            CLAIM_COVERAGE_GENERATION_VARIANT,
+            "--repeat-count",
+            "3",
+            "--provider-approval-token",
+            "unused",
+        ],
+    )
+
+    args = evaluate_e2e._parse_args()
+
+    assert args.output.name == (
+        "atv320-development-claim-coverage-v1-r3-e2e-v10.json"
+    )
+    assert args.checkpoint.name == (
+        "atv320-development-claim-coverage-v1-r3-e2e-v10-checkpoint.jsonl"
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        [
+            "--dataset",
+            "calibration",
+            "--generation-variant",
+            CLAIM_COVERAGE_GENERATION_VARIANT,
+        ],
+        ["--dataset", "confirmation", "--repeat-count", "3"],
+        [
+            "--dataset",
+            "development",
+            "--repeat-count",
+            "3",
+            "--max-queries",
+            "1",
+        ],
+        [
+            "--dataset",
+            "development",
+            "--repeat-count",
+            "3",
+            "--semantic-judge",
+            "ragas",
+        ],
+    ],
+)
+def test_experimental_generation_runs_fail_closed_outside_full_development(
+    monkeypatch,
+    arguments,
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["evaluate_e2e", *arguments, "--provider-approval-token", "unused"],
+    )
+
+    with pytest.raises(SystemExit):
+        evaluate_e2e._parse_args()
+
+
+def test_generation_adapter_uses_selected_schema_without_initializing_provider() -> None:
+    experiment = generation_experiment_for(CLAIM_COVERAGE_GENERATION_VARIANT)
+
+    adapter = evaluate_e2e._build_generation_adapter(
+        evaluate_e2e.Settings(), experiment
+    )
+    configuration = evaluate_e2e._generation_configuration(
+        evaluate_e2e.Settings(), experiment
+    )
+
+    assert adapter.system_prompt == experiment.system_prompt
+    assert adapter.human_prompt == experiment.human_prompt
+    assert adapter.output_schema is experiment.output_schema
+    assert adapter.output_mapper is experiment.output_mapper
+    assert adapter._structured_model is None
+    assert configuration["structured_output"]["schema"] == "ClaimCoverageAnswer"
+    assert "pydantic" in evaluate_e2e._library_versions()
+
+
+def test_repeat_schedule_is_repeat_major_and_checkpoint_keys_are_composite(
+    tmp_path,
+) -> None:
+    first = _item()
+    second = first.model_copy(update={"id": "second"})
+    schedule = evaluate_e2e._execution_schedule([first, second], repeat_count=3)
+
+    assert [(repeat, item.id) for repeat, item in schedule] == [
+        (1, first.id),
+        (1, second.id),
+        (2, first.id),
+        (2, second.id),
+        (3, first.id),
+        (3, second.id),
+    ]
+
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    identity = {"artifact_schema_version": 10}
+    records = [
+        {"id": first.id, "repeat_index": 1},
+        {"id": second.id, "repeat_index": 1},
+        {"id": first.id, "repeat_index": 2},
+    ]
+    evaluate_e2e._write_checkpoint(checkpoint, identity, records)
+    assert evaluate_e2e._load_checkpoint(checkpoint, identity) == records
+    evaluate_e2e._validate_checkpoint_prefix(records, schedule)
+
+    invalid_prefix = [records[0], records[2]]
+    evaluate_e2e._write_checkpoint(checkpoint, identity, invalid_prefix)
+    assert evaluate_e2e._load_checkpoint(checkpoint, identity) == invalid_prefix
+    with pytest.raises(RuntimeError, match="repeat-major dataset order"):
+        evaluate_e2e._validate_checkpoint_prefix(invalid_prefix, schedule)
+
+    evaluate_e2e._write_checkpoint(checkpoint, identity, [records[0], records[0]])
+    with pytest.raises(RuntimeError, match="duplicate item/repeat"):
+        evaluate_e2e._load_checkpoint(checkpoint, identity)
+
+    evaluate_e2e._write_checkpoint(
+        checkpoint, identity, ["malformed"]  # type: ignore[list-item]
+    )
+    with pytest.raises(RuntimeError, match="malformed record"):
+        evaluate_e2e._load_checkpoint(checkpoint, identity)
+
+
+def test_generation_variant_identity_change_invalidates_checkpoint(tmp_path) -> None:
+    checkpoint = tmp_path / "variant-checkpoint.jsonl"
+    baseline = generation_experiment_identity(
+        generation_experiment_for(BASELINE_GENERATION_VARIANT)
+    )
+    claim_coverage = generation_experiment_identity(
+        generation_experiment_for(CLAIM_COVERAGE_GENERATION_VARIANT)
+    )
+    evaluate_e2e._write_checkpoint(
+        checkpoint,
+        {"generation_experiment": baseline},
+        [],
+    )
+
+    with pytest.raises(RuntimeError, match="different frozen run"):
+        evaluate_e2e._load_checkpoint(
+            checkpoint,
+            {"generation_experiment": claim_coverage},
+        )
 
 
 def test_provider_execution_requires_dataset_specific_approval() -> None:
@@ -1066,3 +1479,34 @@ def test_checkpoint_fails_closed_when_provider_identity_changes(tmp_path) -> Non
     changed = {"generation_configuration": {"temperature": 0.1}}
     with pytest.raises(RuntimeError, match="different frozen run"):
         evaluate_e2e._load_checkpoint(checkpoint, changed)
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("evidence_top_k", 6),
+        ("evidence_score_threshold", 0.5),
+        ("generation_max_context_chars", 24_001),
+        ("citation_excerpt_max_chars", 401),
+    ],
+)
+def test_checkpoint_fails_closed_when_answer_boundary_changes(
+    tmp_path,
+    field,
+    changed_value,
+) -> None:
+    checkpoint = tmp_path / f"{field}.jsonl"
+    baseline_configuration = evaluate_e2e._answer_boundary_configuration(
+        evaluate_e2e.Settings(),
+        top_k=5,
+    )
+    identity = {"answer_boundary_configuration": baseline_configuration}
+    evaluate_e2e._write_checkpoint(checkpoint, identity, [])
+    changed_configuration = dict(baseline_configuration)
+    changed_configuration[field] = changed_value
+
+    with pytest.raises(RuntimeError, match="different frozen run"):
+        evaluate_e2e._load_checkpoint(
+            checkpoint,
+            {"answer_boundary_configuration": changed_configuration},
+        )

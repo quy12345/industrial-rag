@@ -25,6 +25,8 @@ SUPPORTED_CLI_OPTIONS = [
             "--chunks",
             "--manifest",
             "--top-k",
+            "--generation-variant",
+            "--repeat-count",
             "--provider-approval-token",
             "--semantic-judge",
             "--judge-provider-approval-token",

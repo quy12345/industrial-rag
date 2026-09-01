@@ -151,9 +151,10 @@ stable IDs, document IDs, pages, heading counts, and exact-duplicate alternative
 API retains its existing `top_k` range; this diagnostic cap is not a runtime configuration change.
 Evidence metrics in this schema are measured diagnostics, not additional exit-code gates; promotion
 criteria remain deferred until a reviewed development winner exists. The E2E evaluator emits
-sanitized schema-v9 checkpoints and artifacts. Strict qrel identity, expected-document metrics,
-failure classification, and deterministic release gates remain authoritative and are not relaxed by
-exact-content diagnostics. Current production composition does not capture the trace.
+sanitized schema-v10 checkpoints and artifacts, supports two preregistered generation contracts,
+and keeps three-run development metrics separated by run. Strict qrel identity, expected-document
+metrics, failure classification, and deterministic release gates remain authoritative and are not
+relaxed by exact-content diagnostics. Current production composition does not capture the trace.
 
 ## Invariants
 

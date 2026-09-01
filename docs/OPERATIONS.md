@@ -76,7 +76,7 @@ answerable qrels, expected documents, pages, phrases, and the frozen corpus as i
 legacy suite.
 
 Use opaque lowercase item IDs, `fact_family_id` values, and expected-fact IDs (letters, digits, `.`,
-`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v9 rows retain
+`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v10 rows retain
 these IDs so later paired and clustered comparisons can group translations/paraphrases and diagnose
 fact outcomes without persisting the underlying question or expected fact.
 
@@ -173,6 +173,57 @@ semantic token only when `--semantic-judge ragas` is requested.
   --provider-approval-token "APPROVE ATV320 CONFIRMATION GENERATOR EGRESS"
 ```
 
+## Development generation variants
+
+The E2E evaluator supports two preregistered generation contracts on the inspectable development
+split:
+
+- `baseline-v1` uses the current answer-level structured contract.
+- `claim-coverage-v1` asks for separately sourced answer claims, validates their ephemeral source
+  labels, and renders them back to the existing answer/citation contract.
+
+Use `--repeat-count 1` for a single diagnostic run or `--repeat-count 3` to compare provider
+stability. Run both variants with the same repeat count; for example, a three-repeat comparison is:
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --generation-variant baseline-v1 `
+  --repeat-count 3 `
+  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
+
+.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --generation-variant claim-coverage-v1 `
+  --repeat-count 3 `
+  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
+```
+
+`claim-coverage-v1` is development-only. Three-repeat runs also require the complete development
+split, reject `--item-id` and `--max-queries`, and cannot be combined with Ragas
+(`--semantic-judge ragas`). Calibration, test, confirmation, and held-out evaluation remain
+restricted to `baseline-v1` with `--repeat-count 1`.
+
+The evaluator processes all development items for repeat 1 before repeat 2 and repeat 3. It writes
+each completed `(item_id, repeat_index)` in that repeat-major order. Resume is fail-closed: the
+checkpoint must be an exact prefix of the same dataset order and must match the variant, repeat
+count, schema, source identity, resolved evidence `top_k`/gate, context/citation limits, and other
+run identity fields. Repeated metrics are reported per run rather than pooled across all records.
+
+Schema-v10 default paths encode the full experiment identity:
+
+| Variant and repeats | Artifact | Checkpoint |
+| --- | --- | --- |
+| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v10.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v10-checkpoint.jsonl` |
+| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v10.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v10-checkpoint.jsonl` |
+| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v10.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v10-checkpoint.jsonl` |
+| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v10.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v10-checkpoint.jsonl` |
+
+These switches exist only in the evaluation CLI. They do not change the production composition
+root, FastAPI request/response schema, evidence gate, citation validation, or default generator
+behavior. This runbook records supported commands only; it does not claim that either variant has
+been executed or improved quality.
+
 ## Approved held-out regression run
 
 Held-out v2 is exposed regression evidence, not an unseen benchmark. Run it only after the user has
@@ -192,20 +243,22 @@ Python 3.11 before running:
 to remain under `data/eval/phase7/private-heldout-v2/`, then validates their hash, the frozen corpus,
 collection identities, runtime source identity, and configured provider before completing.
 
-The current evaluator declares artifact schema v9. If the command above is approved and executed,
-its default paths are `artifacts/metrics/atv320-heldout-v2-e2e-v9-checkpoint.jsonl` and
-`artifacts/metrics/atv320-heldout-v2-e2e-v9.json`. V9 records a sanitized retrieval trace because
-the E2E adapter explicitly opts in; production builders default to `capture_trace=False` and the
-production bootstrap does not opt in. The artifact includes stage counts, IDs, ranks, and allowlisted
-role signals, but still excludes raw questions, evidence, prompts, answers, and provider responses.
+The current evaluator declares artifact schema v10. If the command above is approved and executed,
+its default paths are
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v10-checkpoint.jsonl` and
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v10.json`. V10 records a sanitized
+retrieval trace because the E2E adapter explicitly opts in; production builders default to
+`capture_trace=False` and the production bootstrap does not opt in. The artifact includes stage
+counts, IDs, ranks, and allowlisted role signals, but still excludes raw questions, evidence,
+prompts, answers, and provider responses.
 Reviewed expected-fact text is also excluded; only fact IDs, matcher outcomes, counts, and positions
 are persisted.
 
 Schema availability is not execution evidence. The latest executed held-out result remains the v8
 checkpoint at `artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and final artifact at
-`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9 held-out run is claimed. Existing v7 and v8
-evidence remain immutable. A v8 checkpoint cannot resume under schema v9/source identity v5. Never
-use any held-out result to tune the current runtime.
+`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9 or v10 held-out run is claimed. Existing v7
+and v8 evidence remain immutable. A v9-or-earlier checkpoint cannot resume under schema v10/source
+identity v6. Never use any held-out result to tune the current runtime.
 
 ## Optional Ragas semantic evaluation
 
@@ -268,7 +321,8 @@ run shown above:
 --judge-provider-approval-token "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
 ```
 
-Schema-v9 checkpoints fail closed if the schema, source identity, judge model, embedding model,
+Schema-v10 checkpoints fail closed if the schema, source identity, generation variant, repeat
+schedule, judge model, embedding model,
 metric configuration, or input policy differs. Only a fully answered item with all three finite
 semantic scores is checkpointed. Abstentions are recorded as not applicable and excluded from
 semantic denominators. Deterministic quality gates remain the only source of exit code `0` or `2`.
