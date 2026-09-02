@@ -112,8 +112,10 @@ def _offline_environment() -> dict[str, str]:
     environment = os.environ.copy()
     for name in (
         "API_AUTH_KEY",
+        "GENERATION_API_KEY",
         "GEMINI_API_KEY",
         "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
         "BASELINE_COMMIT",
     ):
         environment.pop(name, None)

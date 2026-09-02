@@ -944,7 +944,7 @@ def test_document_alternative_metadata_cannot_exempt_unrelated_wrong_provenance(
     assert record["wrong_document_retrieval_at_1_excluding_exact_equivalents"] is True
 
 
-def test_v10_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
+def test_v11_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -956,13 +956,13 @@ def test_v10_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -
         ],
     )
     args = evaluate_e2e._parse_args()
-    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 10
+    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 11
     assert args.generation_variant == BASELINE_GENERATION_VARIANT
     assert args.repeat_count == 1
-    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v10.json"
+    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v11.json"
     assert (
         args.checkpoint.name
-        == "atv320-calibration-baseline-v1-r1-e2e-v10-checkpoint.jsonl"
+        == "atv320-calibration-baseline-v1-r1-e2e-v11-checkpoint.jsonl"
     )
     assert args.semantic_judge == "none"
     settings = evaluate_e2e._runtime_settings(evaluate_e2e.Settings())
@@ -987,10 +987,10 @@ def test_heldout_v2_cli_uses_private_sealed_paths(monkeypatch) -> None:
 
     assert args.heldout_v2 == evaluate_e2e.PRIVATE_HELDOUT_DATASET_PATH
     assert args.manifest == evaluate_e2e.PRIVATE_HELDOUT_MANIFEST_PATH
-    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v10.json"
+    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v11.json"
     assert (
         args.checkpoint.name
-        == "atv320-heldout-v2-baseline-v1-r1-e2e-v10-checkpoint.jsonl"
+        == "atv320-heldout-v2-baseline-v1-r1-e2e-v11-checkpoint.jsonl"
     )
 
 
@@ -1021,10 +1021,10 @@ def test_optimization_cli_uses_versioned_and_sealed_defaults(
 
     assert args.manifest == expected_manifest
     assert getattr(args, dataset) == expected_dataset
-    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v10.json"
+    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v11.json"
     assert (
         args.checkpoint.name
-        == f"atv320-{dataset}-baseline-v1-r1-e2e-v10-checkpoint.jsonl"
+        == f"atv320-{dataset}-baseline-v1-r1-e2e-v11-checkpoint.jsonl"
     )
 
 
@@ -1047,10 +1047,10 @@ def test_development_cli_selects_claim_variant_and_repeat_schedule(monkeypatch) 
     args = evaluate_e2e._parse_args()
 
     assert args.output.name == (
-        "atv320-development-claim-coverage-v1-r3-e2e-v10.json"
+        "atv320-development-claim-coverage-v1-r3-e2e-v11.json"
     )
     assert args.checkpoint.name == (
-        "atv320-development-claim-coverage-v1-r3-e2e-v10-checkpoint.jsonl"
+        "atv320-development-claim-coverage-v1-r3-e2e-v11-checkpoint.jsonl"
     )
 
 
@@ -1110,6 +1110,10 @@ def test_generation_adapter_uses_selected_schema_without_initializing_provider()
     assert adapter.output_schema is experiment.output_schema
     assert adapter.output_mapper is experiment.output_mapper
     assert adapter._structured_model is None
+    assert configuration["endpoint_profile"] == "openai-responses"
+    assert configuration["provider"] == "openai"
+    assert configuration["api_style"] == "responses"
+    assert configuration["routing_policy_id"] == "direct-openai-v1"
     assert configuration["structured_output"]["schema"] == "ClaimCoverageAnswer"
     assert "pydantic" in evaluate_e2e._library_versions()
 

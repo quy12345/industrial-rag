@@ -17,6 +17,11 @@ from app.errors import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
+from app.infrastructure.generation.endpoints import (
+    GenerationEndpointConfigurationError,
+    generation_model_kwargs,
+    validate_generation_endpoint,
+)
 
 
 class LangChainStructuredGenerator:
@@ -50,14 +55,11 @@ class LangChainStructuredGenerator:
 
     def ensure_configured(self) -> None:
         if self.settings.generation_api_key is None:
-            key_name = (
-                "GEMINI_API_KEY"
-                if self.settings.generation_provider == "gemini"
-                else "OPENAI_API_KEY"
-            )
-            raise LLMNotConfiguredError(f"{key_name} is not configured.")
-        if self.settings.openai_store:
-            raise LLMNotConfiguredError("OPENAI_STORE must remain false for grounded queries.")
+            raise LLMNotConfiguredError("GENERATION_API_KEY is not configured.")
+        try:
+            validate_generation_endpoint(self.settings)
+        except GenerationEndpointConfigurationError as exc:
+            raise LLMNotConfiguredError(str(exc)) from None
 
     def generate(
         self,
@@ -146,36 +148,14 @@ class LangChainStructuredGenerator:
                         factory = ChatOpenAI
                     api_key = self.settings.generation_api_key
                     if api_key is None:
-                        raise LLMNotConfiguredError(
-                            f"{self.settings.generation_provider} API key is not configured."
+                        raise LLMNotConfiguredError("GENERATION_API_KEY is not configured.")
+                    try:
+                        model_kwargs = generation_model_kwargs(
+                            self.settings,
+                            api_key=api_key.get_secret_value(),
                         )
-                    model_kwargs: dict[str, Any] = {
-                        "model": self.settings.generation_model,
-                        "api_key": api_key.get_secret_value(),
-                        "max_tokens": self.settings.openai_max_output_tokens,
-                        "timeout": self.settings.openai_timeout_seconds,
-                        "max_retries": self.settings.openai_max_retries,
-                    }
-                    if self.settings.generation_provider == "gemini":
-                        model_kwargs.update(
-                            {
-                                "base_url": self.settings.gemini_base_url,
-                                "use_responses_api": False,
-                                "reasoning_effort": self.settings.gemini_reasoning_effort,
-                                "temperature": self.settings.gemini_temperature,
-                            }
-                        )
-                    else:
-                        model_kwargs.update(
-                            {
-                                "use_responses_api": True,
-                                "output_version": "responses/v1",
-                                "store": False,
-                                "reasoning": {
-                                    "effort": self.settings.openai_reasoning_effort
-                                },
-                            }
-                        )
+                    except GenerationEndpointConfigurationError as exc:
+                        raise LLMNotConfiguredError(str(exc)) from None
                     model = factory(**model_kwargs)
                     self._structured_model = model.with_structured_output(
                         self.output_schema,

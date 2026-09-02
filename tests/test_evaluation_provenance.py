@@ -21,6 +21,7 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
     "evidence_policy": Path("app/domain/evidence.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
     "generation_adapter": Path("app/infrastructure/generation/langchain_structured.py"),
+    "generation_endpoints": Path("app/infrastructure/generation/endpoints.py"),
     "generation_contract": Path("app/domain/generation.py"),
     "generation_experiments": Path("evaluation/generation_experiments.py"),
     "generation_prompt_policy": Path("app/application/generation_prompt.py"),
@@ -40,8 +41,8 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
 }
 
 
-def test_e2e_source_identity_v6_hashes_canonical_behavior_owners() -> None:
-    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 6
+def test_e2e_source_identity_v7_hashes_canonical_behavior_owners() -> None:
+    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 7
     assert evaluate_e2e.SOURCE_IDENTITY_PATHS == CANONICAL_SOURCE_IDENTITY_PATHS
 
     expected_files = {
@@ -50,7 +51,7 @@ def test_e2e_source_identity_v6_hashes_canonical_behavior_owners() -> None:
     }
 
     assert evaluate_e2e._source_identity() == {
-        "version": 6,
+        "version": 7,
         "files": expected_files,
         "system_prompt_sha256": (
             "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"
@@ -58,8 +59,8 @@ def test_e2e_source_identity_v6_hashes_canonical_behavior_owners() -> None:
     }
 
 
-def test_v9_checkpoint_fails_closed_under_source_identity_v6(tmp_path: Path) -> None:
-    checkpoint = tmp_path / "legacy-v9-checkpoint.jsonl"
+def test_v10_checkpoint_fails_closed_under_source_identity_v7(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "legacy-v10-checkpoint.jsonl"
     legacy_identity = {
         "source_identity": {
             "prompt": "legacy",

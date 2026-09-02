@@ -17,8 +17,9 @@ from app.application.query_service import QueryService
 from app.config import get_settings
 from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from app.errors import QueryPipelineError
+from app.infrastructure.generation.endpoints import generation_endpoint_identity
 
-DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-query-smoke-v3.json")
+DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-query-smoke-v4.json")
 
 INSTALLATION_DOCUMENT_ID, PROGRAMMING_DOCUMENT_ID = ATV320_RETRIEVAL_CONTRACT.document_ids
 
@@ -48,7 +49,7 @@ def main() -> int:
     args = _build_parser().parse_args()
     settings = get_settings()
     artifact: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "timestamp": datetime.now(UTC).isoformat(),
         "base_commit": os.getenv("BASELINE_COMMIT") or _git_commit(),
         "contract_id": ATV320_RETRIEVAL_CONTRACT.contract_id,
@@ -58,11 +59,9 @@ def main() -> int:
             "chunk_ids_sha256": ATV320_RETRIEVAL_CONTRACT.chunk_ids_sha256,
         },
         "runtime_versions": _runtime_versions(),
-        "generation_provider": settings.generation_provider,
-        "model": settings.generation_model,
+        "generation": generation_endpoint_identity(settings),
         "retrieval_strategy": settings.retrieval_strategy,
         "reranker_enabled": settings.rerank_enabled,
-        "store": settings.openai_store,
         "test_scenarios": [],
     }
     if settings.generation_api_key is None:

@@ -51,19 +51,17 @@ class Settings(BaseSettings):
     evidence_score_threshold: float | None = None
     generation_max_context_chars: int = Field(default=24_000, ge=4_000)
     citation_excerpt_max_chars: int = Field(default=400, ge=50, le=4_000)
-    generation_provider: Literal["openai", "gemini"] = "openai"
-    openai_api_key: SecretStr | None = None
-    openai_model: str = "gpt-5.6-terra"
-    openai_reasoning_effort: Literal["low", "medium", "high"] = "low"
-    gemini_api_key: SecretStr | None = None
-    gemini_model: str = "gemini-3.5-flash-lite"
-    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    gemini_reasoning_effort: Literal["minimal", "low", "medium", "high"] = "minimal"
-    gemini_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    openai_max_output_tokens: int = Field(default=800, gt=0, le=4_096)
-    openai_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
-    openai_max_retries: int = Field(default=1, ge=0, le=2)
-    openai_store: bool = False
+    generation_endpoint_profile: str = "openai-responses"
+    generation_api_key: SecretStr | None = None
+    generation_model: str = "gpt-5.6-terra"
+    generation_reasoning: Literal[
+        "disabled", "minimal", "low", "medium", "high", "max"
+    ] = "low"
+    generation_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    generation_max_output_tokens: int = Field(default=800, gt=0, le=4_096)
+    generation_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    generation_max_retries: int = Field(default=1, ge=0, le=2)
+    generation_store: bool = False
     api_auth_enabled: bool = False
     api_auth_key: SecretStr | None = None
 
@@ -82,8 +80,8 @@ class Settings(BaseSettings):
         "embedding_model",
         "sparse_model",
         "rerank_model",
-        "openai_model",
-        "gemini_model",
+        "generation_endpoint_profile",
+        "generation_model",
     )
     @classmethod
     def validate_non_empty_name(cls, value: str) -> str:
@@ -94,16 +92,6 @@ class Settings(BaseSettings):
             raise ValueError("must not be empty")
         return normalized
 
-    @field_validator("gemini_base_url")
-    @classmethod
-    def validate_gemini_base_url(cls, value: str) -> str:
-        """Normalize the explicit Gemini OpenAI-compatibility endpoint."""
-
-        normalized = value.strip()
-        if not normalized.startswith("https://"):
-            raise ValueError("must be an HTTPS URL")
-        return normalized.rstrip("/") + "/"
-
     @field_validator("embedding_cache_dir", "rerank_cache_dir")
     @classmethod
     def normalize_embedding_cache_dir(cls, value: str | None) -> str | None:
@@ -113,23 +101,6 @@ class Settings(BaseSettings):
             return None
         normalized = value.strip()
         return normalized or None
-
-    @property
-    def generation_api_key(self) -> SecretStr | None:
-        """Return the credential for the selected generation provider."""
-
-        if self.generation_provider == "gemini":
-            return self.gemini_api_key
-        return self.openai_api_key
-
-    @property
-    def generation_model(self) -> str:
-        """Return the model ID for the selected generation provider."""
-
-        if self.generation_provider == "gemini":
-            return self.gemini_model
-        return self.openai_model
-
 
 def resolve_retrieval_runtime(
     settings: Settings,

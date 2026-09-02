@@ -14,6 +14,33 @@ docker compose up -d qdrant api ui
 The existing named Qdrant volume and all four known collections must be preserved. Do not use
 `docker compose down -v`, collection recreation, or cleanup commands that remove named volumes.
 
+Generation configuration uses one credential/model contract plus a declared OpenAI-compatible
+endpoint profile. The active profiles are:
+
+| Profile | API dialect | Endpoint ownership |
+| --- | --- | --- |
+| `openai-responses` | Responses API | Direct OpenAI |
+| `gemini-chat` | Chat Completions | Direct Gemini OpenAI-compatible endpoint |
+| `openrouter-chat` | Chat Completions | OpenRouter with required parameters and no fallback |
+
+The default `.env.example` keeps the current Gemini selection. Use only generic `GENERATION_*`
+settings; the retired `GEMINI_*` and shared `OPENAI_*` generation settings are not compatibility
+aliases. A local `.env` must therefore be migrated explicitly. For example:
+
+```dotenv
+GENERATION_ENDPOINT_PROFILE=openrouter-chat
+GENERATION_API_KEY=
+GENERATION_MODEL=deepseek/deepseek-v4-flash-0731
+GENERATION_REASONING=disabled
+GENERATION_TEMPERATURE=0
+GENERATION_STORE=false
+```
+
+Endpoint profiles own base URLs, API dialects, and provider-specific reasoning parameters. Model
+IDs remain configuration. Unsupported profile/reasoning combinations and `GENERATION_STORE=true`
+fail closed before provider I/O. `OPENROUTER_API_KEY` remains the separate optional Ragas judge
+credential; do not confuse it with `GENERATION_API_KEY` even when both calls use OpenRouter.
+
 Useful read-only checks:
 
 ```powershell
@@ -76,7 +103,7 @@ answerable qrels, expected documents, pages, phrases, and the frozen corpus as i
 legacy suite.
 
 Use opaque lowercase item IDs, `fact_family_id` values, and expected-fact IDs (letters, digits, `.`,
-`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v10 rows retain
+`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v11 rows retain
 these IDs so later paired and clustered comparisons can group translations/paraphrases and diagnose
 fact outcomes without persisting the underlying question or expected fact.
 
@@ -210,14 +237,14 @@ checkpoint must be an exact prefix of the same dataset order and must match the 
 count, schema, source identity, resolved evidence `top_k`/gate, context/citation limits, and other
 run identity fields. Repeated metrics are reported per run rather than pooled across all records.
 
-Schema-v10 default paths encode the full experiment identity:
+Schema-v11 default paths encode the full experiment identity:
 
 | Variant and repeats | Artifact | Checkpoint |
 | --- | --- | --- |
-| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v10.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v10-checkpoint.jsonl` |
-| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v10.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v10-checkpoint.jsonl` |
-| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v10.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v10-checkpoint.jsonl` |
-| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v10.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v10-checkpoint.jsonl` |
+| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v11.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v11-checkpoint.jsonl` |
+| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v11.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v11-checkpoint.jsonl` |
+| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v11.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v11-checkpoint.jsonl` |
+| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v11.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v11-checkpoint.jsonl` |
 
 These switches exist only in the evaluation CLI. They do not change the production composition
 root, FastAPI request/response schema, evidence gate, citation validation, or default generator
@@ -243,10 +270,10 @@ Python 3.11 before running:
 to remain under `data/eval/phase7/private-heldout-v2/`, then validates their hash, the frozen corpus,
 collection identities, runtime source identity, and configured provider before completing.
 
-The current evaluator declares artifact schema v10. If the command above is approved and executed,
+The current evaluator declares artifact schema v11. If the command above is approved and executed,
 its default paths are
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v10-checkpoint.jsonl` and
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v10.json`. V10 records a sanitized
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v11-checkpoint.jsonl` and
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v11.json`. V11 records a sanitized
 retrieval trace because the E2E adapter explicitly opts in; production builders default to
 `capture_trace=False` and the production bootstrap does not opt in. The artifact includes stage
 counts, IDs, ranks, and allowlisted role signals, but still excludes raw questions, evidence,
@@ -256,9 +283,9 @@ are persisted.
 
 Schema availability is not execution evidence. The latest executed held-out result remains the v8
 checkpoint at `artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and final artifact at
-`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9 or v10 held-out run is claimed. Existing v7
-and v8 evidence remain immutable. A v9-or-earlier checkpoint cannot resume under schema v10/source
-identity v6. Never use any held-out result to tune the current runtime.
+`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9, v10, or v11 held-out run is claimed.
+Existing v7 and v8 evidence remain immutable. A v10-or-earlier checkpoint cannot resume under
+schema v11/source identity v7. Never use any held-out result to tune the current runtime.
 
 ## Optional Ragas semantic evaluation
 
@@ -293,8 +320,9 @@ OpenAI-compatible evaluator before any metric runs. Keep this transitive pin unt
 and the project explicitly adopts a release with the corrected import.
 
 Semantic egress requires a second dataset-specific approval token. The generation token authorizes
-Gemini only; the judge token authorizes OpenRouter plus the pinned OpenAI upstream only. Run the same
-first five calibration items twice with separate outputs before any held-out execution:
+only the currently selected generation endpoint; the judge token independently authorizes
+OpenRouter plus the pinned OpenAI upstream. Run the same first five calibration items twice with
+separate outputs before any held-out execution:
 
 ```powershell
 docker compose up -d qdrant
@@ -321,7 +349,8 @@ run shown above:
 --judge-provider-approval-token "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
 ```
 
-Schema-v10 checkpoints fail closed if the schema, source identity, generation variant, repeat
+Schema-v11 checkpoints fail closed if the schema, source identity, endpoint profile, generation
+model, generation variant, repeat
 schedule, judge model, embedding model,
 metric configuration, or input policy differs. Only a fully answered item with all three finite
 semantic scores is checkpointed. Abstentions are recorded as not applicable and excluded from

@@ -53,11 +53,11 @@ the separate evaluator image and requires an independent OpenRouter approval tok
 `none` mode does not import Ragas. The OpenRouter gateway is pinned to OpenAI upstream endpoints with
 provider fallback disabled. The `test` choice is the public regression split; `heldout-v2` is a
 separate sealed private split with path and manifest containment checks. Exposed held-out v2 is
-regression evidence, not tuning data. The E2E adapter declares sanitized artifact schema v10 and
+regression evidence, not tuning data. The E2E adapter declares sanitized artifact schema v11 and
 explicitly opts into retrieval tracing; normal production composition leaves tracing disabled. It
 offers the preregistered `baseline-v1` and development-only `claim-coverage-v1` generation
 contracts, plus full-development one- or three-run schedules. A schema declaration is not proof of
-execution: the latest executed held-out artifact remains v8, and no v9 or v10 held-out result is
+execution: the latest executed held-out artifact remains v8, and no v9, v10, or v11 held-out result is
 claimed. See [Operations](../docs/OPERATIONS.md) for dataset-suite validation, provider-free
 retrieval variants, generation experiments, the two-run semantic calibration preflight, and
 artifact provenance. Retrieval variants never appear in production settings or the E2E command,

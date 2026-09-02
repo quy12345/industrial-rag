@@ -9,7 +9,7 @@ retrieval, reranks candidates, gates weak evidence, and returns answers with val
 - Two-manual ingestion with deterministic document and chunk identities.
 - Dense and BM25 retrieval, rank-only fusion, cross-encoder reranking, and evidence selection.
 - FastAPI query and health endpoints with explicit error mapping and safe abstention.
-- Provider adapters behind one grounded-generation contract.
+- OpenAI-compatible endpoint profiles behind one grounded structured-generation contract.
 - A Streamlit demo that communicates with the system only through FastAPI.
 - Offline unit and characterization tests plus versioned evaluation artifacts.
 
@@ -52,6 +52,34 @@ docker compose up -d qdrant api ui
 
 The API does not silently create or replace collections. Follow
 [Operations](docs/OPERATIONS.md) before running ingestion, integration checks, or evaluation.
+
+### Generation endpoints
+
+Generation uses one strict structured-output adapter with declared endpoint profiles instead of a
+separate generator for every model. The checked-in example keeps the current Gemini behavior:
+
+```dotenv
+GENERATION_ENDPOINT_PROFILE=gemini-chat
+GENERATION_API_KEY=
+GENERATION_MODEL=gemini-3.5-flash-lite
+GENERATION_REASONING=minimal
+```
+
+To select a pinned DeepSeek model through OpenRouter, change only the endpoint identity, credential,
+model, and reasoning mode:
+
+```dotenv
+GENERATION_ENDPOINT_PROFILE=openrouter-chat
+GENERATION_API_KEY=
+GENERATION_MODEL=deepseek/deepseek-v4-flash-0731
+GENERATION_REASONING=disabled
+```
+
+The supported profiles are `openai-responses`, `gemini-chat`, and `openrouter-chat`. Provider
+profiles own API dialect and request differences; model IDs remain configuration. Every endpoint
+must support strict JSON Schema, `GENERATION_STORE` must remain `false`, and OpenRouter generation
+disables provider fallback. Changing a model can change answer quality and therefore requires an
+approved development preflight before a full evaluation. It never requires re-indexing the corpus.
 
 ## Supported commands
 

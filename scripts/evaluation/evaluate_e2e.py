@@ -17,7 +17,6 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from app.application.generation_prompt import build_correction_text, format_evidence
 from app.application.query_service import QueryExecution, QueryService
@@ -31,6 +30,7 @@ from app.infrastructure.corpus_artifacts import (
     write_json_atomic,
     write_jsonl_atomic,
 )
+from app.infrastructure.generation.endpoints import generation_endpoint_identity
 from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
 from evaluation.dataset import (
     EvaluationItem,
@@ -86,8 +86,8 @@ PRIVATE_CONFIRMATION_MANIFEST_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v
 PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
-ARTIFACT_SCHEMA_VERSION = 10
-SOURCE_IDENTITY_VERSION = 6
+ARTIFACT_SCHEMA_VERSION = 11
+SOURCE_IDENTITY_VERSION = 7
 SOURCE_IDENTITY_PATHS = {
     "citation_policy": Path("app/domain/citations.py"),
     "content_identity": Path("app/domain/content_identity.py"),
@@ -98,6 +98,7 @@ SOURCE_IDENTITY_PATHS = {
     "evidence_policy": Path("app/domain/evidence.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
     "generation_adapter": Path("app/infrastructure/generation/langchain_structured.py"),
+    "generation_endpoints": Path("app/infrastructure/generation/endpoints.py"),
     "generation_contract": Path("app/domain/generation.py"),
     "generation_experiments": Path("evaluation/generation_experiments.py"),
     "generation_prompt_policy": Path("app/application/generation_prompt.py"),
@@ -162,6 +163,7 @@ def main() -> int:
     )
     full_dataset_hash = dataset_sha256(dataset)
     exact_content_equivalence = build_corpus_exact_content_equivalence(chunks)
+    generation_configuration = _generation_configuration(settings, experiment)
     identity = {
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
         "dataset": args.dataset,
@@ -176,9 +178,10 @@ def main() -> int:
         "union_rrf_prune_limit": ATV320_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
         "query_expansion_profile": ATV320_RETRIEVAL_CONTRACT.query_expansion_profile,
         "candidate_text_format": CANDIDATE_TEXT_FORMAT,
-        "generation_provider": settings.generation_provider,
+        "generation_provider": generation_configuration["provider"],
+        "generation_endpoint_profile": settings.generation_endpoint_profile,
         "generation_model": settings.generation_model,
-        "generation_configuration": _generation_configuration(settings, experiment),
+        "generation_configuration": generation_configuration,
         "generation_experiment": generation_experiment_identity(experiment),
         "answer_boundary_configuration": _answer_boundary_configuration(
             settings,
@@ -613,27 +616,8 @@ def _generation_configuration(
     settings: Settings,
     experiment: GenerationExperiment,
 ) -> dict[str, Any]:
-    base_url_host = (
-        urlparse(settings.gemini_base_url).netloc
-        if settings.generation_provider == "gemini"
-        else "api.openai.com"
-    )
     return {
-        "base_url_host": base_url_host,
-        "reasoning_effort": (
-            settings.gemini_reasoning_effort
-            if settings.generation_provider == "gemini"
-            else settings.openai_reasoning_effort
-        ),
-        "temperature": (
-            settings.gemini_temperature
-            if settings.generation_provider == "gemini"
-            else None
-        ),
-        "maximum_output_tokens": settings.openai_max_output_tokens,
-        "timeout_seconds": settings.openai_timeout_seconds,
-        "provider_max_retries": settings.openai_max_retries,
-        "store": settings.openai_store,
+        **generation_endpoint_identity(settings),
         "structured_output": {
             "schema": experiment.output_schema.__name__,
             "method": "json_schema",
@@ -662,7 +646,7 @@ def _answer_boundary_configuration(
 def _source_identity(
     experiment: GenerationExperiment | None = None,
 ) -> dict[str, Any]:
-    """Hash canonical behavior owners under the explicit v6 provenance schema."""
+    """Hash canonical behavior owners under the explicit v7 provenance schema."""
 
     selected = experiment or generation_experiment_for(BASELINE_GENERATION_VARIANT)
 

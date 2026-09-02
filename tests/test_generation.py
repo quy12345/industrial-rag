@@ -23,6 +23,10 @@ from app.errors import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
+from app.infrastructure.generation.endpoints import (
+    ENDPOINT_PROFILES,
+    generation_endpoint_identity,
+)
 from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
 
 
@@ -97,7 +101,7 @@ def _adapter(
         return model
 
     adapter = _generator(
-        Settings(_env_file=None, openai_api_key="secret", **settings_overrides),
+        Settings(_env_file=None, generation_api_key="secret", **settings_overrides),
         model_factory=model_factory,
         prompt_factory=lambda messages: prompt,
         **(generator_overrides or {}),
@@ -230,16 +234,61 @@ def test_missing_key_and_store_true_fail_without_constructing_model() -> None:
     adapter = _generator(
         Settings(_env_file=None), model_factory=lambda **kwargs: calls.append(kwargs)
     )
-    with pytest.raises(LLMNotConfiguredError, match="OPENAI_API_KEY"):
+    with pytest.raises(LLMNotConfiguredError, match="GENERATION_API_KEY"):
         adapter.ensure_configured()
     assert calls == []
-    with pytest.raises(LLMNotConfiguredError, match="OPENAI_STORE"):
+    with pytest.raises(LLMNotConfiguredError, match="GENERATION_STORE"):
         _generator(
-            Settings(_env_file=None, openai_api_key="secret", openai_store=True)
+            Settings(
+                _env_file=None,
+                generation_api_key="secret",
+                generation_store=True,
+            )
         ).ensure_configured()
-    with pytest.raises(LLMNotConfiguredError, match="GEMINI_API_KEY"):
+
+
+def test_endpoint_profiles_have_sanitized_portable_identity() -> None:
+    assert tuple(ENDPOINT_PROFILES) == (
+        "openai-responses",
+        "gemini-chat",
+        "openrouter-chat",
+    )
+    settings = Settings(
+        _env_file=None,
+        generation_endpoint_profile="openrouter-chat",
+        generation_api_key="must-not-be-persisted",
+        generation_model="deepseek/deepseek-v4-flash-0731",
+        generation_reasoning="disabled",
+    )
+
+    identity = generation_endpoint_identity(settings)
+
+    assert identity == {
+        "endpoint_profile": "openrouter-chat",
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-v4-flash-0731",
+        "api_style": "chat_completions",
+        "base_url_host": "openrouter.ai",
+        "reasoning_mode": "disabled",
+        "temperature": 0.0,
+        "maximum_output_tokens": 800,
+        "timeout_seconds": 60.0,
+        "provider_max_retries": 1,
+        "store": False,
+        "routing_policy_id": "require-parameters-no-fallback-v1",
+    }
+    assert "must-not-be-persisted" not in repr(identity)
+
+
+def test_endpoint_profile_rejects_incompatible_reasoning_mode() -> None:
+    with pytest.raises(LLMNotConfiguredError, match="reasoning mode"):
         _generator(
-            Settings(_env_file=None, generation_provider="gemini")
+            Settings(
+                _env_file=None,
+                generation_api_key="secret",
+                generation_endpoint_profile="gemini-chat",
+                generation_reasoning="disabled",
+            )
         ).ensure_configured()
 
 
@@ -260,11 +309,11 @@ def test_adapter_uses_responses_structured_output_store_false_and_overrides() ->
     }
     adapter, prompt, model, runnable, kwargs = _adapter(
         result,
-        openai_model="custom-model",
-        openai_reasoning_effort="medium",
-        openai_max_output_tokens=321,
-        openai_timeout_seconds=12,
-        openai_max_retries=2,
+        generation_model="custom-model",
+        generation_reasoning="medium",
+        generation_max_output_tokens=321,
+        generation_timeout_seconds=12,
+        generation_max_retries=2,
     )
     generated = adapter.generate(question="Question", evidence=_bundle())
     assert generated.output.answer == "Grounded."
@@ -304,17 +353,15 @@ def test_adapter_uses_gemini_openai_compatible_chat_completions() -> None:
     }
     adapter, _, model, _, kwargs = _adapter(
         result,
-        generation_provider="gemini",
-        gemini_api_key="gemini-secret",
-        gemini_model="gemini-3.5-flash-lite",
-        gemini_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-        gemini_reasoning_effort="minimal",
+        generation_endpoint_profile="gemini-chat",
+        generation_model="gemini-3.5-flash-lite",
+        generation_reasoning="minimal",
     )
     generated = adapter.generate(question="Question", evidence=_bundle())
     assert generated.output.answer == "Grounded."
     assert kwargs == {
         "model": "gemini-3.5-flash-lite",
-        "api_key": "gemini-secret",
+        "api_key": "secret",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "use_responses_api": False,
         "reasoning_effort": "minimal",
@@ -330,6 +377,49 @@ def test_adapter_uses_gemini_openai_compatible_chat_completions() -> None:
         "strict": True,
         "include_raw": True,
     }
+
+
+def test_adapter_uses_openrouter_chat_without_provider_fallback() -> None:
+    result = {
+        "parsed": {
+            "answer": "Grounded.",
+            "source_ids": ["S1"],
+            "insufficient_evidence": False,
+        },
+        "parsing_error": None,
+        "raw": SimpleNamespace(usage_metadata=None),
+    }
+    adapter, _, model, _, kwargs = _adapter(
+        result,
+        generation_endpoint_profile="openrouter-chat",
+        generation_model="deepseek/deepseek-v4-flash-0731",
+        generation_reasoning="disabled",
+    )
+
+    generated = adapter.generate(question="Question", evidence=_bundle())
+
+    assert generated.output.answer == "Grounded."
+    assert kwargs == {
+        "model": "deepseek/deepseek-v4-flash-0731",
+        "api_key": "secret",
+        "base_url": "https://openrouter.ai/api/v1",
+        "use_responses_api": False,
+        "max_tokens": 800,
+        "timeout": 60.0,
+        "max_retries": 1,
+        "temperature": 0.0,
+        "extra_body": {
+            "provider": {
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            },
+            "reasoning": {"enabled": False},
+        },
+    }
+    assert model.structured_kwargs == (
+        GeneratedAnswer,
+        {"method": "json_schema", "strict": True, "include_raw": True},
+    )
 
 
 def test_adapter_supports_an_injected_schema_and_mapper_without_changing_defaults() -> None:

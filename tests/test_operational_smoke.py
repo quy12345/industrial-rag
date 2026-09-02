@@ -52,7 +52,7 @@ def test_retrieval_smoke_defaults_and_builds_the_resolved_atv320_contract(
 def test_query_smoke_scenarios_use_only_atv320_documents() -> None:
     scenario_document_ids = {scenario[2] for scenario in query_smoke.SCENARIOS}
 
-    assert query_smoke.DEFAULT_OUTPUT.name == "atv320-query-smoke-v3.json"
+    assert query_smoke.DEFAULT_OUTPUT.name == "atv320-query-smoke-v4.json"
     assert scenario_document_ids == set(ATV320_RETRIEVAL_CONTRACT.document_ids)
 
 
@@ -60,7 +60,7 @@ def test_query_smoke_without_key_writes_sanitized_atv320_artifact(
     tmp_path, monkeypatch
 ) -> None:
     output = tmp_path / "smoke.json"
-    settings = Settings(openai_api_key=None, gemini_api_key=None)
+    settings = Settings(_env_file=None, generation_api_key=None)
     monkeypatch.setattr(query_smoke, "get_settings", lambda: settings)
     monkeypatch.setattr(
         query_smoke,
@@ -73,9 +73,12 @@ def test_query_smoke_without_key_writes_sanitized_atv320_artifact(
 
     assert query_smoke.main() == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert payload["contract_id"] == "atv320-2025-04-v1"
     assert payload["corpus"]["document_ids"] == list(ATV320_RETRIEVAL_CONTRACT.document_ids)
+    assert payload["generation"]["endpoint_profile"] == "openai-responses"
+    assert payload["generation"]["provider"] == "openai"
+    assert payload["generation"]["store"] is False
     assert payload["integration_run_status"] == "not_run"
     assert payload["reason"] == "api_key_unavailable"
     assert payload["test_scenarios"] == []

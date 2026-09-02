@@ -106,6 +106,9 @@ Configuration has two distinct owners:
 
 - `Settings` owns environment-specific values such as endpoints, credentials, timeouts, and cache
   directories.
+- `app/infrastructure/generation/endpoints.py` owns the declared OpenAI-compatible endpoint
+  profiles, their API dialects, reasoning parameter mapping, and sanitized runtime identity. Model
+  IDs and credentials remain generic `GENERATION_*` settings.
 - `ATV320_RETRIEVAL_CONTRACT` and `ATV320_FUSION_PROFILE` own immutable product behavior: collection
   names, vector dimensions, candidate limits, thresholds, and fusion policy.
 
@@ -151,7 +154,8 @@ stable IDs, document IDs, pages, heading counts, and exact-duplicate alternative
 API retains its existing `top_k` range; this diagnostic cap is not a runtime configuration change.
 Evidence metrics in this schema are measured diagnostics, not additional exit-code gates; promotion
 criteria remain deferred until a reviewed development winner exists. The E2E evaluator emits
-sanitized schema-v10 checkpoints and artifacts, supports two preregistered generation contracts,
+sanitized schema-v11 checkpoints and artifacts, binds checkpoints to endpoint/model identity,
+supports two preregistered generation contracts,
 and keeps three-run development metrics separated by run. Strict qrel identity, expected-document
 metrics, failure classification, and deterministic release gates remain authoritative and are not
 relaxed by exact-content diagnostics. Current production composition does not capture the trace.
