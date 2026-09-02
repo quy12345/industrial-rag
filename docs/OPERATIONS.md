@@ -40,6 +40,8 @@ Endpoint profiles own base URLs, API dialects, and provider-specific reasoning p
 IDs remain configuration. Unsupported profile/reasoning combinations and `GENERATION_STORE=true`
 fail closed before provider I/O. `OPENROUTER_API_KEY` remains the separate optional Ragas judge
 credential; do not confuse it with `GENERATION_API_KEY` even when both calls use OpenRouter.
+For OpenRouter, `disabled` explicitly sends reasoning effort `none`; use `omit` for a non-thinking
+model whose providers reject the reasoning parameter entirely.
 
 Useful read-only checks:
 

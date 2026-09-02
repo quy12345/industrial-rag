@@ -60,7 +60,7 @@ ENDPOINT_PROFILES = MappingProxyType(
             api_style="chat_completions",
             reasoning_style="openrouter",
             supported_reasoning_modes=frozenset(
-                {"disabled", "low", "medium", "high", "max"}
+                {"omit", "disabled", "low", "medium", "high", "max"}
             ),
             supports_temperature=True,
             routing_policy_id="require-parameters-no-fallback-v3",
@@ -142,14 +142,15 @@ def generation_model_kwargs(settings: Settings, *, api_key: str) -> dict[str, An
             "require_parameters": True,
         }
     }
-    if settings.generation_reasoning == "disabled":
-        extra_body["reasoning"] = {"effort": "none"}
-    else:
-        effort = (
-            "xhigh"
-            if settings.generation_reasoning == "max"
-            else settings.generation_reasoning
-        )
+    if settings.generation_reasoning != "omit":
+        if settings.generation_reasoning == "disabled":
+            effort = "none"
+        else:
+            effort = (
+                "xhigh"
+                if settings.generation_reasoning == "max"
+                else settings.generation_reasoning
+            )
         extra_body["reasoning"] = {"effort": effort}
     model_kwargs["extra_body"] = extra_body
     return model_kwargs

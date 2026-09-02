@@ -425,6 +425,26 @@ def test_adapter_uses_openrouter_chat_without_fallback_or_disabled_reasoning() -
     )
 
 
+def test_openrouter_can_omit_reasoning_for_non_thinking_models() -> None:
+    settings = Settings(
+        _env_file=None,
+        generation_endpoint_profile="openrouter-chat",
+        generation_api_key="secret",
+        generation_model="qwen/qwen3-235b-a22b-2507",
+        generation_reasoning="omit",
+    )
+
+    kwargs = generation_model_kwargs(settings, api_key="secret")
+
+    assert kwargs["extra_body"] == {
+        "max_tokens": 800,
+        "provider": {
+            "allow_fallbacks": False,
+            "require_parameters": True,
+        },
+    }
+
+
 def test_openrouter_enabled_reasoning_is_sent_with_portable_effort() -> None:
     settings = Settings(
         _env_file=None,

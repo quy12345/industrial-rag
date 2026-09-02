@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     generation_api_key: SecretStr | None = None
     generation_model: str = "gpt-5.6-terra"
     generation_reasoning: Literal[
-        "disabled", "minimal", "low", "medium", "high", "max"
+        "omit", "disabled", "minimal", "low", "medium", "high", "max"
     ] = "low"
     generation_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     generation_max_output_tokens: int = Field(default=800, gt=0, le=4_096)
