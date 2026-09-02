@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.application.generation_prompt import (
@@ -26,6 +28,7 @@ from app.errors import (
 from app.infrastructure.generation.endpoints import (
     ENDPOINT_PROFILES,
     generation_endpoint_identity,
+    generation_model_kwargs,
 )
 from app.infrastructure.generation.langchain_structured import LangChainStructuredGenerator
 
@@ -275,7 +278,7 @@ def test_endpoint_profiles_have_sanitized_portable_identity() -> None:
         "timeout_seconds": 60.0,
         "provider_max_retries": 1,
         "store": False,
-        "routing_policy_id": "require-parameters-no-fallback-v1",
+        "routing_policy_id": "require-parameters-no-fallback-v3",
     }
     assert "must-not-be-persisted" not in repr(identity)
 
@@ -379,7 +382,7 @@ def test_adapter_uses_gemini_openai_compatible_chat_completions() -> None:
     }
 
 
-def test_adapter_uses_openrouter_chat_without_provider_fallback() -> None:
+def test_adapter_uses_openrouter_chat_without_fallback_or_disabled_reasoning() -> None:
     result = {
         "parsed": {
             "answer": "Grounded.",
@@ -404,22 +407,107 @@ def test_adapter_uses_openrouter_chat_without_provider_fallback() -> None:
         "api_key": "secret",
         "base_url": "https://openrouter.ai/api/v1",
         "use_responses_api": False,
-        "max_tokens": 800,
         "timeout": 60.0,
         "max_retries": 1,
         "temperature": 0.0,
         "extra_body": {
+            "max_tokens": 800,
             "provider": {
                 "allow_fallbacks": False,
                 "require_parameters": True,
             },
-            "reasoning": {"enabled": False},
+            "reasoning": {"effort": "none"},
         },
     }
     assert model.structured_kwargs == (
         GeneratedAnswer,
         {"method": "json_schema", "strict": True, "include_raw": True},
     )
+
+
+def test_openrouter_enabled_reasoning_is_sent_with_portable_effort() -> None:
+    settings = Settings(
+        _env_file=None,
+        generation_endpoint_profile="openrouter-chat",
+        generation_api_key="secret",
+        generation_model="deepseek/deepseek-v4-flash-0731",
+        generation_reasoning="max",
+    )
+
+    kwargs = generation_model_kwargs(settings, api_key="secret")
+
+    assert kwargs["extra_body"] == {
+        "max_tokens": 800,
+        "provider": {
+            "allow_fallbacks": False,
+            "require_parameters": True,
+        },
+        "reasoning": {"effort": "xhigh"},
+    }
+
+
+def test_openrouter_wire_payload_uses_supported_max_tokens_parameter() -> None:
+    from langchain_openai import ChatOpenAI
+
+    captured: dict[str, object] = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "offline-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "deepseek/deepseek-v4-flash-0731",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "answer": "Grounded.",
+                                    "source_ids": ["S1"],
+                                    "insufficient_evidence": False,
+                                }
+                            ),
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    settings = Settings(
+        _env_file=None,
+        generation_endpoint_profile="openrouter-chat",
+        generation_api_key="secret",
+        generation_model="deepseek/deepseek-v4-flash-0731",
+        generation_reasoning="disabled",
+    )
+    client = httpx.Client(transport=httpx.MockTransport(respond))
+    model = ChatOpenAI(
+        **generation_model_kwargs(settings, api_key="secret"),
+        http_client=client,
+    )
+
+    result = model.with_structured_output(
+        GeneratedAnswer,
+        method="json_schema",
+        strict=True,
+    ).invoke("REDACTED")
+
+    assert result.answer == "Grounded."
+    assert captured["max_tokens"] == 800
+    assert "max_completion_tokens" not in captured
+    assert captured["provider"] == {
+        "allow_fallbacks": False,
+        "require_parameters": True,
+    }
+    assert captured["reasoning"] == {"effort": "none"}
 
 
 def test_adapter_supports_an_injected_schema_and_mapper_without_changing_defaults() -> None:

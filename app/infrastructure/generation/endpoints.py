@@ -63,7 +63,7 @@ ENDPOINT_PROFILES = MappingProxyType(
                 {"disabled", "low", "medium", "high", "max"}
             ),
             supports_temperature=True,
-            routing_policy_id="require-parameters-no-fallback-v1",
+            routing_policy_id="require-parameters-no-fallback-v3",
         ),
     }
 )
@@ -105,13 +105,13 @@ def generation_model_kwargs(settings: Settings, *, api_key: str) -> dict[str, An
     model_kwargs: dict[str, Any] = {
         "model": settings.generation_model,
         "api_key": api_key,
-        "max_tokens": settings.generation_max_output_tokens,
         "timeout": settings.generation_timeout_seconds,
         "max_retries": settings.generation_max_retries,
     }
     if profile.api_style == "responses":
         model_kwargs.update(
             {
+                "max_tokens": settings.generation_max_output_tokens,
                 "use_responses_api": True,
                 "output_version": "responses/v1",
                 "store": False,
@@ -128,26 +128,30 @@ def generation_model_kwargs(settings: Settings, *, api_key: str) -> dict[str, An
         }
     )
     if profile.reasoning_style == "gemini":
+        model_kwargs["max_tokens"] = settings.generation_max_output_tokens
         model_kwargs["reasoning_effort"] = settings.generation_reasoning
         return model_kwargs
 
-    reasoning: dict[str, str | bool]
+    extra_body: dict[str, Any] = {
+        # ChatOpenAI 1.4 maps its max_tokens argument to max_completion_tokens.
+        # OpenRouter capability routing advertises max_tokens for this endpoint,
+        # so pass the portable wire parameter through the SDK's extra body.
+        "max_tokens": settings.generation_max_output_tokens,
+        "provider": {
+            "allow_fallbacks": False,
+            "require_parameters": True,
+        }
+    }
     if settings.generation_reasoning == "disabled":
-        reasoning = {"enabled": False}
+        extra_body["reasoning"] = {"effort": "none"}
     else:
         effort = (
             "xhigh"
             if settings.generation_reasoning == "max"
             else settings.generation_reasoning
         )
-        reasoning = {"effort": effort}
-    model_kwargs["extra_body"] = {
-        "provider": {
-            "allow_fallbacks": False,
-            "require_parameters": True,
-        },
-        "reasoning": reasoning,
-    }
+        extra_body["reasoning"] = {"effort": effort}
+    model_kwargs["extra_body"] = extra_body
     return model_kwargs
 
 
