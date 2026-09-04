@@ -11,12 +11,60 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from app.application.query_service import QueryExecution
 from app.domain.documents import DocumentChunk
 from evaluation.dataset import EvaluationItem, dataset_sha256
 
 
 class DevelopmentReviewError(ValueError):
     """Raised when local review inputs do not describe the same development run."""
+
+
+def build_live_development_review(
+    *,
+    item: EvaluationItem,
+    execution: QueryExecution,
+    record: Mapping[str, Any],
+    chunks: Sequence[DocumentChunk],
+) -> dict[str, Any]:
+    """Build one ephemeral review payload after an approved development rerun."""
+
+    chunk_by_id = _unique_chunks(chunks)
+    _validate_record_contract(item, record)
+    case = _review_case(item, record, chunk_by_id)
+    case["observed"].update(
+        {
+            "raw_answer_available": True,
+            "answer": execution.response.answer,
+            "citations": [
+                citation.model_dump(mode="json")
+                for citation in execution.response.citations
+            ],
+        }
+    )
+    case["generation_evidence"] = [
+        {
+            "source_id": f"S{index}",
+            "chunk_id": candidate.chunk_id,
+            "document_id": candidate.document_id,
+            "filename": candidate.filename,
+            "page_numbers": candidate.page_numbers,
+            "headings": candidate.headings,
+            "content_type": candidate.content_type,
+            "text": candidate.text,
+        }
+        for index, candidate in enumerate(execution.evidence_candidates, start=1)
+    ]
+    return {
+        "review_policy": {
+            "dataset": "development",
+            "destination": "terminal_stdout_only",
+            "provider_calls": "approved_targeted_rerun",
+            "persistence": "raw_content_forbidden",
+            "interpretation": "new_provider_sample_not_original_artifact_output",
+        },
+        "case": case,
+    }
 
 
 def build_development_review(

@@ -155,7 +155,7 @@ stable IDs, document IDs, pages, heading counts, and exact-duplicate alternative
 API retains its existing `top_k` range; this diagnostic cap is not a runtime configuration change.
 Evidence metrics in this schema are measured diagnostics, not additional exit-code gates; promotion
 criteria remain deferred until a reviewed development winner exists. The E2E evaluator emits
-sanitized schema-v11 checkpoints and artifacts, binds checkpoints to endpoint/model identity,
+sanitized schema-v12 checkpoints and artifacts, binds checkpoints to endpoint/model identity,
 supports two preregistered generation contracts,
 and keeps three-run development metrics separated by run. Strict qrel identity, expected-document
 metrics, failure classification, and deterministic release gates remain authoritative and are not

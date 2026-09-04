@@ -32,6 +32,7 @@ SUPPORTED_CLI_OPTIONS = [
             "--judge-provider-approval-token",
             "--max-queries",
             "--item-id",
+            "--review-item-id",
             "--checkpoint",
             "--output",
         },

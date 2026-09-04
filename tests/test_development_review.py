@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from copy import deepcopy
 from io import StringIO
+from types import SimpleNamespace
 
 import pytest
 
 from app.domain.documents import DocumentChunk
 from app.infrastructure.corpus_artifacts import chunk_set_metadata
 from evaluation.dataset import EvaluationItem, dataset_sha256
-from evaluation.development_review import DevelopmentReviewError, build_development_review
+from evaluation.development_review import (
+    DevelopmentReviewError,
+    build_development_review,
+    build_live_development_review,
+)
 from scripts.evaluation import review_development
 
 
@@ -213,3 +218,37 @@ def test_cli_json_output_preserves_unicode_when_stdout_cannot_be_reconfigured(
 
     assert "Cần ngắt nguồn điện nào?" in stream.getvalue()
     assert "\\u1ea7" not in stream.getvalue()
+
+
+def test_live_review_exposes_new_answer_only_in_ephemeral_payload() -> None:
+    item = _item()
+    chunks = _chunks()
+    artifact = _artifact(item, chunks)
+    record = artifact["per_query"][0]
+    candidate = SimpleNamespace(
+        chunk_id="evidence",
+        document_id="programming",
+        filename="programming.pdf",
+        page_numbers=[8],
+        headings=["Procedure"],
+        content_type="text",
+        text="SENTINEL_LIVE_EVIDENCE",
+    )
+    execution = SimpleNamespace(
+        response=SimpleNamespace(answer="SENTINEL_LIVE_ANSWER", citations=[]),
+        evidence_candidates=(candidate,),
+    )
+
+    review = build_live_development_review(
+        item=item,
+        execution=execution,
+        record=record,
+        chunks=chunks,
+    )
+
+    assert review["review_policy"]["persistence"] == "raw_content_forbidden"
+    assert review["case"]["observed"]["answer"] == "SENTINEL_LIVE_ANSWER"
+    assert review["case"]["generation_evidence"][0]["text"] == (
+        "SENTINEL_LIVE_EVIDENCE"
+    )
+    assert "SENTINEL_LIVE_ANSWER" not in str(record)

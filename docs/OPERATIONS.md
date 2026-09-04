@@ -105,7 +105,7 @@ answerable qrels, expected documents, pages, phrases, and the frozen corpus as i
 legacy suite.
 
 Use opaque lowercase item IDs, `fact_family_id` values, and expected-fact IDs (letters, digits, `.`,
-`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v11 rows retain
+`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v12 rows retain
 these IDs so later paired and clustered comparisons can group translations/paraphrases and diagnose
 fact outcomes without persisting the underlying question or expected fact.
 
@@ -239,14 +239,14 @@ checkpoint must be an exact prefix of the same dataset order and must match the 
 count, schema, source identity, resolved evidence `top_k`/gate, context/citation limits, and other
 run identity fields. Repeated metrics are reported per run rather than pooled across all records.
 
-Schema-v11 default paths encode the full experiment identity:
+Schema-v12 default paths encode the full experiment identity:
 
 | Variant and repeats | Artifact | Checkpoint |
 | --- | --- | --- |
-| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v11.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v11-checkpoint.jsonl` |
-| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v11.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v11-checkpoint.jsonl` |
-| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v11.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v11-checkpoint.jsonl` |
-| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v11.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v11-checkpoint.jsonl` |
+| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v12.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v12-checkpoint.jsonl` |
+| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v12.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v12-checkpoint.jsonl` |
+| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v12.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v12-checkpoint.jsonl` |
+| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v12.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v12-checkpoint.jsonl` |
 
 These switches exist only in the evaluation CLI. They do not change the production composition
 root, FastAPI request/response schema, evidence gate, citation validation, or default generator
@@ -274,6 +274,28 @@ confirmation. The original generated answer remains unavailable because the sani
 never stored it; a later targeted provider rerun is a new sample, not recovery of the old output.
 Do not redirect this command into a tracked file or paste its output into logs, issues, or commits.
 
+After provider-free review has isolated cases that genuinely require generation diagnosis, the E2E
+adapter can rerun a bounded cohort with the current `baseline-v1` generator and print the new raw
+answer alongside its exact generation evidence:
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --review-item-id dvi031 `
+  --review-item-id dvi065 `
+  --provider-approval-token "APPROVE ATV320 TARGETED DEVELOPMENT REVIEW EGRESS" `
+  --checkpoint artifacts/metrics/local-targeted-review-checkpoint.jsonl `
+  --output artifacts/metrics/local-targeted-review.json
+```
+
+This is an explicit provider call and therefore requires fresh user approval for the named IDs,
+configured model, and estimated cost before execution. At most 20 unique development IDs are
+accepted. The mode requires `baseline-v1`, one repeat, no Ragas, new explicit checkpoint/output
+paths, and a new or empty checkpoint. The artifact and checkpoint remain sanitized; raw content is
+printed only to the current terminal. Because provider output can vary, this is a new diagnostic
+sample rather than a reconstruction of the original full-run answer. Do not use this mode with
+confirmation or held-out data, redirect its output, or select a favorable retry after repeated runs.
+
 ## Approved held-out regression run
 
 Held-out v2 is exposed regression evidence, not an unseen benchmark. Run it only after the user has
@@ -293,10 +315,10 @@ Python 3.11 before running:
 to remain under `data/eval/phase7/private-heldout-v2/`, then validates their hash, the frozen corpus,
 collection identities, runtime source identity, and configured provider before completing.
 
-The current evaluator declares artifact schema v11. If the command above is approved and executed,
+The current evaluator declares artifact schema v12. If the command above is approved and executed,
 its default paths are
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v11-checkpoint.jsonl` and
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v11.json`. V11 records a sanitized
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v12-checkpoint.jsonl` and
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v12.json`. V12 records a sanitized
 retrieval trace because the E2E adapter explicitly opts in; production builders default to
 `capture_trace=False` and the production bootstrap does not opt in. The artifact includes stage
 counts, IDs, ranks, and allowlisted role signals, but still excludes raw questions, evidence,
@@ -306,9 +328,9 @@ are persisted.
 
 Schema availability is not execution evidence. The latest executed held-out result remains the v8
 checkpoint at `artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and final artifact at
-`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9, v10, or v11 held-out run is claimed.
-Existing v7 and v8 evidence remain immutable. A v10-or-earlier checkpoint cannot resume under
-schema v11/source identity v7. Never use any held-out result to tune the current runtime.
+`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9-v12 held-out run is claimed.
+Existing v7 and v8 evidence remain immutable. A v11-or-earlier checkpoint cannot resume under
+schema v12/source identity v8. Never use any held-out result to tune the current runtime.
 
 ## Optional Ragas semantic evaluation
 
@@ -372,7 +394,7 @@ run shown above:
 --judge-provider-approval-token "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
 ```
 
-Schema-v11 checkpoints fail closed if the schema, source identity, endpoint profile, generation
+Schema-v12 checkpoints fail closed if the schema, source identity, endpoint profile, generation
 model, generation variant, repeat
 schedule, judge model, embedding model,
 metric configuration, or input policy differs. Only a fully answered item with all three finite

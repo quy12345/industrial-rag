@@ -944,7 +944,7 @@ def test_document_alternative_metadata_cannot_exempt_unrelated_wrong_provenance(
     assert record["wrong_document_retrieval_at_1_excluding_exact_equivalents"] is True
 
 
-def test_v11_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
+def test_v12_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -956,13 +956,13 @@ def test_v11_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -
         ],
     )
     args = evaluate_e2e._parse_args()
-    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 11
+    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 12
     assert args.generation_variant == BASELINE_GENERATION_VARIANT
     assert args.repeat_count == 1
-    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v11.json"
+    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v12.json"
     assert (
         args.checkpoint.name
-        == "atv320-calibration-baseline-v1-r1-e2e-v11-checkpoint.jsonl"
+        == "atv320-calibration-baseline-v1-r1-e2e-v12-checkpoint.jsonl"
     )
     assert args.semantic_judge == "none"
     settings = evaluate_e2e._runtime_settings(evaluate_e2e.Settings())
@@ -987,10 +987,10 @@ def test_heldout_v2_cli_uses_private_sealed_paths(monkeypatch) -> None:
 
     assert args.heldout_v2 == evaluate_e2e.PRIVATE_HELDOUT_DATASET_PATH
     assert args.manifest == evaluate_e2e.PRIVATE_HELDOUT_MANIFEST_PATH
-    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v11.json"
+    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v12.json"
     assert (
         args.checkpoint.name
-        == "atv320-heldout-v2-baseline-v1-r1-e2e-v11-checkpoint.jsonl"
+        == "atv320-heldout-v2-baseline-v1-r1-e2e-v12-checkpoint.jsonl"
     )
 
 
@@ -1021,10 +1021,10 @@ def test_optimization_cli_uses_versioned_and_sealed_defaults(
 
     assert args.manifest == expected_manifest
     assert getattr(args, dataset) == expected_dataset
-    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v11.json"
+    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v12.json"
     assert (
         args.checkpoint.name
-        == f"atv320-{dataset}-baseline-v1-r1-e2e-v11-checkpoint.jsonl"
+        == f"atv320-{dataset}-baseline-v1-r1-e2e-v12-checkpoint.jsonl"
     )
 
 
@@ -1047,10 +1047,10 @@ def test_development_cli_selects_claim_variant_and_repeat_schedule(monkeypatch) 
     args = evaluate_e2e._parse_args()
 
     assert args.output.name == (
-        "atv320-development-claim-coverage-v1-r3-e2e-v11.json"
+        "atv320-development-claim-coverage-v1-r3-e2e-v12.json"
     )
     assert args.checkpoint.name == (
-        "atv320-development-claim-coverage-v1-r3-e2e-v11-checkpoint.jsonl"
+        "atv320-development-claim-coverage-v1-r3-e2e-v12-checkpoint.jsonl"
     )
 
 
@@ -1225,6 +1225,19 @@ def test_provider_execution_requires_dataset_specific_approval() -> None:
             provider_approval_token=evaluate_e2e.CONFIRMATION_PROVIDER_APPROVAL_TOKEN,
         )
     )
+
+
+def test_targeted_development_review_requires_its_narrow_approval() -> None:
+    args = SimpleNamespace(
+        dataset="development",
+        review_item_id=["dvi001"],
+        provider_approval_token=evaluate_e2e.DEVELOPMENT_PROVIDER_APPROVAL_TOKEN,
+    )
+    with pytest.raises(SystemExit, match="missing or invalid"):
+        evaluate_e2e._validate_execution_approval(args)
+
+    args.provider_approval_token = evaluate_e2e.DEVELOPMENT_REVIEW_PROVIDER_APPROVAL_TOKEN
+    evaluate_e2e._validate_execution_approval(args)
 
 
 def test_calibration_loader_never_opens_held_out_path(monkeypatch) -> None:
@@ -1474,6 +1487,93 @@ def test_development_item_id_is_allowed_but_confirmation_partial_run_is_rejected
     with pytest.raises(SystemExit):
         evaluate_e2e._parse_args()
     assert "sealed evaluation datasets" in capsys.readouterr().err
+
+
+def test_targeted_development_review_accepts_a_bounded_unique_cohort(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "development",
+            "--review-item-id",
+            "dvi015",
+            "--review-item-id",
+            "dvi024",
+            "--output",
+            "artifacts/metrics/targeted-review.json",
+            "--checkpoint",
+            "artifacts/metrics/targeted-review-checkpoint.jsonl",
+            "--provider-approval-token",
+            evaluate_e2e.DEVELOPMENT_REVIEW_PROVIDER_APPROVAL_TOKEN,
+        ],
+    )
+
+    args = evaluate_e2e._parse_args()
+
+    assert args.review_item_id == ["dvi015", "dvi024"]
+    assert args.generation_variant == BASELINE_GENERATION_VARIANT
+    assert args.repeat_count == 1
+    assert args.semantic_judge == "none"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--dataset", "confirmation", "--review-item-id", "dvi001"],
+        [
+            "--dataset",
+            "development",
+            "--review-item-id",
+            "dvi001",
+            "--review-item-id",
+            "dvi001",
+        ],
+        [
+            "--dataset",
+            "development",
+            "--review-item-id",
+            "dvi001",
+            "--repeat-count",
+            "3",
+        ],
+        [
+            "--dataset",
+            "development",
+            "--review-item-id",
+            "dvi001",
+            "--semantic-judge",
+            "ragas",
+        ],
+        [
+            "--dataset",
+            "development",
+            "--review-item-id",
+            "dvi001",
+            "--generation-variant",
+            CLAIM_COVERAGE_GENERATION_VARIANT,
+        ],
+    ],
+)
+def test_targeted_development_review_rejects_unsafe_combinations(
+    monkeypatch, arguments
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["evaluate_e2e", *arguments, "--provider-approval-token", "unused"],
+    )
+
+    with pytest.raises(SystemExit):
+        evaluate_e2e._parse_args()
+
+
+def test_targeted_review_cannot_resume_without_raw_answer() -> None:
+    evaluate_e2e._require_empty_targeted_review_checkpoint([], enabled=True)
+    with pytest.raises(RuntimeError, match="new or empty checkpoint"):
+        evaluate_e2e._require_empty_targeted_review_checkpoint(
+            [{"id": "dvi001", "repeat_index": 1}],
+            enabled=True,
+        )
 
 
 def test_checkpoint_fails_closed_when_provider_identity_changes(tmp_path) -> None:

@@ -13,6 +13,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,7 @@ from evaluation.dataset import (
     validate_dataset,
     validate_evaluation_manifest,
 )
+from evaluation.development_review import build_live_development_review
 from evaluation.e2e import (
     CLAIM_COMPLETENESS_EVALUATOR_ID,
     FACT_EVALUATOR_ID,
@@ -67,6 +69,9 @@ from evaluation.semantic import (
 CALIBRATION_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS"
 HELDOUT_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 HELDOUT PROVIDER EGRESS"
 DEVELOPMENT_PROVIDER_APPROVAL_TOKEN = "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
+DEVELOPMENT_REVIEW_PROVIDER_APPROVAL_TOKEN = (
+    "APPROVE ATV320 TARGETED DEVELOPMENT REVIEW EGRESS"
+)
 CONFIRMATION_PROVIDER_APPROVAL_TOKEN = "APPROVE ATV320 CONFIRMATION GENERATOR EGRESS"
 CALIBRATION_SEMANTIC_APPROVAL_TOKEN = (
     "APPROVE ATV320 CALIBRATION OPENROUTER RAGAS EGRESS"
@@ -86,13 +91,14 @@ PRIVATE_CONFIRMATION_MANIFEST_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v
 PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
-ARTIFACT_SCHEMA_VERSION = 11
-SOURCE_IDENTITY_VERSION = 7
+ARTIFACT_SCHEMA_VERSION = 12
+SOURCE_IDENTITY_VERSION = 8
 SOURCE_IDENTITY_PATHS = {
     "citation_policy": Path("app/domain/citations.py"),
     "content_identity": Path("app/domain/content_identity.py"),
     "dataset_contract": Path("evaluation/dataset.py"),
     "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
+    "development_review": Path("evaluation/development_review.py"),
     "evaluator": Path("evaluation/e2e.py"),
     "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "evidence_policy": Path("app/domain/evidence.py"),
@@ -120,12 +126,24 @@ SOURCE_IDENTITY_PATHS = {
 
 def main() -> int:
     args = _parse_args()
+    if args.review_item_id:
+        _configure_utf8_stdout()
     _validate_execution_approval(args)
     experiment = generation_experiment_for(args.generation_variant)
     chunks = load_frozen_chunks(args.chunks)
     dataset, validation, manifest = _load_selected_dataset(args, chunks)
     selected = list(dataset)
-    if args.item_id is not None:
+    if args.review_item_id:
+        items_by_id = {item.id: item for item in selected}
+        missing_ids = [
+            item_id for item_id in args.review_item_id if item_id not in items_by_id
+        ]
+        if missing_ids:
+            raise SystemExit(
+                "Targeted review item IDs were not found: " + ", ".join(missing_ids)
+            )
+        selected = [items_by_id[item_id] for item_id in args.review_item_id]
+    elif args.item_id is not None:
         selected = [item for item in selected if item.id == args.item_id]
         if not selected:
             raise SystemExit(f"Diagnostic item ID was not found: {args.item_id}")
@@ -199,8 +217,14 @@ def main() -> int:
             manifest, args.dataset
         ),
         "deduplicate_exact_content": settings.rerank_deduplicate_content,
+        "diagnostic_mode": (
+            "targeted_development_terminal_review"
+            if args.review_item_id
+            else "sanitized_evaluation"
+        ),
     }
     records = _load_checkpoint(args.checkpoint, identity)
+    _require_empty_targeted_review_checkpoint(records, enabled=bool(args.review_item_id))
     schedule = _execution_schedule(selected, repeat_count=args.repeat_count)
     _validate_checkpoint_prefix(records, schedule)
     observed_keys = [_checkpoint_key(record) for record in records]
@@ -235,6 +259,15 @@ def main() -> int:
             raise RuntimeError(f"ATV320 execution failed for dataset item {item.id}.") from exc
         records.append(record)
         _write_checkpoint(args.checkpoint, identity, records)
+        if args.review_item_id:
+            _print_live_development_review(
+                build_live_development_review(
+                    item=item,
+                    execution=execution,
+                    record=record,
+                    chunks=chunks,
+                )
+            )
 
     if len(records) != len(schedule):
         raise RuntimeError("Checkpoint result count does not match the selected dataset.")
@@ -289,6 +322,11 @@ def main() -> int:
             "judge_reasoning": "excluded",
             "expected_fact_text": "excluded",
             "candidate_text_and_unlisted_metadata": "excluded",
+            "targeted_review_stdout": (
+                "raw_content_printed_ephemerally_not_persisted"
+                if args.review_item_id
+                else "disabled"
+            ),
         },
     }
     write_json_atomic(args.output, output)
@@ -362,6 +400,15 @@ def _parse_args() -> argparse.Namespace:
             "development requires explicit output and checkpoint paths."
         ),
     )
+    parser.add_argument(
+        "--review-item-id",
+        action="append",
+        default=[],
+        help=(
+            "Development item ID for an approved live terminal review; repeat the option "
+            "for a bounded cohort of at most 20 unique items."
+        ),
+    )
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
@@ -371,6 +418,20 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--item-id is permitted only for calibration or development diagnostics")
     if args.item_id is not None and args.max_queries is not None:
         parser.error("--item-id and --max-queries are mutually exclusive")
+    if args.review_item_id and args.dataset != "development":
+        parser.error("--review-item-id is permitted only for development diagnostics")
+    if args.review_item_id and (args.item_id is not None or args.max_queries is not None):
+        parser.error("--review-item-id cannot be combined with --item-id or --max-queries")
+    if len(args.review_item_id) > 20:
+        parser.error("Targeted development review is limited to 20 items")
+    if len(set(args.review_item_id)) != len(args.review_item_id):
+        parser.error("Targeted development review item IDs must be unique")
+    if args.review_item_id and args.generation_variant != BASELINE_GENERATION_VARIANT:
+        parser.error("Targeted development review requires baseline-v1")
+    if args.review_item_id and args.repeat_count != 1:
+        parser.error("Targeted development review requires --repeat-count 1")
+    if args.review_item_id and args.semantic_judge != "none":
+        parser.error("Targeted development review cannot run semantic evaluation")
     if (
         args.generation_variant != BASELINE_GENERATION_VARIANT
         and args.dataset != "development"
@@ -388,7 +449,11 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--max-queries is not permitted for sealed evaluation datasets")
     if (
         args.dataset == "development"
-        and (args.item_id is not None or args.max_queries is not None)
+        and (
+            args.item_id is not None
+            or args.max_queries is not None
+            or args.review_item_id
+        )
         and (args.output is None or args.checkpoint is None)
     ):
         parser.error(
@@ -415,13 +480,16 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _validate_execution_approval(args: argparse.Namespace) -> None:
-    expected = {
-        "calibration": CALIBRATION_PROVIDER_APPROVAL_TOKEN,
-        "development": DEVELOPMENT_PROVIDER_APPROVAL_TOKEN,
-        "confirmation": CONFIRMATION_PROVIDER_APPROVAL_TOKEN,
-        "test": HELDOUT_PROVIDER_APPROVAL_TOKEN,
-        "heldout-v2": HELDOUT_PROVIDER_APPROVAL_TOKEN,
-    }[args.dataset]
+    if getattr(args, "review_item_id", None):
+        expected = DEVELOPMENT_REVIEW_PROVIDER_APPROVAL_TOKEN
+    else:
+        expected = {
+            "calibration": CALIBRATION_PROVIDER_APPROVAL_TOKEN,
+            "development": DEVELOPMENT_PROVIDER_APPROVAL_TOKEN,
+            "confirmation": CONFIRMATION_PROVIDER_APPROVAL_TOKEN,
+            "test": HELDOUT_PROVIDER_APPROVAL_TOKEN,
+            "heldout-v2": HELDOUT_PROVIDER_APPROVAL_TOKEN,
+        }[args.dataset]
     if args.provider_approval_token != expected:
         raise SystemExit("ATV320 provider approval token is missing or invalid for this dataset.")
 
@@ -646,7 +714,7 @@ def _answer_boundary_configuration(
 def _source_identity(
     experiment: GenerationExperiment | None = None,
 ) -> dict[str, Any]:
-    """Hash canonical behavior owners under the explicit v7 provenance schema."""
+    """Hash canonical behavior owners under the explicit v8 provenance schema."""
 
     selected = experiment or generation_experiment_for(BASELINE_GENERATION_VARIANT)
 
@@ -813,6 +881,26 @@ def _validate_checkpoint_prefix(
         raise RuntimeError(
             "Existing ATV320 checkpoint does not match repeat-major dataset order."
         )
+
+
+def _require_empty_targeted_review_checkpoint(
+    records: list[dict[str, Any]], *, enabled: bool
+) -> None:
+    if enabled and records:
+        raise RuntimeError(
+            "Targeted development review requires a new or empty checkpoint because raw "
+            "answers are never persisted for resume."
+        )
+
+
+def _configure_utf8_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8")
+
+
+def _print_live_development_review(payload: Mapping[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
