@@ -18,6 +18,7 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
     "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
     "development_review": Path("evaluation/development_review.py"),
     "evaluator": Path("evaluation/e2e.py"),
+    "fact_evaluator": Path("evaluation/facts.py"),
     "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "evidence_policy": Path("app/domain/evidence.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
@@ -42,8 +43,8 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
 }
 
 
-def test_e2e_source_identity_v8_hashes_canonical_behavior_owners() -> None:
-    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 8
+def test_e2e_source_identity_v9_hashes_canonical_behavior_owners() -> None:
+    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 9
     assert evaluate_e2e.SOURCE_IDENTITY_PATHS == CANONICAL_SOURCE_IDENTITY_PATHS
 
     expected_files = {
@@ -52,7 +53,7 @@ def test_e2e_source_identity_v8_hashes_canonical_behavior_owners() -> None:
     }
 
     assert evaluate_e2e._source_identity() == {
-        "version": 8,
+        "version": 9,
         "files": expected_files,
         "system_prompt_sha256": (
             "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"

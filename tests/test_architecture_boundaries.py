@@ -528,6 +528,7 @@ def test_historical_evaluation_helpers_are_outside_the_active_package() -> None:
         "dataset.py",
         "development_review.py",
         "e2e.py",
+        "facts.py",
         "generation_experiments.py",
         "retrieval.py",
         "semantic.py",

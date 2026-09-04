@@ -238,6 +238,27 @@ and `q04-qwen-development-claim-coverage-v1-r1-e2e-v11.json` (SHA-256
 `99f57d0523174105491295cc70e5aa5b709bf72acc4dc1048b0ccbe54d813241`); Qwen non-thinking endpoint
 support is commit `e034469`.
 
+### Deterministic fact matching understated reviewed multilingual answers
+
+**Symptom** -> The 120-item development baseline answered 76 questions, but the v2 matcher passed
+only 105 of 151 reviewed facts; 21 of 46 misses still had alias-token recall of at least `0.8`, and
+human review confirmed false negatives for ESC behavior and a Vietnamese protective-cover
+procedure. A separate TBR case exposed the opposite risk: seeing a parameter and `19.2` did not
+prove the unasked relation “default.” **Root cause** -> Fact matching lived inside the E2E
+orchestrator, split clauses at decimal points, treated EN/VI function words as technical evidence,
+and had no bounded semantic adjudication path for valid paraphrases. One reviewed annotation also
+required a default value outside the question's scope. **Fix** -> Isolate deterministic matching in
+`evaluation/facts.py`; version decimal-safe, function-word-tolerant, clause-local matching as v3;
+keep exact numeric/identifier checks authoritative; and add an approval-gated, one-call-per-item
+Luna fallback for unresolved text facts. Preserve deterministic and final verdicts separately in
+schema v13, with no raw evaluation content in artifacts. **Proof** -> Synthetic offline tests cover
+decimal `19.2`, EN/VI function-word variation, reviewed Vietnamese word order, negation,
+relation-negative controls, batched fallback routing, exact verdict IDs, sanitization, approval
+separation, and v12 checkpoint rejection. The local development annotations and manifest were
+revalidated against the frozen corpus. No live Luna result or quality improvement is claimed until
+the separately approved preflight runs. **Commit/artifact** -> E02 implementation pending review;
+future evidence must use a sanitized schema-v13 artifact.
+
 ## Portfolio conclusions
 
 - Correct evaluation labels are as important as the retrieval implementation.

@@ -15,13 +15,16 @@ from app.domain.retrieval import RetrievalCandidate, RetrievalTrace
 from evaluation import dataset as evaluation_dataset
 from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
 from evaluation.e2e import (
-    CLAIM_COMPLETENESS_EVALUATOR_ID,
     aggregate_query_records,
     aggregate_repeated_query_records,
     evaluate_quality_gates,
     retrieval_evidence_fingerprint,
-    score_expected_answer_fact,
     score_query_execution,
+)
+from evaluation.facts import (
+    CLAIM_COMPLETENESS_EVALUATOR_ID,
+    FactJudgeDecision,
+    FactJudgeResult,
 )
 from evaluation.generation_experiments import (
     BASELINE_GENERATION_VARIANT,
@@ -525,178 +528,40 @@ def test_answer_fact_diagnostics_report_ids_without_alias_or_answer_content() ->
     assert "aliases" not in record["answer_fact_results"][0]
 
 
-def test_text_fact_is_order_insensitive_but_strict_phrase_remains_diagnostic() -> None:
-    fact = ExpectedAnswerFact(
-        id="power",
-        aliases=["disconnect all power sources"],
+def test_hybrid_fact_verdict_drives_final_metric_but_preserves_deterministic_metric() -> None:
+    class _Judge:
+        def score(self, *, item_id, question, answer, unresolved_facts):
+            return FactJudgeResult(
+                decisions=tuple(
+                    FactJudgeDecision(fact.id, "present") for fact in unresolved_facts
+                ),
+                latency_ms=10.0,
+            )
+
+    judge = _Judge()
+    answerable = score_query_execution(
+        _item(),
+        _execution(
+            final=[_candidate("qrel")],
+            pool=[_candidate("qrel")],
+            answer="A semantically equivalent response.",
+        ),
+        fact_evaluator_mode="hybrid-luna-v1",
+        fact_judge=judge,
     )
-    result = score_expected_answer_fact(
-        fact, "Before work, all power sources must disconnect safely."
+    unanswerable = score_query_execution(
+        _item(answerable=False),
+        _execution(final=[_candidate("other")], pool=[_candidate("other")], abstained=True),
+        fact_evaluator_mode="hybrid-luna-v1",
+        fact_judge=judge,
     )
-    assert result["deterministic_matched"] is True
-    assert result["strict_phrase_matched"] is False
-    assert result["matcher"] == "text_alias_token_set_v2"
 
-
-def test_typed_numeric_identifier_and_required_token_group_matchers() -> None:
-    numeric = ExpectedAnswerFact(
-        id="voltage",
-        aliases=["24 VDC"],
-        type="numeric_unit",
-        value="24",
-        unit="VDC",
-    )
-    assert score_expected_answer_fact(numeric, "Supply: 24VDC.")[
-        "deterministic_matched"
-    ]
-    decimal = ExpectedAnswerFact(
-        id="decimal-voltage",
-        aliases=["24.0 VDC"],
-        type="numeric_unit",
-        value="24.0",
-        unit="VDC",
-    )
-    assert score_expected_answer_fact(decimal, "Supply: 24,0VDC.")["deterministic_matched"]
-    assert not score_expected_answer_fact(numeric, "Supply: 124 VDC.")[
-        "deterministic_matched"
-    ]
-
-    identifier = ExpectedAnswerFact(
-        id="rating",
-        aliases=["IP65"],
-        type="identifier",
-        acceptable_values=["IP65"],
-    )
-    assert score_expected_answer_fact(identifier, "The enclosure is rated IP65.")[
-        "deterministic_matched"
-    ]
-    assert not score_expected_answer_fact(identifier, "The enclosure is rated IP650.")[
-        "deterministic_matched"
-    ]
-
-    text = ExpectedAnswerFact(
-        id="mounting",
-        aliases=["vertical mounting"],
-        required_token_groups=[["vertical", "upright"], ["mount", "install"]],
-    )
-    result = score_expected_answer_fact(text, "Install the drive in an upright position.")
-    assert result["deterministic_matched"] is True
-    assert result["strict_phrase_matched"] is False
-
-
-@pytest.mark.parametrize(
-    ("expected", "answer"),
-    [
-        ("block", "The guard is blocked."),
-        ("contact", "Inspect all contacts."),
-        ("install", "The unit is installed."),
-        ("secure", "The cover is secured."),
-    ],
-)
-def test_text_fact_accepts_only_bounded_regular_inflections(expected, answer) -> None:
-    fact = ExpectedAnswerFact(id="lexical", aliases=[expected])
-    result = score_expected_answer_fact(fact, answer)
-    assert result["deterministic_matched"] is True
-    assert result["match_mode"] == "inflection"
-
-
-def test_text_inflection_does_not_use_arbitrary_prefix_matching() -> None:
-    fact = ExpectedAnswerFact(id="mode", aliases=["MODE"])
-    assert score_expected_answer_fact(fact, "Select the model.")[
-        "deterministic_matched"
-    ] is False
-
-
-def test_typed_boundaries_reject_identifier_substrings_wrong_value_unit_and_sign() -> None:
-    identifier = ExpectedAnswerFact(
-        id="menu",
-        aliases=["rEF"],
-        type="identifier",
-        acceptable_values=["rEF"],
-    )
-    assert score_expected_answer_fact(identifier, "Open rEF.")["deterministic_matched"]
-    assert not score_expected_answer_fact(identifier, "Open prEFix.")[
-        "deterministic_matched"
-    ]
-
-    voltage = ExpectedAnswerFact(
-        id="voltage",
-        aliases=["24 VDC"],
-        type="numeric_unit",
-        value="24",
-        unit="VDC",
-    )
-    for invalid in ("124 VDC", "24 VAC", "-24 VDC"):
-        assert not score_expected_answer_fact(voltage, invalid)["deterministic_matched"]
-    negative_voltage = ExpectedAnswerFact(
-        id="negative-voltage",
-        aliases=["-24 VDC"],
-        type="numeric_unit",
-        value="-24",
-        unit="VDC",
-    )
-    assert score_expected_answer_fact(negative_voltage, "-24 VDC")["deterministic_matched"]
-    assert not score_expected_answer_fact(negative_voltage, "--24 VDC")[
-        "deterministic_matched"
-    ]
-
-
-def test_multiword_text_alternative_preserves_internal_order() -> None:
-    fact = ExpectedAnswerFact(
-        id="shaft",
-        aliases=["motor shaft"],
-        required_token_groups=[["motor shaft"]],
-    )
-    assert score_expected_answer_fact(fact, "Inspect the motor shaft.")[
-        "deterministic_matched"
-    ]
-    assert not score_expected_answer_fact(fact, "Inspect the shaft motor.")[
-        "deterministic_matched"
-    ]
-
-
-@pytest.mark.parametrize(
-    ("answer", "matched", "polarity"),
-    [
-        ("No hazards remain; protective equipment is installed and closed.", True, "positive"),
-        ("Protective equipment is not installed.", False, "negative"),
-        ("Do not verify that protective equipment is installed.", False, "negative"),
-        ("Not only installed but also closed protective equipment.", True, "positive"),
-        ("It was not installed before; protective equipment is now installed.", True, "positive"),
-        ("Protective equipment is not never installed.", False, "ambiguous"),
-        ("The motor is not energized; protective equipment is installed.", True, "positive"),
-    ],
-)
-def test_span_aware_negation_policy(answer, matched, polarity) -> None:
-    fact = ExpectedAnswerFact(
-        id="guard",
-        aliases=["protective equipment installed"],
-        required_token_groups=[["protective equipment"], ["installed"]],
-    )
-    result = score_expected_answer_fact(fact, answer)
-    assert result["deterministic_matched"] is matched
-    assert result["polarity"] == polarity
-
-
-def test_vietnamese_negation_is_boundary_aware() -> None:
-    fact = ExpectedAnswerFact(
-        id="installation",
-        aliases=["thiết bị lắp đặt"],
-        required_token_groups=[["thiết bị"], ["lắp đặt"]],
-    )
-    result = score_expected_answer_fact(fact, "Thiết bị chưa được lắp đặt.")
-    assert result["deterministic_matched"] is False
-    assert result["polarity"] == "negative"
-
-
-def test_fact_matcher_rejects_plain_negation_even_when_alias_tokens_are_present() -> None:
-    fact = ExpectedAnswerFact(
-        id="disconnect-power",
-        aliases=["disconnect all power"],
-    )
-    result = score_expected_answer_fact(fact, "Do not disconnect all power before electrical work.")
-    assert result["deterministic_matched"] is False
-    assert result["matcher"] == "text_alias_token_set_v2_negation_guard_v2"
+    metrics = aggregate_query_records([answerable, unanswerable])
+    assert metrics["answer_quality"]["deterministic_fact_accuracy_when_answered"] == 0.0
+    assert metrics["answer_quality"]["final_fact_accuracy_when_answered"] == 1.0
+    assert metrics["answer_quality"]["fact_judge"]["invocation_count"] == 1
+    assert metrics["answer_quality"]["fact_judge"]["present_count"] == 1
+    assert evaluate_quality_gates(metrics)["gates"]["fact_accuracy"]["passed"] is True
 
 
 def test_document_contamination_metrics_and_gate_are_explicit() -> None:
@@ -944,7 +809,7 @@ def test_document_alternative_metadata_cannot_exempt_unrelated_wrong_provenance(
     assert record["wrong_document_retrieval_at_1_excluding_exact_equivalents"] is True
 
 
-def test_v12_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
+def test_v13_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -956,13 +821,13 @@ def test_v12_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -
         ],
     )
     args = evaluate_e2e._parse_args()
-    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 12
+    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 13
     assert args.generation_variant == BASELINE_GENERATION_VARIANT
     assert args.repeat_count == 1
-    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v12.json"
+    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v13.json"
     assert (
         args.checkpoint.name
-        == "atv320-calibration-baseline-v1-r1-e2e-v12-checkpoint.jsonl"
+        == "atv320-calibration-baseline-v1-r1-e2e-v13-checkpoint.jsonl"
     )
     assert args.semantic_judge == "none"
     settings = evaluate_e2e._runtime_settings(evaluate_e2e.Settings())
@@ -987,10 +852,10 @@ def test_heldout_v2_cli_uses_private_sealed_paths(monkeypatch) -> None:
 
     assert args.heldout_v2 == evaluate_e2e.PRIVATE_HELDOUT_DATASET_PATH
     assert args.manifest == evaluate_e2e.PRIVATE_HELDOUT_MANIFEST_PATH
-    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v12.json"
+    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v13.json"
     assert (
         args.checkpoint.name
-        == "atv320-heldout-v2-baseline-v1-r1-e2e-v12-checkpoint.jsonl"
+        == "atv320-heldout-v2-baseline-v1-r1-e2e-v13-checkpoint.jsonl"
     )
 
 
@@ -1021,10 +886,10 @@ def test_optimization_cli_uses_versioned_and_sealed_defaults(
 
     assert args.manifest == expected_manifest
     assert getattr(args, dataset) == expected_dataset
-    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v12.json"
+    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v13.json"
     assert (
         args.checkpoint.name
-        == f"atv320-{dataset}-baseline-v1-r1-e2e-v12-checkpoint.jsonl"
+        == f"atv320-{dataset}-baseline-v1-r1-e2e-v13-checkpoint.jsonl"
     )
 
 
@@ -1047,10 +912,10 @@ def test_development_cli_selects_claim_variant_and_repeat_schedule(monkeypatch) 
     args = evaluate_e2e._parse_args()
 
     assert args.output.name == (
-        "atv320-development-claim-coverage-v1-r3-e2e-v12.json"
+        "atv320-development-claim-coverage-v1-r3-e2e-v13.json"
     )
     assert args.checkpoint.name == (
-        "atv320-development-claim-coverage-v1-r3-e2e-v12-checkpoint.jsonl"
+        "atv320-development-claim-coverage-v1-r3-e2e-v13-checkpoint.jsonl"
     )
 
 
@@ -1227,6 +1092,55 @@ def test_provider_execution_requires_dataset_specific_approval() -> None:
     )
 
 
+def test_hybrid_fact_judge_requires_independent_dataset_approval_and_key() -> None:
+    disabled = SimpleNamespace(
+        dataset="development",
+        fact_evaluator="deterministic-v3",
+        fact_judge_approval_token=None,
+    )
+    evaluate_e2e._validate_fact_judge_approval(disabled, environ={})
+
+    with pytest.raises(SystemExit, match="disabled"):
+        evaluate_e2e._validate_fact_judge_approval(
+            SimpleNamespace(
+                dataset="development",
+                fact_evaluator="deterministic-v3",
+                fact_judge_approval_token="unexpected",
+            ),
+            environ={},
+        )
+
+    hybrid = SimpleNamespace(
+        dataset="development",
+        fact_evaluator="hybrid-luna-v1",
+        fact_judge_approval_token=evaluate_e2e.DEVELOPMENT_FACT_JUDGE_APPROVAL_TOKEN,
+    )
+    with pytest.raises(SystemExit, match="OPENROUTER_API_KEY"):
+        evaluate_e2e._validate_fact_judge_approval(hybrid, environ={})
+    evaluate_e2e._validate_fact_judge_approval(
+        hybrid, environ={"OPENROUTER_API_KEY": "test-only"}
+    )
+
+
+def test_fact_evaluator_identity_change_invalidates_v12_checkpoint(tmp_path) -> None:
+    checkpoint = tmp_path / "v12-checkpoint.jsonl"
+    evaluate_e2e._write_checkpoint(
+        checkpoint,
+        {
+            "artifact_schema_version": 12,
+            "source_identity": {"version": 8},
+        },
+        [],
+    )
+
+    with pytest.raises(RuntimeError, match="different frozen run"):
+        evaluate_e2e._load_checkpoint(
+            checkpoint,
+            {
+                "artifact_schema_version": 13,
+                "source_identity": {"version": 9},
+            },
+        )
 def test_targeted_development_review_requires_its_narrow_approval() -> None:
     args = SimpleNamespace(
         dataset="development",

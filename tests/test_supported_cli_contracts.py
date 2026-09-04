@@ -30,6 +30,8 @@ SUPPORTED_CLI_OPTIONS = [
             "--provider-approval-token",
             "--semantic-judge",
             "--judge-provider-approval-token",
+            "--fact-evaluator",
+            "--fact-judge-approval-token",
             "--max-queries",
             "--item-id",
             "--review-item-id",

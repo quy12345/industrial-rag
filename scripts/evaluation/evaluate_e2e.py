@@ -42,10 +42,19 @@ from evaluation.dataset import (
 )
 from evaluation.development_review import build_live_development_review
 from evaluation.e2e import (
-    CLAIM_COMPLETENESS_EVALUATOR_ID,
-    FACT_EVALUATOR_ID,
     aggregate_repeated_query_records,
     score_query_execution,
+)
+from evaluation.facts import (
+    CLAIM_COMPLETENESS_EVALUATOR_ID,
+    DETERMINISTIC_FACT_EVALUATOR,
+    FACT_EVALUATOR_ID,
+    FACT_EVALUATOR_MODES,
+    HYBRID_FACT_EVALUATOR,
+    FactJudge,
+    FactJudgeError,
+    OpenRouterLunaFactJudge,
+    fact_evaluator_run_identity,
 )
 from evaluation.generation_experiments import (
     BASELINE_GENERATION_VARIANT,
@@ -79,6 +88,16 @@ CALIBRATION_SEMANTIC_APPROVAL_TOKEN = (
 HELDOUT_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
 DEVELOPMENT_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS EGRESS"
 CONFIRMATION_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 CONFIRMATION OPENROUTER RAGAS EGRESS"
+CALIBRATION_FACT_JUDGE_APPROVAL_TOKEN = (
+    "APPROVE ATV320 CALIBRATION OPENROUTER FACT JUDGE EGRESS"
+)
+DEVELOPMENT_FACT_JUDGE_APPROVAL_TOKEN = (
+    "APPROVE ATV320 DEVELOPMENT OPENROUTER FACT JUDGE EGRESS"
+)
+CONFIRMATION_FACT_JUDGE_APPROVAL_TOKEN = (
+    "APPROVE ATV320 CONFIRMATION OPENROUTER FACT JUDGE EGRESS"
+)
+HELDOUT_FACT_JUDGE_APPROVAL_TOKEN = "APPROVE ATV320 HELDOUT OPENROUTER FACT JUDGE EGRESS"
 ACTIVE_CALIBRATION_PATH = Path("data/eval/phase7/calibration-v3.jsonl")
 ACTIVE_MANIFEST_PATH = Path("artifacts/metrics/phase-7-evaluation-manifest-v3.json")
 ACTIVE_DEVELOPMENT_PATH = Path("data/eval/atv320/development-v1.jsonl")
@@ -91,8 +110,8 @@ PRIVATE_CONFIRMATION_MANIFEST_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v
 PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
-ARTIFACT_SCHEMA_VERSION = 12
-SOURCE_IDENTITY_VERSION = 8
+ARTIFACT_SCHEMA_VERSION = 13
+SOURCE_IDENTITY_VERSION = 9
 SOURCE_IDENTITY_PATHS = {
     "citation_policy": Path("app/domain/citations.py"),
     "content_identity": Path("app/domain/content_identity.py"),
@@ -100,6 +119,7 @@ SOURCE_IDENTITY_PATHS = {
     "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
     "development_review": Path("evaluation/development_review.py"),
     "evaluator": Path("evaluation/e2e.py"),
+    "fact_evaluator": Path("evaluation/facts.py"),
     "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "evidence_policy": Path("app/domain/evidence.py"),
     "fusion_policy": Path("app/domain/policies/fusion.py"),
@@ -153,6 +173,8 @@ def main() -> int:
     settings = _runtime_settings(Settings())
     _validate_semantic_approval(args)
     semantic_judge = _build_semantic_judge(args)
+    _validate_fact_judge_approval(args)
+    fact_judge = _build_fact_judge(args)
 
     from app.composition.retrieval import (
         LazyQueryRetriever,
@@ -210,6 +232,7 @@ def main() -> int:
             "ordering": "repeat-major-dataset-order",
         },
         "semantic_evaluation": semantic_run_identity(args.semantic_judge),
+        "fact_evaluation": fact_evaluator_run_identity(args.fact_evaluator),
         "source_identity": _source_identity(experiment),
         "runtime_profile": _runtime_profile(),
         "libraries": _library_versions(semantic_mode=args.semantic_judge),
@@ -242,6 +265,8 @@ def main() -> int:
                 item,
                 execution,
                 exact_content_equivalence=exact_content_equivalence,
+                fact_evaluator_mode=args.fact_evaluator,
+                fact_judge=fact_judge,
             )
             record["repeat_index"] = repeat_index
             if semantic_judge is not None:
@@ -251,7 +276,7 @@ def main() -> int:
                     judge=semantic_judge,
                     max_context_chars=settings.generation_max_context_chars,
                 ).to_payload()
-        except SemanticJudgeError as exc:
+        except (SemanticJudgeError, FactJudgeError) as exc:
             _write_checkpoint(args.checkpoint, identity, records)
             raise RuntimeError(str(exc)) from None
         except Exception as exc:
@@ -299,8 +324,13 @@ def main() -> int:
         "semantic_evaluation": semantic_evaluation,
         "quality_gates": quality_gates,
         "evaluation_methodology": {
-            "headline_answer_metric": "deterministic_fact_accuracy_when_answered",
+            "headline_answer_metric": (
+                "final_fact_accuracy_when_answered"
+                if args.fact_evaluator == HYBRID_FACT_EVALUATOR
+                else "deterministic_fact_accuracy_when_answered"
+            ),
             "fact_evaluator_id": FACT_EVALUATOR_ID,
+            "fact_evaluator_mode": args.fact_evaluator,
             "claim_completeness_evaluator_id": CLAIM_COMPLETENESS_EVALUATOR_ID,
             "generation_variant": experiment.identifier,
             "repeat_schedule": "repeat-major-dataset-order",
@@ -391,6 +421,17 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Separate exact approval for OpenRouter semantic-judge egress.",
     )
+    parser.add_argument(
+        "--fact-evaluator",
+        choices=FACT_EVALUATOR_MODES,
+        default=DETERMINISTIC_FACT_EVALUATOR,
+        help="Fact scoring mode; the default deterministic evaluator never calls a provider.",
+    )
+    parser.add_argument(
+        "--fact-judge-approval-token",
+        default=None,
+        help="Separate exact approval for OpenRouter Luna fact-judge egress.",
+    )
     parser.add_argument("--max-queries", type=int, default=None)
     parser.add_argument(
         "--item-id",
@@ -445,6 +486,8 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--repeat-count 3 requires the complete development dataset")
     if args.repeat_count == 3 and args.semantic_judge != "none":
         parser.error("Semantic evaluation cannot be combined with repeated generation runs")
+    if args.repeat_count == 3 and args.fact_evaluator == HYBRID_FACT_EVALUATOR:
+        parser.error("Hybrid fact evaluation cannot be combined with repeated generation runs")
     if args.dataset in {"confirmation", "heldout-v2"} and args.max_queries is not None:
         parser.error("--max-queries is not permitted for sealed evaluation datasets")
     if (
@@ -533,6 +576,45 @@ def _build_semantic_judge(
             "OPENROUTER_API_KEY is required for Ragas semantic evaluation."
         )
     return RagasSemanticJudge(api_key=api_key)
+
+
+def _validate_fact_judge_approval(
+    args: argparse.Namespace,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    if args.fact_evaluator == DETERMINISTIC_FACT_EVALUATOR:
+        if args.fact_judge_approval_token is not None:
+            raise SystemExit(
+                "Fact-judge approval token was supplied while hybrid evaluation is disabled."
+            )
+        return
+    expected = {
+        "calibration": CALIBRATION_FACT_JUDGE_APPROVAL_TOKEN,
+        "development": DEVELOPMENT_FACT_JUDGE_APPROVAL_TOKEN,
+        "confirmation": CONFIRMATION_FACT_JUDGE_APPROVAL_TOKEN,
+        "test": HELDOUT_FACT_JUDGE_APPROVAL_TOKEN,
+        "heldout-v2": HELDOUT_FACT_JUDGE_APPROVAL_TOKEN,
+    }[args.dataset]
+    if args.fact_judge_approval_token != expected:
+        raise SystemExit(
+            "OpenRouter fact-judge approval token is missing or invalid for this dataset."
+        )
+    if _openrouter_api_key(environ) is None:
+        raise SystemExit("OPENROUTER_API_KEY is required for hybrid fact evaluation.")
+
+
+def _build_fact_judge(
+    args: argparse.Namespace,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> FactJudge | None:
+    if args.fact_evaluator == DETERMINISTIC_FACT_EVALUATOR:
+        return None
+    api_key = _openrouter_api_key(environ)
+    if api_key is None:
+        raise FactJudgeError(item_id="configuration", category="missing_api_key")
+    return OpenRouterLunaFactJudge(api_key=api_key)
 
 
 def _openrouter_api_key(environ: Mapping[str, str] | None = None) -> str | None:

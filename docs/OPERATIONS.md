@@ -105,7 +105,7 @@ answerable qrels, expected documents, pages, phrases, and the frozen corpus as i
 legacy suite.
 
 Use opaque lowercase item IDs, `fact_family_id` values, and expected-fact IDs (letters, digits, `.`,
-`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v12 rows retain
+`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v13 rows retain
 these IDs so later paired and clustered comparisons can group translations/paraphrases and diagnose
 fact outcomes without persisting the underlying question or expected fact.
 
@@ -182,13 +182,13 @@ Sealed held-out v2 likewise rejects `--item-id` and `--max-queries`; checkpoint 
 supported way to continue an interrupted full sealed run.
 
 Optimization E2E is also provider- and cost-bearing. After the datasets, manifests, and egress have
-been explicitly approved, use the dataset-specific generator token below; add the independent
-semantic token only when `--semantic-judge ragas` is requested.
+been explicitly approved, use the dataset-specific generator token below. Semantic and hybrid
+fact judging each require their own independent token.
 
-| Dataset | Generator approval token | Optional semantic approval token |
-| --- | --- | --- |
-| development | `APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS` | `APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS EGRESS` |
-| confirmation | `APPROVE ATV320 CONFIRMATION GENERATOR EGRESS` | `APPROVE ATV320 CONFIRMATION OPENROUTER RAGAS EGRESS` |
+| Dataset | Generator approval token | Optional semantic approval token | Optional fact-judge token |
+| --- | --- | --- | --- |
+| development | `APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS` | `APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS EGRESS` | `APPROVE ATV320 DEVELOPMENT OPENROUTER FACT JUDGE EGRESS` |
+| confirmation | `APPROVE ATV320 CONFIRMATION GENERATOR EGRESS` | `APPROVE ATV320 CONFIRMATION OPENROUTER RAGAS EGRESS` | `APPROVE ATV320 CONFIRMATION OPENROUTER FACT JUDGE EGRESS` |
 
 ```powershell
 # Inspectable development run; --item-id is allowed only for a sanitized diagnostic.
@@ -239,14 +239,14 @@ checkpoint must be an exact prefix of the same dataset order and must match the 
 count, schema, source identity, resolved evidence `top_k`/gate, context/citation limits, and other
 run identity fields. Repeated metrics are reported per run rather than pooled across all records.
 
-Schema-v12 default paths encode the full experiment identity:
+Schema-v13 default paths encode the full experiment identity:
 
 | Variant and repeats | Artifact | Checkpoint |
 | --- | --- | --- |
-| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v12.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v12-checkpoint.jsonl` |
-| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v12.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v12-checkpoint.jsonl` |
-| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v12.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v12-checkpoint.jsonl` |
-| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v12.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v12-checkpoint.jsonl` |
+| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v13.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v13-checkpoint.jsonl` |
+| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v13.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v13-checkpoint.jsonl` |
+| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v13.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v13-checkpoint.jsonl` |
+| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v13.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v13-checkpoint.jsonl` |
 
 These switches exist only in the evaluation CLI. They do not change the production composition
 root, FastAPI request/response schema, evidence gate, citation validation, or default generator
@@ -315,10 +315,10 @@ Python 3.11 before running:
 to remain under `data/eval/phase7/private-heldout-v2/`, then validates their hash, the frozen corpus,
 collection identities, runtime source identity, and configured provider before completing.
 
-The current evaluator declares artifact schema v12. If the command above is approved and executed,
+The current evaluator declares artifact schema v13. If the command above is approved and executed,
 its default paths are
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v12-checkpoint.jsonl` and
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v12.json`. V12 records a sanitized
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v13-checkpoint.jsonl` and
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v13.json`. V13 records a sanitized
 retrieval trace because the E2E adapter explicitly opts in; production builders default to
 `capture_trace=False` and the production bootstrap does not opt in. The artifact includes stage
 counts, IDs, ranks, and allowlisted role signals, but still excludes raw questions, evidence,
@@ -328,9 +328,45 @@ are persisted.
 
 Schema availability is not execution evidence. The latest executed held-out result remains the v8
 checkpoint at `artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and final artifact at
-`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9-v12 held-out run is claimed.
-Existing v7 and v8 evidence remain immutable. A v11-or-earlier checkpoint cannot resume under
-schema v12/source identity v8. Never use any held-out result to tune the current runtime.
+`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9-v13 held-out run is claimed.
+Existing v7 and v8 evidence remain immutable. A v12-or-earlier checkpoint cannot resume under
+schema v13/source identity v9. Never use any held-out result to tune the current runtime.
+
+## Optional hybrid fact evaluation
+
+The default `--fact-evaluator deterministic-v3` is offline. It matches exact numeric/unit and
+identifier facts, then applies reviewed clause-local text alternatives with decimal-safe splitting,
+bounded English inflections, EN/VI function-word tolerance, and negation guards. Its result is both
+the deterministic and final verdict.
+
+`--fact-evaluator hybrid-luna-v1` keeps deterministic positives, sends all unresolved text facts
+for one item in a single request to OpenRouter model `openai/gpt-5.6-luna`, and treats exact
+numeric/identifier misses as authoritative failures. The judge receives only the question, generated
+answer, and reviewed unresolved fact contracts—never retrieved evidence. It must return exactly one
+`present`, `absent`, or `contradicted` verdict per requested fact ID. Missing, duplicate, extra,
+or invalid verdicts stop the run without checkpointing the incomplete item.
+
+The route is pinned to OpenAI upstream with provider fallback disabled, low reasoning,
+`store=false`, a 60-second timeout, and one retry. Set `OPENROUTER_API_KEY` only in the untracked
+`.env`. A development preflight additionally requires both independent approvals:
+
+```powershell
+docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --max-queries 5 `
+  --fact-evaluator hybrid-luna-v1 `
+  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS" `
+  --fact-judge-approval-token "APPROVE ATV320 DEVELOPMENT OPENROUTER FACT JUDGE EGRESS" `
+  --checkpoint artifacts/metrics/atv320-fact-judge-development-preflight-checkpoint.jsonl `
+  --output artifacts/metrics/atv320-fact-judge-development-preflight.json
+```
+
+Do not run this command until the named items, egress, model, and cost have fresh approval. Generator,
+Ragas, and fact-judge tokens are non-interchangeable. Schema-v13 artifacts persist only fact IDs,
+deterministic/final outcomes, resolution, verdict categories, counts, and latency. They exclude
+question, answer, aliases, judge reasoning, provider bodies, and keys. Deterministic and final
+accuracy are reported separately; the unchanged `0.85` quality gate uses final accuracy only in
+hybrid mode. Hybrid evaluation cannot be combined with a three-repeat generation run.
 
 ## Optional Ragas semantic evaluation
 
@@ -394,7 +430,7 @@ run shown above:
 --judge-provider-approval-token "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
 ```
 
-Schema-v12 checkpoints fail closed if the schema, source identity, endpoint profile, generation
+Schema-v13 checkpoints fail closed if the schema, source identity, endpoint profile, generation
 model, generation variant, repeat
 schedule, judge model, embedding model,
 metric configuration, or input policy differs. Only a fully answered item with all three finite
