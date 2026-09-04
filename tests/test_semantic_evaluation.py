@@ -1,104 +1,106 @@
-"""Offline contracts for optional Ragas semantic evaluation."""
+"""Offline contracts for the Ragas scorecard adapter and input policy."""
 
 from __future__ import annotations
 
 import asyncio
-import inspect
-import json
 from types import SimpleNamespace
 
 import pytest
 
-from app.application.generation_prompt import format_evidence
 from app.application.query_service import QueryExecution, QueryTimings
 from app.contracts.query import Citation, QueryResponse
 from app.domain.retrieval import RetrievalCandidate
 from evaluation.dataset import EvaluationItem
 from evaluation.semantic import (
-    RagasSemanticJudge,
-    SemanticConfigurationError,
-    SemanticEvaluationInput,
+    MetricScore,
+    RagasEvaluationInput,
+    RagasScorecardJudge,
+    RagasScores,
     SemanticJudgeError,
-    SemanticScores,
     _configure_openrouter_llm,
     _OpenRouterEmbeddingClient,
-    aggregate_semantic_records,
+    render_reviewed_reference,
     semantic_run_identity,
 )
 from scripts.evaluation import evaluate_e2e
 
 
-class FakeSemanticJudge:
-    def __init__(self) -> None:
-        self.inputs: list[SemanticEvaluationInput] = []
-
-    def score(self, evaluation_input: SemanticEvaluationInput) -> SemanticScores:
-        self.inputs.append(evaluation_input)
-        return SemanticScores(
-            status="complete",
-            faithfulness=0.9,
-            answer_relevancy=0.8,
-            context_precision=0.7,
-            judge_latency_ms=12.5,
+def _item(*, answerable: bool = True) -> EvaluationItem:
+    if not answerable:
+        return EvaluationItem(
+            id="u1",
+            question="Unknown?",
+            language="en",
+            answerable=False,
+            scenario="en_to_en",
+            question_type="unanswerable",
+            expected_document_ids=[],
+            relevant_chunk_ids=[],
+            expected_pages=[],
+            expected_phrases=[],
+            citation_required=False,
+            unanswerable_reason="Absent.",
+            review_status="approved",
         )
+    return EvaluationItem(
+        id="a1",
+        question="Question?",
+        language="en",
+        answerable=True,
+        scenario="en_to_en",
+        question_type="safety",
+        expected_document_ids=["manual"],
+        relevant_chunk_ids=["c1"],
+        expected_pages=[1],
+        expected_phrases=["canonical"],
+        expected_answer_facts=[
+            {"id": "f1", "aliases": ["canonical one", "alternative one"]},
+            {
+                "id": "f2",
+                "aliases": ["canonical two"],
+                "required_token_groups": [["secret"]],
+            },
+        ],
+        citation_required=True,
+        review_status="approved",
+    )
 
 
 def _candidate(chunk_id: str, text: str) -> RetrievalCandidate:
     return RetrievalCandidate(
         chunk_id=chunk_id,
-        document_id="installation",
+        document_id="manual",
         filename="manual.pdf",
         text=text,
-        page_numbers=[7],
-        headings=["Parameters"],
+        page_numbers=[1],
+        headings=["Safety"],
         content_type="text",
-        score=1.0,
+        score=1,
     )
 
 
-def _item(*, item_id: str = "semantic-item", answerable: bool = True) -> EvaluationItem:
-    return EvaluationItem(
-        id=item_id,
-        question="SENTINEL_QUESTION",
-        language="en",
-        answerable=answerable,
-        scenario="en_to_en",
-        question_type="parameter_code" if answerable else "unanswerable",
-        expected_document_ids=["installation"] if answerable else [],
-        relevant_chunk_ids=["chunk-1"] if answerable else [],
-        expected_pages=[7] if answerable else [],
-        expected_phrases=["range"] if answerable else [],
-        expected_answer_facts=(
-            [{"id": "range", "aliases": ["documented range"]}]
-            if answerable
-            else []
-        ),
-        citation_required=answerable,
-        unanswerable_reason=None if answerable else "Verified absent.",
-        review_status="approved",
-    )
-
-
-def _execution(*, abstained: bool = False) -> QueryExecution:
+def _execution(
+    *, abstained: bool = False, citation_id: str = "c1", context_chars: int = 20
+) -> QueryExecution:
     candidates = (
-        _candidate("chunk-1", "SENTINEL_CONTEXT_ONE"),
-        _candidate("chunk-2", "SENTINEL_CONTEXT_TWO"),
+        _candidate("c1", "CITED_FULL_TEXT"),
+        _candidate("c2", "UNCITED_SENTINEL"),
     )
     citations = []
     if not abstained:
         citations = [
             Citation(
-                chunk_id="chunk-1",
-                document_id="installation",
+                chunk_id=citation_id,
+                document_id="manual",
                 filename="manual.pdf",
-                page_numbers=[7],
-                headings=["Parameters"],
-                excerpt="sanitized excerpt",
+                page_numbers=[1],
+                headings=["Safety"],
+                excerpt="short",
             )
         ]
     return QueryExecution(
         response=QueryResponse(
-            answer="SENTINEL_ANSWER" if not abstained else "insufficient",
+            answer="answer",
             abstained=abstained,
             abstention_reason="llm_insufficient_evidence" if abstained else None,
             citations=citations,
@@ -108,277 +110,151 @@ def _execution(*, abstained: bool = False) -> QueryExecution:
         candidates=candidates,
         candidate_pool=candidates,
         evidence_candidates=candidates,
+        evidence_context_chars=context_chars,
     )
 
 
-def test_fake_judge_receives_exact_generation_evidence_and_ranked_contexts() -> None:
-    judge = FakeSemanticJudge()
-    execution = _execution()
+class FakeJudge:
+    def __init__(self) -> None:
+        self.calls: list[tuple[RagasEvaluationInput, dict[str, bool]]] = []
 
-    scores = evaluate_e2e._score_semantic_execution(
-        _item(answerable=False),
-        execution,
-        judge=judge,
-        max_context_chars=24_000,
-    )
-
-    expected_evidence = format_evidence(
-        execution.evidence_candidates, max_chars=24_000
-    ).text
-    assert scores.status == "complete"
-    assert len(judge.inputs) == 1
-    assert judge.inputs[0].rendered_generation_evidence == expected_evidence
-    assert judge.inputs[0].ranked_final_contexts == (
-        "SENTINEL_CONTEXT_ONE",
-        "SENTINEL_CONTEXT_TWO",
-    )
+    def score(self, evaluation_input: RagasEvaluationInput, **flags: bool) -> RagasScores:
+        self.calls.append((evaluation_input, flags))
+        metric = MetricScore("complete", 0.75, 1)
+        na = MetricScore.not_applicable()
+        return RagasScores(
+            metric if flags["score_factual_correctness"] else na,
+            metric if flags["score_faithfulness"] else na,
+            metric if flags["score_context_recall"] else na,
+            metric if flags["include_diagnostics"] else na,
+            metric if flags["include_diagnostics"] else na,
+        )
 
 
-def test_abstention_is_not_applicable_and_never_invokes_judge() -> None:
-    judge = FakeSemanticJudge()
+def test_reference_uses_only_first_alias_in_dataset_order() -> None:
+    reference = render_reviewed_reference(_item())
 
-    scores = evaluate_e2e._score_semantic_execution(
+    assert reference == "- canonical one\n- canonical two"
+    assert "alternative" not in reference
+    assert "secret" not in reference
+
+
+def test_answered_mapping_sends_only_cited_full_context_and_bounded_evidence() -> None:
+    judge = FakeJudge()
+    evaluate_e2e._score_execution(
         _item(),
-        _execution(abstained=True),
+        _execution(),
         judge=judge,
-        max_context_chars=24_000,
+        include_diagnostics=False,
+        max_context_chars=4_000,
     )
 
-    assert scores.to_payload() == {
-        "status": "not_applicable_abstained",
-        "faithfulness": None,
-        "answer_relevancy": None,
-        "context_precision": None,
-        "judge_latency_ms": 0.0,
-        "error_category": None,
-    }
-    assert judge.inputs == []
-
-
-def test_semantic_aggregate_uses_eligible_denominators_and_breakdowns() -> None:
-    complete_en = {
-        "language": "en",
-        "answerable": True,
-        "semantic_evaluation": SemanticScores(
-            "complete", 1.0, 0.8, 0.6, 10.0
-        ).to_payload(),
-    }
-    complete_vi = {
-        "language": "vi",
-        "answerable": True,
-        "semantic_evaluation": SemanticScores(
-            "complete", 0.5, 0.4, 1.0, 20.0
-        ).to_payload(),
-    }
-    abstained_vi = {
-        "language": "vi",
-        "answerable": False,
-        "semantic_evaluation": SemanticScores.not_applicable_abstained().to_payload(),
+    inputs, flags = judge.calls[0]
+    assert inputs.cited_contexts == ("CITED_FULL_TEXT",)
+    assert "UNCITED_SENTINEL" not in inputs.cited_contexts
+    assert "CITED_FULL_TEXT" in inputs.generation_context
+    assert "UNCITED_SENTINEL" in inputs.generation_context
+    assert inputs.final_contexts == ("CITED_FULL_TEXT", "UNCITED_SENTINEL")
+    assert flags == {
+        "score_factual_correctness": True,
+        "score_faithfulness": True,
+        "score_context_recall": True,
+        "include_diagnostics": False,
     }
 
-    aggregate = aggregate_semantic_records([complete_en, complete_vi, abstained_vi])
 
-    assert aggregate["eligible_count"] == 2
-    assert aggregate["excluded_count"] == 1
-    assert aggregate["failed_count"] == 0
-    assert aggregate["metric_invocation_count"] == 6
-    assert aggregate["metrics"]["faithfulness"] == {
-        "count": 2,
-        "mean": 0.75,
-        "median": 0.75,
-    }
-    assert aggregate["per_language"]["vi"]["eligible_count"] == 1
-    assert aggregate["per_answerability"]["unanswerable"]["excluded_count"] == 1
-
-
-def test_semantic_identity_is_deterministic_and_checkpoint_mode_fails_closed(tmp_path) -> None:
-    first = semantic_run_identity("ragas")
-    second = semantic_run_identity("ragas")
-    assert first == second
-    assert len(first["metric_configuration_sha256"]) == 64
-
-    checkpoint = tmp_path / "semantic-checkpoint.jsonl"
-    evaluate_e2e._write_checkpoint(
-        checkpoint, {"semantic_evaluation": semantic_run_identity("none")}, []
-    )
-    with pytest.raises(RuntimeError, match="different frozen run"):
-        evaluate_e2e._load_checkpoint(
-            checkpoint, {"semantic_evaluation": semantic_run_identity("ragas")}
-        )
-
-
-def test_semantic_approval_is_separate_and_requires_openrouter_key() -> None:
-    ragas_args = SimpleNamespace(
-        dataset="calibration",
-        semantic_judge="ragas",
-        judge_provider_approval_token=evaluate_e2e.CALIBRATION_SEMANTIC_APPROVAL_TOKEN,
-    )
-    with pytest.raises(SystemExit, match="OPENROUTER_API_KEY"):
-        evaluate_e2e._validate_semantic_approval(
-            ragas_args, environ={"OPENAI_API_KEY": "wrong-provider-key"}
-        )
-
-    openrouter_environment = {"OPENROUTER_API_KEY": "test-openrouter-key"}
-    evaluate_e2e._validate_semantic_approval(
-        ragas_args, environ=openrouter_environment
-    )
-    with pytest.raises(SystemExit, match="missing or invalid"):
-        evaluate_e2e._validate_semantic_approval(
-            SimpleNamespace(
-                dataset="heldout-v2",
-                semantic_judge="ragas",
-                judge_provider_approval_token=(
-                    evaluate_e2e.CALIBRATION_SEMANTIC_APPROVAL_TOKEN
-                ),
-            ),
-            environ=openrouter_environment,
-        )
-
-
-def test_semantic_mode_off_does_not_construct_optional_judge(monkeypatch) -> None:
-    monkeypatch.setattr(
-        evaluate_e2e,
-        "RagasSemanticJudge",
-        lambda **kwargs: pytest.fail("semantic dependency was initialized"),
-    )
-    judge = evaluate_e2e._build_semantic_judge(
-        SimpleNamespace(semantic_judge="none"), environ={}
-    )
-    assert judge is None
-
-
-def test_semantic_judge_uses_only_the_explicit_openrouter_key(monkeypatch) -> None:
-    captured: dict[str, str] = {}
-
-    def fake_judge(*, api_key: str):
-        captured["api_key"] = api_key
-        return "semantic-judge"
-
-    monkeypatch.setattr(evaluate_e2e, "RagasSemanticJudge", fake_judge)
-
-    judge = evaluate_e2e._build_semantic_judge(
-        SimpleNamespace(semantic_judge="ragas"),
-        environ={
-            "OPENROUTER_API_KEY": "test-openrouter-key",
-            "OPENAI_API_KEY": "must-not-be-used",
-        },
+@pytest.mark.parametrize(
+    ("answerable", "abstained", "expected_calls", "expected_recall"),
+    [
+        (True, False, 1, 0.75),
+        (True, True, 1, 0.75),
+        (False, False, 0, None),
+        (False, True, 0, None),
+    ],
+)
+def test_applicability_matrix(
+    answerable: bool,
+    abstained: bool,
+    expected_calls: int,
+    expected_recall: float | None,
+) -> None:
+    judge = FakeJudge()
+    scores = evaluate_e2e._score_execution(
+        _item(answerable=answerable),
+        _execution(abstained=abstained),
+        judge=judge,
+        include_diagnostics=False,
+        max_context_chars=4_000,
     )
 
-    assert judge == "semantic-judge"
-    assert captured == {"api_key": "test-openrouter-key"}
+    assert len(judge.calls) == expected_calls
+    assert scores.context_recall.score == expected_recall
+    if answerable and abstained:
+        assert scores.factual_correctness.status == "not_applicable"
 
 
-def test_openrouter_identity_and_llm_arguments_are_frozen() -> None:
-    identity = semantic_run_identity("ragas")
-    assert identity["provider"] == "openrouter"
-    assert identity["base_url"] == "https://openrouter.ai/api/v1"
-    assert identity["upstream_provider"] == "openai"
-    assert identity["provider_fallbacks"] is False
-    assert identity["require_parameters"] is True
-    assert identity["judge_model"] == "openai/gpt-5.6-luna"
-    assert identity["embedding_model"] == "openai/text-embedding-3-small"
-
-    llm = SimpleNamespace(
-        model_args={
-            "max_tokens": 1024,
-            "temperature": 0.01,
-            "top_p": 0.1,
-            "reasoning_effort": "medium",
-        }
+def test_empty_context_is_zero_without_judge_call() -> None:
+    judge = FakeJudge()
+    scores = evaluate_e2e._score_execution(
+        _item(),
+        _execution(abstained=True, context_chars=0),
+        judge=judge,
+        include_diagnostics=False,
+        max_context_chars=4_000,
     )
+
+    assert judge.calls == []
+    assert scores.context_recall == MetricScore.deterministic_zero("empty_context")
+
+
+def test_invalid_citation_skips_faithfulness_and_records_zero() -> None:
+    judge = FakeJudge()
+    scores = evaluate_e2e._score_execution(
+        _item(),
+        _execution(citation_id="unknown"),
+        judge=judge,
+        include_diagnostics=False,
+        max_context_chars=4_000,
+    )
+
+    assert judge.calls[0][1]["score_faithfulness"] is False
+    assert scores.faithfulness == MetricScore.deterministic_zero("invalid_citations")
+
+
+def test_semantic_identity_is_deterministic_and_embedding_is_diagnostic_only() -> None:
+    core = semantic_run_identity(include_diagnostics=False)
+    diagnostics = semantic_run_identity(include_diagnostics=True)
+
+    assert core == semantic_run_identity(include_diagnostics=False)
+    assert core["embedding_model"] is None
+    assert diagnostics["embedding_model"] == "openai/text-embedding-3-small"
+    assert core["configuration_sha256"] != diagnostics["configuration_sha256"]
+
+
+def test_invalid_provider_result_is_sanitized() -> None:
+    sentinel = "DO_NOT_EXPOSE_RAW_PAYLOAD"
+
+    class Metric:
+        def score(self, **_):
+            raise RuntimeError(sentinel)
+
+    with pytest.raises(SemanticJudgeError) as captured:
+        RagasScorecardJudge._score_metric("safe-id", "faithfulness", Metric())
+
+    assert str(captured.value) == "Ragas judge failed for item safe-id, metric faithfulness."
+    assert sentinel not in str(captured.value)
+
+
+def test_openrouter_llm_and_embedding_routing_are_fail_closed() -> None:
+    llm = SimpleNamespace(model_args={"temperature": 0, "max_completion_tokens": 10})
     _configure_openrouter_llm(llm)
+    assert llm.model_args["store"] is False
+    assert llm.model_args["extra_body"]["provider"]["allow_fallbacks"] is False
 
-    assert llm.model_args == {
-        "max_tokens": 4096,
-        "store": False,
-        "extra_body": {
-            "provider": {
-                "order": ["openai"],
-                "allow_fallbacks": False,
-                "require_parameters": True,
-            },
-            "reasoning": {"effort": "low", "exclude": True},
-        },
-    }
-
-
-def test_openrouter_embedding_client_injects_same_no_fallback_policy() -> None:
-    captured: dict[str, object] = {}
-
-    class FakeEmbeddingsResource:
+    class Resource:
         async def create(self, **kwargs):
-            captured.update(kwargs)
-            return "embedding-response"
+            return kwargs
 
-    wrapped = _OpenRouterEmbeddingClient(
-        SimpleNamespace(embeddings=FakeEmbeddingsResource())
-    )
-
-    assert inspect.iscoroutinefunction(wrapped.embeddings.create)
-    response = asyncio.run(
-        wrapped.embeddings.create(
-            model="openai/text-embedding-3-small", input=["safe text"]
-        )
-    )
-
-    assert response == "embedding-response"
-    assert captured["extra_body"] == {
-        "provider": {
-            "order": ["openai"],
-            "allow_fallbacks": False,
-            "require_parameters": True,
-        }
-    }
-    with pytest.raises(SemanticConfigurationError, match="routing override"):
-        asyncio.run(wrapped.embeddings.create(input=["safe"], extra_body={}))
-
-
-def test_provider_error_and_invalid_score_are_sanitized() -> None:
-    class BrokenMetric:
-        def score(self, **inputs):
-            raise RuntimeError("SENTINEL_PROVIDER_PAYLOAD")
-
-    class InvalidMetric:
-        def score(self, **inputs):
-            return SimpleNamespace(value=float("nan"))
-
-    for metric in (BrokenMetric(), InvalidMetric()):
-        with pytest.raises(SemanticJudgeError) as captured:
-            RagasSemanticJudge._score_metric(
-                "safe-item-id", "faithfulness", metric, response="SENTINEL_ANSWER"
-            )
-        assert str(captured.value) == (
-            "Semantic judge failed for item safe-item-id, metric faithfulness."
-        )
-        assert captured.value.__cause__ is None
-        assert "SENTINEL" not in str(captured.value)
-
-
-def test_sanitized_semantic_payload_excludes_raw_inputs_and_reason() -> None:
-    judge = FakeSemanticJudge()
-    scores = evaluate_e2e._score_semantic_execution(
-        _item(), _execution(), judge=judge, max_context_chars=24_000
-    )
-    persisted = json.dumps(
-        {
-            "semantic_evaluation": scores.to_payload(),
-            "aggregate": aggregate_semantic_records(
-                [
-                    {
-                        "language": "en",
-                        "answerable": True,
-                        "semantic_evaluation": scores.to_payload(),
-                    }
-                ]
-            ),
-            "identity": semantic_run_identity("ragas"),
-        }
-    )
-    for sentinel in (
-        "SENTINEL_QUESTION",
-        "SENTINEL_ANSWER",
-        "SENTINEL_CONTEXT_ONE",
-        "SENTINEL_CONTEXT_TWO",
-        "SENTINEL_REASON",
-    ):
-        assert sentinel not in persisted
+    client = SimpleNamespace(embeddings=Resource())
+    result = asyncio.run(_OpenRouterEmbeddingClient(client).embeddings.create(input=["x"]))
+    assert result["extra_body"]["provider"]["require_parameters"] is True

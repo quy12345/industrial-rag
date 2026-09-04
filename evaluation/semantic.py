@@ -1,4 +1,8 @@
-"""Sanitized semantic-evaluation contracts and the optional Ragas adapter."""
+"""Ragas quality-score contracts for offline ATV320 evaluation.
+
+Raw inputs exist only for one judge call. Persisted payloads contain scores,
+applicability, latency, and sanitized errors.
+"""
 
 from __future__ import annotations
 
@@ -7,17 +11,15 @@ import importlib.metadata
 import json
 import math
 import os
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from statistics import mean, median
 from time import perf_counter
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
+
+from evaluation.dataset import EvaluationItem
 
 RAGAS_VERSION = "0.4.3"
 OPENAI_VERSION = "2.53.0"
 LANGCHAIN_COMMUNITY_VERSION = "0.3.31"
-JUDGE_PROVIDER = "openrouter"
-RAGAS_PROVIDER_ADAPTER = "openai"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_UPSTREAM_PROVIDER = "openai"
 OPENROUTER_ROUTING_POLICY_ID = "openai-only-no-fallback-v1"
@@ -27,112 +29,116 @@ EMBEDDING_MODEL = "openai/text-embedding-3-small"
 JUDGE_TIMEOUT_SECONDS = 60.0
 JUDGE_MAX_RETRIES = 1
 JUDGE_MAX_COMPLETION_TOKENS = 4096
-JUDGE_STORE = False
-SEMANTIC_INPUT_POLICY_ID = "atv320-final-generation-evidence-v1"
-SEMANTIC_METRICS = (
-    "faithfulness",
-    "answer_relevancy",
-    "context_precision_without_reference",
-)
-
-SemanticStatus = Literal["complete", "not_applicable_abstained", "failed"]
+REFERENCE_POLICY_ID = "reviewed_expected_fact_reference_v1"
+CORE_METRICS = ("factual_correctness", "faithfulness", "context_recall")
+DIAGNOSTIC_METRICS = ("answer_relevancy", "context_precision_without_reference")
 
 
 @dataclass(frozen=True)
-class SemanticEvaluationInput:
-    """Raw semantic inputs held in memory only for one evaluator invocation."""
+class RagasEvaluationInput:
+    """Raw, in-memory-only inputs for one applicable Ragas invocation."""
 
     item_id: str
     question: str
     answer: str
-    rendered_generation_evidence: str
-    ranked_final_contexts: tuple[str, ...]
+    reference: str
+    cited_contexts: tuple[str, ...]
+    generation_context: str
+    final_contexts: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class SemanticScores:
-    """Sanitized scores safe to persist in evaluation artifacts."""
+class MetricScore:
+    """One sanitized metric result."""
 
-    status: SemanticStatus
-    faithfulness: float | None
-    answer_relevancy: float | None
-    context_precision: float | None
-    judge_latency_ms: float
-    error_category: str | None = None
+    status: str
+    score: float | None
+    latency_ms: float
 
     def __post_init__(self) -> None:
-        if not math.isfinite(self.judge_latency_ms) or self.judge_latency_ms < 0:
-            raise ValueError("Semantic judge latency must be finite and non-negative.")
-        values = (self.faithfulness, self.answer_relevancy, self.context_precision)
-        if self.status == "complete":
-            if any(value is None or not math.isfinite(value) for value in values):
-                raise ValueError("A completed semantic evaluation requires three finite scores.")
-            assert self.faithfulness is not None
-            assert self.answer_relevancy is not None
-            assert self.context_precision is not None
-            if not 0.0 <= self.faithfulness <= 1.0:
-                raise ValueError("Faithfulness must be between zero and one.")
-            if not -1.0 <= self.answer_relevancy <= 1.0:
-                raise ValueError("Answer relevancy must be between minus one and one.")
-            if not 0.0 <= self.context_precision <= 1.0:
-                raise ValueError("Context precision must be between zero and one.")
-            if self.error_category is not None:
-                raise ValueError("A completed semantic evaluation cannot contain an error.")
-        elif any(value is not None for value in values):
-            raise ValueError("A non-complete semantic evaluation cannot contain scores.")
+        if not math.isfinite(self.latency_ms) or self.latency_ms < 0:
+            raise ValueError("Metric latency must be finite and non-negative.")
+        if self.status in {"complete", "empty_context", "invalid_citations"}:
+            if self.score is None or not math.isfinite(self.score):
+                raise ValueError("A scored metric requires a finite score.")
+            if not -1.0 <= self.score <= 1.0:
+                raise ValueError("Metric score must be between minus one and one.")
+        elif self.score is not None:
+            raise ValueError("A non-complete metric cannot contain a score.")
 
     @classmethod
-    def not_applicable_abstained(cls) -> SemanticScores:
-        return cls(
-            status="not_applicable_abstained",
-            faithfulness=None,
-            answer_relevancy=None,
-            context_precision=None,
-            judge_latency_ms=0.0,
-        )
+    def not_applicable(cls) -> MetricScore:
+        return cls("not_applicable", None, 0.0)
+
+    @classmethod
+    def deterministic_zero(cls, status: str) -> MetricScore:
+        return cls(status, 0.0, 0.0)
 
     def to_payload(self) -> dict[str, str | float | None]:
-        """Return only allowlisted fields; explanations and raw inputs cannot leak."""
+        return {"status": self.status, "score": self.score, "latency_ms": self.latency_ms}
 
+
+@dataclass(frozen=True)
+class RagasScores:
+    """Applicable core scores plus optional diagnostics for one case."""
+
+    factual_correctness: MetricScore
+    faithfulness: MetricScore
+    context_recall: MetricScore
+    answer_relevancy: MetricScore
+    context_precision: MetricScore
+
+    def to_payload(self) -> dict[str, dict[str, str | float | None]]:
         return {
-            "status": self.status,
-            "faithfulness": self.faithfulness,
-            "answer_relevancy": self.answer_relevancy,
-            "context_precision": self.context_precision,
-            "judge_latency_ms": self.judge_latency_ms,
-            "error_category": self.error_category,
+            "factual_correctness": self.factual_correctness.to_payload(),
+            "faithfulness": self.faithfulness.to_payload(),
+            "context_recall": self.context_recall.to_payload(),
+            "answer_relevancy": self.answer_relevancy.to_payload(),
+            "context_precision_without_reference": self.context_precision.to_payload(),
         }
 
 
-class SemanticJudge(Protocol):
-    """Port used by the E2E evaluator and deterministic fake tests."""
+class RagasJudge(Protocol):
+    """Port implemented by the OpenRouter adapter and offline fakes."""
 
-    def score(self, evaluation_input: SemanticEvaluationInput) -> SemanticScores:
-        """Return three complete semantic scores or raise a sanitized error."""
+    def score(
+        self,
+        evaluation_input: RagasEvaluationInput,
+        *,
+        score_factual_correctness: bool,
+        score_faithfulness: bool,
+        score_context_recall: bool,
+        include_diagnostics: bool,
+    ) -> RagasScores: ...
 
 
 class SemanticConfigurationError(RuntimeError):
-    """Raised before egress when the pinned semantic runtime is unavailable."""
+    """Raised before egress when the pinned judge runtime is unavailable."""
 
 
 class SemanticJudgeError(RuntimeError):
-    """Provider/metric failure whose message never includes raw evaluation inputs."""
+    """A sanitized provider or structured-output failure."""
 
     def __init__(self, *, item_id: str, metric: str, category: str) -> None:
         self.item_id = item_id
         self.metric = metric
         self.category = category
-        super().__init__(f"Semantic judge failed for item {item_id}, metric {metric}.")
+        super().__init__(f"Ragas judge failed for item {item_id}, metric {metric}.")
 
 
-class RagasSemanticJudge:
-    """Ragas Collections adapter using OpenRouter's OpenAI-compatible API."""
+def render_reviewed_reference(item: EvaluationItem) -> str:
+    """Render exactly the first reviewed alias of every expected fact."""
 
-    def __init__(self, *, api_key: str) -> None:
+    return "\n".join(f"- {fact.aliases[0]}" for fact in item.expected_answer_facts)
+
+
+class RagasScorecardJudge:
+    """Pinned Ragas Collections adapter over OpenRouter."""
+
+    def __init__(self, *, api_key: str, include_diagnostics: bool = False) -> None:
         _require_exact_dependency("ragas", RAGAS_VERSION)
         _require_exact_dependency("openai", OPENAI_VERSION)
         _require_exact_dependency("langchain-community", LANGCHAIN_COMMUNITY_VERSION)
-        # The approval token authorizes judge calls, not Ragas usage telemetry.
         os.environ["RAGAS_DO_NOT_TRACK"] = "true"
         try:
             from openai import AsyncOpenAI
@@ -141,79 +147,112 @@ class RagasSemanticJudge:
             from ragas.metrics.collections import (
                 AnswerRelevancy,
                 ContextPrecisionWithoutReference,
+                ContextRecall,
+                FactualCorrectness,
                 Faithfulness,
             )
         except (ImportError, AttributeError):
             raise SemanticConfigurationError(
-                "Pinned Ragas Collections imports are unavailable; semantic evaluation stopped."
+                "Pinned Ragas Collections imports are unavailable; evaluation stopped."
             ) from None
 
-        # Ragas owns these untyped SDK objects. Keep that boundary isolated here.
         client: Any = AsyncOpenAI(
             api_key=api_key,
             base_url=OPENROUTER_BASE_URL,
             timeout=JUDGE_TIMEOUT_SECONDS,
             max_retries=JUDGE_MAX_RETRIES,
         )
-        llm: Any = llm_factory(
-            JUDGE_MODEL,
-            provider=RAGAS_PROVIDER_ADAPTER,
-            client=client,
-            cache=None,
-        )
+        llm: Any = llm_factory("openai/gpt-5.6-luna", provider="openai", client=client, cache=None)
         _configure_openrouter_llm(llm)
-        embeddings: Any = embedding_factory(
-            RAGAS_PROVIDER_ADAPTER,
-            model=EMBEDDING_MODEL,
-            client=_OpenRouterEmbeddingClient(client),
-        )
+        self._factual_correctness: Any = FactualCorrectness(llm=llm, mode="f1")
         self._faithfulness: Any = Faithfulness(llm=llm)
-        self._answer_relevancy: Any = AnswerRelevancy(llm=llm, embeddings=embeddings)
-        self._context_precision: Any = ContextPrecisionWithoutReference(llm=llm)
+        self._context_recall: Any = ContextRecall(llm=llm)
+        self._answer_relevancy: Any | None = None
+        self._context_precision: Any | None = None
+        if include_diagnostics:
+            embeddings: Any = embedding_factory(
+                "openai",
+                model=EMBEDDING_MODEL,
+                client=_OpenRouterEmbeddingClient(client),
+            )
+            self._answer_relevancy = AnswerRelevancy(llm=llm, embeddings=embeddings)
+            self._context_precision = ContextPrecisionWithoutReference(llm=llm)
 
-    def score(self, evaluation_input: SemanticEvaluationInput) -> SemanticScores:
-        started = perf_counter()
-        faithfulness = self._score_metric(
-            evaluation_input.item_id,
-            "faithfulness",
-            self._faithfulness,
+    def score(
+        self,
+        evaluation_input: RagasEvaluationInput,
+        *,
+        score_factual_correctness: bool,
+        score_faithfulness: bool,
+        score_context_recall: bool,
+        include_diagnostics: bool,
+    ) -> RagasScores:
+        factual = self._optional_metric(
+            evaluation_input,
+            enabled=score_factual_correctness,
+            name="factual_correctness",
+            metric=self._factual_correctness,
+            response=evaluation_input.answer,
+            reference=evaluation_input.reference,
+        )
+        faithfulness = self._optional_metric(
+            evaluation_input,
+            enabled=score_faithfulness,
+            name="faithfulness",
+            metric=self._faithfulness,
             user_input=evaluation_input.question,
             response=evaluation_input.answer,
-            retrieved_contexts=[evaluation_input.rendered_generation_evidence],
+            retrieved_contexts=list(evaluation_input.cited_contexts),
         )
-        answer_relevancy = self._score_metric(
-            evaluation_input.item_id,
-            "answer_relevancy",
-            self._answer_relevancy,
+        recall = self._optional_metric(
+            evaluation_input,
+            enabled=score_context_recall,
+            name="context_recall",
+            metric=self._context_recall,
+            user_input=evaluation_input.question,
+            retrieved_contexts=[evaluation_input.generation_context],
+            reference=evaluation_input.reference,
+        )
+        relevancy = self._optional_metric(
+            evaluation_input,
+            enabled=include_diagnostics and score_factual_correctness,
+            name="answer_relevancy",
+            metric=self._answer_relevancy,
             user_input=evaluation_input.question,
             response=evaluation_input.answer,
         )
-        context_precision = self._score_metric(
-            evaluation_input.item_id,
-            "context_precision_without_reference",
-            self._context_precision,
+        precision = self._optional_metric(
+            evaluation_input,
+            enabled=include_diagnostics and score_factual_correctness,
+            name="context_precision_without_reference",
+            metric=self._context_precision,
             user_input=evaluation_input.question,
             response=evaluation_input.answer,
-            retrieved_contexts=list(evaluation_input.ranked_final_contexts),
+            retrieved_contexts=list(evaluation_input.final_contexts),
         )
-        return SemanticScores(
-            status="complete",
-            faithfulness=faithfulness,
-            answer_relevancy=answer_relevancy,
-            context_precision=context_precision,
-            judge_latency_ms=(perf_counter() - started) * 1000,
-        )
+        return RagasScores(factual, faithfulness, recall, relevancy, precision)
 
-    @staticmethod
-    def _score_metric(
-        item_id: str,
-        metric_name: str,
+    def _optional_metric(
+        self,
+        evaluation_input: RagasEvaluationInput,
+        *,
+        enabled: bool,
+        name: str,
         metric: Any,
         **inputs: Any,
-    ) -> float:
+    ) -> MetricScore:
+        if not enabled:
+            return MetricScore.not_applicable()
+        if metric is None:
+            raise SemanticConfigurationError(f"Ragas diagnostic metric is unavailable: {name}")
+        started = perf_counter()
+        value = self._score_metric(evaluation_input.item_id, name, metric, **inputs)
+        return MetricScore("complete", value, (perf_counter() - started) * 1000)
+
+    @staticmethod
+    def _score_metric(item_id: str, metric_name: str, metric: Any, **inputs: Any) -> float:
         try:
-            result = metric.score(**inputs)
-            value = float(result.value)
+            value = float(metric.score(**inputs).value)
         except Exception:
             raise SemanticJudgeError(
                 item_id=item_id,
@@ -222,26 +261,18 @@ class RagasSemanticJudge:
             ) from None
         lower_bound = -1.0 if metric_name == "answer_relevancy" else 0.0
         if not math.isfinite(value) or not lower_bound <= value <= 1.0:
-            raise SemanticJudgeError(
-                item_id=item_id,
-                metric=metric_name,
-                category="invalid_score",
-            )
+            raise SemanticJudgeError(item_id=item_id, metric=metric_name, category="invalid_score")
         return value
 
 
-def semantic_run_identity(mode: Literal["none", "ragas"]) -> dict[str, object]:
-    """Return a raw-content-free identity used to reject incompatible resumes."""
+def semantic_run_identity(*, include_diagnostics: bool) -> dict[str, object]:
+    """Return raw-content-free identity used to reject incompatible resumes."""
 
-    if mode == "none":
-        return {"mode": "none"}
     configuration = {
-        "mode": "ragas",
         "ragas_version": RAGAS_VERSION,
         "openai_version": OPENAI_VERSION,
         "langchain_community_version": LANGCHAIN_COMMUNITY_VERSION,
-        "provider": JUDGE_PROVIDER,
-        "ragas_provider_adapter": RAGAS_PROVIDER_ADAPTER,
+        "provider": "openrouter",
         "base_url": OPENROUTER_BASE_URL,
         "upstream_provider": OPENROUTER_UPSTREAM_PROVIDER,
         "routing_policy_id": OPENROUTER_ROUTING_POLICY_ID,
@@ -249,115 +280,41 @@ def semantic_run_identity(mode: Literal["none", "ragas"]) -> dict[str, object]:
         "require_parameters": True,
         "judge_model": JUDGE_MODEL,
         "reasoning_effort": JUDGE_REASONING_EFFORT,
-        "embedding_model": EMBEDDING_MODEL,
         "timeout_seconds": JUDGE_TIMEOUT_SECONDS,
         "maximum_retries": JUDGE_MAX_RETRIES,
         "maximum_completion_tokens": JUDGE_MAX_COMPLETION_TOKENS,
-        "store": JUDGE_STORE,
-        "ragas_usage_tracking": False,
-        "metrics": list(SEMANTIC_METRICS),
-        "input_policy_id": SEMANTIC_INPUT_POLICY_ID,
+        "store": False,
+        "reference_policy_id": REFERENCE_POLICY_ID,
+        "core_metrics": list(CORE_METRICS),
+        "diagnostic_metrics": list(DIAGNOSTIC_METRICS) if include_diagnostics else [],
+        "embedding_model": EMBEDDING_MODEL if include_diagnostics else None,
     }
     encoded = json.dumps(configuration, ensure_ascii=True, sort_keys=True).encode("utf-8")
-    return configuration | {
-        "metric_configuration_sha256": hashlib.sha256(encoded).hexdigest()
-    }
-
-
-def aggregate_semantic_records(records: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    """Aggregate sanitized semantic payloads without requiring raw evaluation inputs."""
-
-    summary = _semantic_summary(records)
-    languages = sorted({str(record["language"]) for record in records})
-    summary["per_language"] = {
-        language: _semantic_summary(
-            [record for record in records if record["language"] == language]
-        )
-        for language in languages
-    }
-    summary["per_answerability"] = {
-        "answerable": _semantic_summary(
-            [record for record in records if bool(record["answerable"])]
-        ),
-        "unanswerable": _semantic_summary(
-            [record for record in records if not bool(record["answerable"])]
-        ),
-    }
-    return summary
-
-
-def _semantic_summary(records: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    payloads = [
-        payload
-        for record in records
-        if isinstance((payload := record.get("semantic_evaluation")), Mapping)
-    ]
-    complete = [payload for payload in payloads if payload.get("status") == "complete"]
-    excluded = sum(
-        payload.get("status") == "not_applicable_abstained" for payload in payloads
-    )
-    failed = sum(payload.get("status") == "failed" for payload in payloads)
-    return {
-        "eligible_count": len(complete),
-        "excluded_count": excluded,
-        "failed_count": failed,
-        "metric_invocation_count": len(complete) * len(SEMANTIC_METRICS),
-        "metrics": {
-            name: _numeric_summary(complete, field)
-            for name, field in (
-                ("faithfulness", "faithfulness"),
-                ("answer_relevancy", "answer_relevancy"),
-                ("context_precision_without_reference", "context_precision"),
-            )
-        },
-        "judge_latency_ms": _numeric_summary(complete, "judge_latency_ms"),
-    }
-
-
-def _numeric_summary(
-    payloads: Sequence[Mapping[str, object]], field: str
-) -> dict[str, int | float | None]:
-    values = [float(payload[field]) for payload in payloads if payload.get(field) is not None]
-    return {
-        "count": len(values),
-        "mean": mean(values) if values else None,
-        "median": median(values) if values else None,
-    }
+    return configuration | {"configuration_sha256": hashlib.sha256(encoded).hexdigest()}
 
 
 def _require_exact_dependency(name: str, expected: str) -> None:
     try:
         actual = importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
-        raise SemanticConfigurationError(
-            f"Semantic evaluation requires {name}=={expected}."
-        ) from None
+        raise SemanticConfigurationError(f"Evaluation requires {name}=={expected}.") from None
     if actual != expected:
-        raise SemanticConfigurationError(
-            f"Semantic evaluation requires {name}=={expected}; found {actual}."
-        )
+        raise SemanticConfigurationError(f"Evaluation requires {name}=={expected}; found {actual}.")
 
 
 def _configure_openrouter_llm(llm: Any) -> None:
-    """Normalize Ragas model arguments for an OpenRouter-prefixed GPT-5 slug."""
-
     try:
         model_args = dict(llm.model_args)
     except (AttributeError, TypeError, ValueError):
         raise SemanticConfigurationError(
-            "Pinned Ragas LLM arguments are unavailable; semantic evaluation stopped."
+            "Pinned Ragas LLM arguments are unavailable; evaluation stopped."
         ) from None
-
-    # Ragas 0.4.3 only recognizes bare ``gpt-5*`` names as reasoning models. The
-    # OpenRouter ``openai/...`` slug therefore needs the equivalent mapping here.
-    model_args.pop("max_completion_tokens", None)
-    model_args.pop("temperature", None)
-    model_args.pop("top_p", None)
-    model_args.pop("reasoning_effort", None)
+    for key in ("max_completion_tokens", "temperature", "top_p", "reasoning_effort"):
+        model_args.pop(key, None)
     model_args.update(
         {
             "max_tokens": JUDGE_MAX_COMPLETION_TOKENS,
-            "store": JUDGE_STORE,
+            "store": False,
             "extra_body": _openrouter_request_body(include_reasoning=True),
         }
     )
@@ -373,23 +330,18 @@ def _openrouter_request_body(*, include_reasoning: bool) -> dict[str, object]:
         }
     }
     if include_reasoning:
-        body["reasoning"] = {
-            "effort": JUDGE_REASONING_EFFORT,
-            "exclude": True,
-        }
+        body["reasoning"] = {"effort": JUDGE_REASONING_EFFORT, "exclude": True}
     return body
 
 
 class _OpenRouterEmbeddingsResource:
-    """Inject the frozen routing policy into OpenAI-compatible embedding calls."""
-
     def __init__(self, resource: Any) -> None:
         self._resource = resource
 
     async def create(self, **kwargs: Any) -> Any:
         if "extra_body" in kwargs:
             raise SemanticConfigurationError(
-                "Unexpected embedding routing override; semantic evaluation stopped."
+                "Unexpected embedding routing override; evaluation stopped."
             )
         return await self._resource.create(
             **kwargs,
@@ -398,7 +350,5 @@ class _OpenRouterEmbeddingsResource:
 
 
 class _OpenRouterEmbeddingClient:
-    """Minimal client surface required by Ragas' modern embedding adapter."""
-
     def __init__(self, client: Any) -> None:
         self.embeddings = _OpenRouterEmbeddingsResource(client.embeddings)

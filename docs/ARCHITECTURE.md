@@ -155,13 +155,12 @@ stable IDs, document IDs, pages, heading counts, and exact-duplicate alternative
 API retains its existing `top_k` range; this diagnostic cap is not a runtime configuration change.
 Evidence metrics in this schema are measured diagnostics, not additional exit-code gates; promotion
 criteria remain deferred until a reviewed development winner exists. The E2E evaluator emits
-sanitized schema-v14 checkpoints and artifacts, binds checkpoints to endpoint/model identity,
-supports two preregistered generation contracts,
-and keeps three-run development metrics separated by run. Strict qrel identity and expected-document
-metrics remain diagnostics. Release gates use reviewed authoritative evidence requirements: every
-requirement must be covered, while its canonical chunks, explicitly reviewed alternatives, or a
-frozen-corpus exact-content duplicate are valid alternatives. No metadata, fuzzy match, or model may
-authorize an alternative. Current production composition does not capture the trace.
+compact schema-v15 checkpoints and artifacts and binds resume to corpus, dataset, endpoint, model,
+Ragas configuration, and source identity. It reports answer utility, unsafe-answer rate, citation
+faithfulness, and final-context recall without a composite score. Schema v15 is a threshold-free
+baseline contract. It disables retrieval trace capture; the separate retrieval evaluator remains
+the owner of qrel ranks, variants, and deep stage traces. Current production composition does not
+capture evaluation traces.
 
 ## Invariants
 

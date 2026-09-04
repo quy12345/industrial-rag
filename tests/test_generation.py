@@ -531,17 +531,20 @@ def test_openrouter_wire_payload_uses_supported_max_tokens_parameter() -> None:
 
 
 def test_adapter_supports_an_injected_schema_and_mapper_without_changing_defaults() -> None:
-    from evaluation.generation_experiments import (
-        ClaimCoverageAnswer,
-        map_claim_coverage_output,
-    )
+    from pydantic import BaseModel
+
+    class CustomAnswer(BaseModel):
+        answer: str
+        source_ids: list[str]
+        insufficient_evidence: bool
+
+    def map_custom_output(parsed, _evidence):
+        return GeneratedAnswer.model_validate(parsed.model_dump())
 
     result = {
         "parsed": {
-            "claims": [
-                {"text": "First fact.", "source_ids": ["S1"]},
-                {"text": "Second fact.", "source_ids": ["S1"]},
-            ],
+            "answer": "First fact.\nSecond fact.",
+            "source_ids": ["S1"],
             "insufficient_evidence": False,
         },
         "parsing_error": None,
@@ -550,8 +553,8 @@ def test_adapter_supports_an_injected_schema_and_mapper_without_changing_default
     adapter, _, model, _, _ = _adapter(
         result,
         generator_overrides={
-            "output_schema": ClaimCoverageAnswer,
-            "output_mapper": map_claim_coverage_output,
+            "output_schema": CustomAnswer,
+            "output_mapper": map_custom_output,
         },
     )
 
@@ -563,7 +566,7 @@ def test_adapter_supports_an_injected_schema_and_mapper_without_changing_default
         insufficient_evidence=False,
     )
     schema, structured_kwargs = model.structured_kwargs
-    assert schema is ClaimCoverageAnswer
+    assert schema is CustomAnswer
     assert structured_kwargs == {
         "method": "json_schema",
         "strict": True,
@@ -609,9 +612,7 @@ def test_correction_feedback_is_added_without_changing_evidence() -> None:
     }
     adapter, prompt, _, _, _ = _adapter(result)
     evidence = _bundle()
-    adapter.generate(
-        question="q", evidence=evidence, validation_errors=("unknown source ID: S9",)
-    )
+    adapter.generate(question="q", evidence=evidence, validation_errors=("unknown source ID: S9",))
     assert prompt.calls[0]["evidence"] == evidence.text
     assert "unknown source ID: S9" in prompt.calls[0]["correction"]
 
@@ -637,9 +638,7 @@ def test_refusal_is_distinct_from_invalid_output() -> None:
     class OpenAIRefusalError(Exception):
         pass
 
-    adapter, *_ = _adapter(
-        {"parsed": None, "parsing_error": OpenAIRefusalError(), "raw": None}
-    )
+    adapter, *_ = _adapter({"parsed": None, "parsing_error": OpenAIRefusalError(), "raw": None})
     with pytest.raises(LLMRefusalError):
         adapter.generate(question="q", evidence=_bundle())
 

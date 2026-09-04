@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -17,24 +18,12 @@ SUPPORTED_CLI_OPTIONS = [
         "scripts.evaluation.evaluate_e2e",
         {
             "--dataset",
-            "--calibration",
-            "--development",
-            "--confirmation",
-            "--test",
-            "--heldout-v2",
-            "--chunks",
-            "--manifest",
-            "--top-k",
-            "--generation-variant",
-            "--repeat-count",
             "--provider-approval-token",
-            "--semantic-judge",
             "--judge-provider-approval-token",
-            "--fact-evaluator",
-            "--fact-judge-approval-token",
-            "--max-queries",
-            "--item-id",
+            "--ragas-diagnostics",
+            "--review-cohort",
             "--review-item-id",
+            "--local-review-output",
             "--checkpoint",
             "--output",
         },
@@ -51,16 +40,6 @@ SUPPORTED_CLI_OPTIONS = [
             "--retrieval-variant",
             "--checkpoint",
             "--output",
-        },
-    ),
-    (
-        "scripts.evaluation.review_development",
-        {
-            "--artifact",
-            "--development",
-            "--chunks",
-            "--item-id",
-            "--repeat-index",
         },
     ),
     (
@@ -118,6 +97,7 @@ REMOVED_CLI_MODULES = (
     "scripts.evaluation.evaluate_phase7_e2e",
     "scripts.evaluation.evaluate_phase7_retrieval_closure",
     "scripts.evaluation.validate_phase7_dataset",
+    "scripts.evaluation.review_development",
 )
 
 
@@ -188,6 +168,24 @@ def test_supported_cli_help_preserves_the_public_option_surface(
     assert expected_options <= set(result.stdout.split())
 
 
+def test_e2e_help_exposes_exactly_the_compact_v15_option_surface() -> None:
+    result = _run_cli("scripts.evaluation.evaluate_e2e", "--help")
+
+    assert result.returncode == 0
+    assert set(re.findall(r"--[a-z0-9-]+", result.stdout)) == {
+        "--help",
+        "--dataset",
+        "--provider-approval-token",
+        "--judge-provider-approval-token",
+        "--ragas-diagnostics",
+        "--review-cohort",
+        "--review-item-id",
+        "--local-review-output",
+        "--checkpoint",
+        "--output",
+    }
+
+
 @pytest.mark.parametrize(
     ("module", "arguments", "expected_error"),
     [
@@ -203,7 +201,7 @@ def test_supported_cli_help_preserves_the_public_option_surface(
         ),
         (
             "scripts.evaluation.evaluate_e2e",
-            ("--dataset", "calibration"),
+            ("--dataset", "development"),
             "the following arguments are required: --provider-approval-token",
         ),
     ],

@@ -14,7 +14,6 @@ scripts.operations.validate_query_runtime
 scripts.evaluation.validate_dataset
 scripts.evaluation.evaluate_retrieval
 scripts.evaluation.evaluate_e2e
-scripts.evaluation.review_development
 ```
 
 There are no supported command modules directly under `scripts/`, and the former phase-named module
@@ -37,41 +36,28 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
 
 ## Evaluation
 
-`scripts/evaluation/` owns four current adapters:
+`scripts/evaluation/` owns three current adapters:
 
 - validate either the legacy frozen pair or the development/confirmation optimization pair;
 - evaluate the frozen legacy retrieval baseline or one of six preregistered development-only
   retrieval variants, with trace-only dense/sparse top-100 ceiling probes limited to development,
   apply the canonical evaluation-only evidence top five, and write a sanitized schema-v5
   checkpoint/artifact;
-- run approval-gated end-to-end generation evaluation.
-- join a sanitized development artifact with local questions, expected facts, and frozen evidence
-  for terminal-only human review without provider or model access.
+- run approval-gated end-to-end generation and Ragas evaluation.
 
 Reusable current contracts live in `evaluation/dataset.py`, `evaluation/retrieval.py`,
-`evaluation/facts.py`, `evaluation/e2e.py`, and `evaluation/semantic.py`. Supported command implementations do not import
-private helpers from another command. E2E evaluation can call a real provider and must not run
-without explicit provider and data-egress approval. Its optional `--semantic-judge ragas` mode uses
-the separate evaluator image and requires an independent OpenRouter approval token; the default
-`none` mode does not import Ragas. The OpenRouter gateway is pinned to OpenAI upstream endpoints with
-provider fallback disabled. Optional `--fact-evaluator hybrid-luna-v2` uses the same pinned Luna
-model through a separate adapter and approval token, while the default `deterministic-v4` mode is
-offline. The `test` choice is the public regression split; `heldout-v2` is a
-separate sealed private split with path and manifest containment checks. Exposed held-out v2 is
-regression evidence, not tuning data. The E2E adapter declares sanitized artifact schema v14 and
-explicitly opts into retrieval tracing; normal production composition leaves tracing disabled. It
-offers the preregistered `baseline-v1` and development-only `claim-coverage-v1` generation
-contracts, plus full-development one- or three-run schedules. Its bounded `--review-item-id` mode
-uses a separate approval token to expose a new baseline answer for local human review. Raw output
-can remain terminal-only or be written to a new private Markdown file below the ignored
-`artifacts/local-review/` directory; the sanitized metrics artifact and checkpoint never contain
-that raw content. The mode rejects sealed splits, semantic judging, experimental variants, repeats,
-and resumed checkpoints. A schema declaration is not proof of
-execution: the latest executed held-out artifact remains v8, and no v9-v14 held-out result is
-claimed. See [Operations](../docs/OPERATIONS.md) for dataset-suite validation, provider-free
-retrieval variants, generation experiments, the two-run semantic calibration preflight, and
-artifact provenance. Retrieval variants never appear in production settings or the E2E command,
-and the retrieval evaluator accepts no confirmation or held-out input.
+`evaluation/e2e.py`, and `evaluation/semantic.py`. E2E evaluation always uses the baseline
+production generation contract and the three core Ragas metrics. Generator egress and Ragas egress
+require independent dataset-specific approval tokens. Optional Answer Relevancy and Context
+Precision diagnostics are enabled with `--ragas-diagnostics`; they are not scorecard outcomes.
+
+The compact schema-v15 scorecard reports answer utility, unsafe-answer rate, citation
+faithfulness, and final-context recall. It fixes the final evidence boundary at five and disables
+retrieval trace capture. Use `evaluate_retrieval` for provider-free deep stage diagnostics. Schema
+v15 is `BASELINE_ONLY`: it has no thresholds and a valid run exits zero regardless of score.
+Development, sealed confirmation, and exposed held-out v2 are the only E2E dataset choices. The
+latest executed held-out artifact remains v8 until a newer run is explicitly approved and
+completed.
 
 ## Archive
 

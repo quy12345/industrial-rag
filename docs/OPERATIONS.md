@@ -181,6 +181,41 @@ collection.
 Sealed held-out v2 likewise rejects `--item-id` and `--max-queries`; checkpoint resume is the only
 supported way to continue an interrupted full sealed run.
 
+## Current E2E Ragas scorecard
+
+Schema v15 supports one E2E workflow for `development`, sealed `confirmation`, and exposed
+`heldout-v2`. It always runs the configured generator plus Ragas Factual Correctness,
+Faithfulness, and Context Recall. Generator egress and judge egress require separate approvals.
+
+```powershell
+docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS" `
+  --judge-provider-approval-token "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS SCORECARD EGRESS" `
+  --ragas-diagnostics
+```
+
+The four canonical outcomes are answer utility, unsafe-answer rate, citation faithfulness, and
+final-context recall. Optional Answer Relevancy and Context Precision without reference are
+diagnostics only. The scorecard has no composite score or thresholds: v15 reports
+`BASELINE_ONLY`, and a valid complete run exits zero regardless of score.
+
+Default outputs are `artifacts/metrics/atv320-{dataset}-e2e-v15.json` and
+`artifacts/metrics/atv320-{dataset}-e2e-v15-checkpoint.jsonl`. They exclude raw questions,
+answers, reviewed references, evidence, prompts, provider output, judge reasoning, and retrieval
+traces. V14 checkpoints fail closed. E2E fixes the evidence boundary at five and uses
+`capture_trace=False`; use `scripts.evaluation.evaluate_retrieval` for deep stage diagnostics.
+
+Ragas uses OpenRouter model `openai/gpt-5.6-luna`, low reasoning, OpenAI-only routing, no fallback,
+`store=false`, a 60-second timeout, one retry, and no persistent cache. The optional diagnostics
+alone initialize `openai/text-embedding-3-small`. `OPENROUTER_API_KEY` remains in the untracked
+`.env`. The evaluator image is Python 3.11 and contains no Docling.
+
+## Historical E2E v14 workflow (unsupported)
+
+The following commands document completed experiments and are retained temporarily as engineering
+history. Their flags and helper modules were hard-cut in E04 and must not be used for current runs.
+
 Optimization E2E is also provider- and cost-bearing. After the datasets, manifests, and egress have
 been explicitly approved, use the dataset-specific generator token below. Semantic and hybrid
 fact judging each require their own independent token.

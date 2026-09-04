@@ -63,6 +63,7 @@ ALLOWED_DEPENDENCY_LAYERS = {
     "shared": {"domain", "shared"},
 }
 
+
 def _module_name(path: Path) -> str:
     relative = path.relative_to(APP_ROOT.parent).with_suffix("")
     parts = relative.parts
@@ -141,8 +142,10 @@ def _architecture_layer(module: str) -> str | None:
         or module.startswith("ui.")
     ):
         return "inbound"
-    if module == "app.bootstrap" or module == "app.composition" or module.startswith(
-        "app.composition."
+    if (
+        module == "app.bootstrap"
+        or module == "app.composition"
+        or module.startswith("app.composition.")
     ):
         return "composition"
     if module in {"app.config", "app.errors", "app.request_context"}:
@@ -189,9 +192,11 @@ def test_production_runtime_cannot_reach_evaluation() -> None:
     for root in PRODUCTION_RUNTIME_ROOTS:
         for source in _reachable_modules(graph, root):
             for dependency in graph[source]:
-                if dependency == "app.evaluation" or dependency.startswith(
-                    ("app.evaluation.", "evaluation.")
-                ) or dependency == "evaluation":
+                if (
+                    dependency == "app.evaluation"
+                    or dependency.startswith(("app.evaluation.", "evaluation."))
+                    or dependency == "evaluation"
+                ):
                     violations.add((root, source, dependency))
 
     assert violations == set()
@@ -256,8 +261,7 @@ def test_qdrant_infrastructure_does_not_import_compatibility_facades() -> None:
     unexpected = {
         (source, dependency)
         for source, dependencies in graph.items()
-        if source == "app.infrastructure.qdrant"
-        or source.startswith("app.infrastructure.qdrant.")
+        if source == "app.infrastructure.qdrant" or source.startswith("app.infrastructure.qdrant.")
         for dependency in dependencies
         if dependency in {"app.retrieval", "app.hybrid_retrieval"}
     }
@@ -267,9 +271,7 @@ def test_qdrant_infrastructure_does_not_import_compatibility_facades() -> None:
 
 def test_application_services_have_no_adapter_or_evaluation_dependency() -> None:
     graph = _import_graph()
-    application_modules = {
-        module for module in graph if module.startswith("app.application.")
-    }
+    application_modules = {module for module in graph if module.startswith("app.application.")}
     for module in application_modules:
         dependencies = graph[module]
         assert not {
@@ -455,9 +457,7 @@ def test_runtime_uses_canonical_sparse_search_adapter() -> None:
     graph = _import_graph()
 
     assert "app.infrastructure.qdrant.hybrid" in graph["app.composition.retrieval"]
-    assert "app.infrastructure.qdrant.hybrid" not in graph[
-        "app.application.reranking_service"
-    ]
+    assert "app.infrastructure.qdrant.hybrid" not in graph["app.application.reranking_service"]
     assert "app.hybrid_retrieval" not in graph["app.application.reranking_service"]
     assert "app.hybrid_retrieval" not in graph["app.composition.retrieval"]
 
@@ -482,16 +482,6 @@ def test_retrieval_evaluation_uses_only_public_domain_contracts() -> None:
     }
 
 
-def test_generation_experiments_use_existing_generation_contracts_only() -> None:
-    graph = _import_graph()
-
-    assert graph["evaluation.generation_experiments"] == {
-        "app.application.generation_prompt",
-        "app.domain.generation",
-        "app.errors",
-    }
-
-
 def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
     graph = _import_graph()
 
@@ -499,16 +489,12 @@ def test_e2e_evaluation_and_cli_use_only_canonical_owners() -> None:
     evaluator = graph["evaluation.e2e"]
     assert "app.application.query_service" in evaluator
     assert "evaluation.dataset" in evaluator
-    assert "evaluation.retrieval" in evaluator
+    assert "evaluation.semantic" in evaluator
     assert not {
-        dependency
-        for dependency in evaluator
-        if dependency in REMOVED_COMPATIBILITY_MODULES
+        dependency for dependency in evaluator if dependency in REMOVED_COMPATIBILITY_MODULES
     }
 
-    canonical_cli = (
-        APP_ROOT.parent / "scripts" / "evaluation" / "evaluate_e2e.py"
-    )
+    canonical_cli = APP_ROOT.parent / "scripts" / "evaluation" / "evaluate_e2e.py"
     cli_imports = _local_imports(canonical_cli)
     assert "evaluation.e2e" in cli_imports
     assert "app.composition.retrieval" in cli_imports
@@ -526,10 +512,7 @@ def test_historical_evaluation_helpers_are_outside_the_active_package() -> None:
     assert {path.name for path in EVALUATION_ROOT.glob("*.py")} == {
         "__init__.py",
         "dataset.py",
-        "development_review.py",
         "e2e.py",
-        "facts.py",
-        "generation_experiments.py",
         "retrieval.py",
         "semantic.py",
     }
@@ -562,9 +545,7 @@ def test_dataset_and_corpus_artifact_ownership_are_separate() -> None:
 
 
 def test_supported_indexing_command_does_not_import_dataset_facade() -> None:
-    imports = _local_imports(
-        APP_ROOT.parent / "scripts" / "operations" / "index_corpus.py"
-    )
+    imports = _local_imports(APP_ROOT.parent / "scripts" / "operations" / "index_corpus.py")
 
     assert "app.infrastructure.corpus_artifacts" in imports
     assert "app.evaluation" not in imports
@@ -577,9 +558,7 @@ def test_supported_indexing_command_does_not_import_dataset_facade() -> None:
 
 
 def test_dataset_validation_cli_uses_canonical_evaluation_interfaces() -> None:
-    canonical_path = (
-        APP_ROOT.parent / "scripts" / "evaluation" / "validate_dataset.py"
-    )
+    canonical_path = APP_ROOT.parent / "scripts" / "evaluation" / "validate_dataset.py"
     imports = _local_imports(canonical_path)
 
     assert "app.infrastructure.corpus_artifacts" in imports
@@ -591,12 +570,7 @@ def test_dataset_validation_cli_uses_canonical_evaluation_interfaces() -> None:
 
 
 def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
-    canonical_path = (
-        APP_ROOT.parent
-        / "scripts"
-        / "evaluation"
-        / "evaluate_retrieval.py"
-    )
+    canonical_path = APP_ROOT.parent / "scripts" / "evaluation" / "evaluate_retrieval.py"
     imports = _local_imports(canonical_path)
 
     assert "app.application.reranking_service" in imports
@@ -610,9 +584,7 @@ def test_retrieval_closure_cli_uses_canonical_evaluation_interfaces() -> None:
     assert "app.reranking" not in imports
     assert "app.retrieval_runtime" not in imports
 
-    assert not (
-        APP_ROOT.parent / "scripts" / "evaluate_retrieval.py"
-    ).exists()
+    assert not (APP_ROOT.parent / "scripts" / "evaluate_retrieval.py").exists()
 
 
 def test_supported_script_surface_is_explicit_and_has_no_private_cross_imports() -> None:
@@ -637,9 +609,7 @@ def test_active_python_surface_has_no_phase_number_identifiers_or_filenames() ->
     )
     paths = [path for root in roots for path in root.rglob("*.py")]
     filename_violations = {
-        str(path.relative_to(APP_ROOT.parent))
-        for path in paths
-        if "phase7" in path.name
+        str(path.relative_to(APP_ROOT.parent)) for path in paths if "phase7" in path.name
     }
     identifier_violations: set[tuple[str, str]] = set()
     for path in paths:

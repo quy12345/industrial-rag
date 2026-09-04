@@ -1,8 +1,7 @@
-"""Run the approved ATV320 end-to-end evaluation against separate collections.
+"""Run the approval-gated ATV320 E2E Ragas scorecard.
 
-The output is intentionally sanitized: it records IDs, ranks, aggregate quality,
-latency, and token counts, but never questions, manual text, prompts, answers, or
-provider responses.  It is an explicit integration CLI and is not part of pytest.
+The command writes only compact sanitized schema-v15 artifacts. Raw review data is
+allowed only in the ignored ``artifacts/local-review`` tree.
 """
 
 from __future__ import annotations
@@ -13,13 +12,18 @@ import importlib.metadata
 import json
 import os
 import platform
-import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.application.generation_prompt import build_correction_text, format_evidence
+from app.application.generation_prompt import (
+    HUMAN_PROMPT,
+    SYSTEM_PROMPT,
+    build_correction_text,
+    format_evidence,
+)
 from app.application.query_service import QueryExecution, QueryService
 from app.application.reranking_service import CANDIDATE_TEXT_FORMAT
 from app.config import Settings
@@ -40,148 +44,58 @@ from evaluation.dataset import (
     validate_dataset,
     validate_evaluation_manifest,
 )
-from evaluation.development_review import (
-    build_live_development_review,
-    render_live_development_reviews_markdown,
-)
-from evaluation.e2e import (
-    aggregate_repeated_query_records,
-    score_query_execution,
-)
-from evaluation.facts import (
-    CLAIM_COMPLETENESS_EVALUATOR_ID,
-    DETERMINISTIC_FACT_EVALUATOR,
-    FACT_EVALUATOR_ID,
-    FACT_EVALUATOR_MODES,
-    HYBRID_FACT_EVALUATOR,
-    FactJudge,
-    FactJudgeError,
-    OpenRouterLunaFactJudge,
-    fact_evaluator_run_identity,
-)
-from evaluation.generation_experiments import (
-    BASELINE_GENERATION_VARIANT,
-    GENERATION_EXPERIMENTS,
-    GenerationExperiment,
-    generation_experiment_for,
-    generation_experiment_identity,
-)
-from evaluation.retrieval import build_corpus_exact_content_equivalence
+from evaluation.e2e import build_case_record, build_scorecard
 from evaluation.semantic import (
-    RagasSemanticJudge,
+    MetricScore,
+    RagasEvaluationInput,
+    RagasJudge,
+    RagasScorecardJudge,
+    RagasScores,
     SemanticConfigurationError,
-    SemanticEvaluationInput,
-    SemanticJudge,
     SemanticJudgeError,
-    SemanticScores,
-    aggregate_semantic_records,
+    render_reviewed_reference,
     semantic_run_identity,
 )
 
-CALIBRATION_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS"
-HELDOUT_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 HELDOUT PROVIDER EGRESS"
 DEVELOPMENT_PROVIDER_APPROVAL_TOKEN = "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
-DEVELOPMENT_REVIEW_PROVIDER_APPROVAL_TOKEN = (
-    "APPROVE ATV320 TARGETED DEVELOPMENT REVIEW EGRESS"
-)
 CONFIRMATION_PROVIDER_APPROVAL_TOKEN = "APPROVE ATV320 CONFIRMATION GENERATOR EGRESS"
-CALIBRATION_SEMANTIC_APPROVAL_TOKEN = (
-    "APPROVE ATV320 CALIBRATION OPENROUTER RAGAS EGRESS"
-)
-HELDOUT_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
-DEVELOPMENT_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS EGRESS"
-CONFIRMATION_SEMANTIC_APPROVAL_TOKEN = "APPROVE ATV320 CONFIRMATION OPENROUTER RAGAS EGRESS"
-CALIBRATION_FACT_JUDGE_APPROVAL_TOKEN = (
-    "APPROVE ATV320 CALIBRATION OPENROUTER FACT JUDGE EGRESS"
-)
-DEVELOPMENT_FACT_JUDGE_APPROVAL_TOKEN = (
-    "APPROVE ATV320 DEVELOPMENT OPENROUTER FACT JUDGE EGRESS"
-)
-CONFIRMATION_FACT_JUDGE_APPROVAL_TOKEN = (
-    "APPROVE ATV320 CONFIRMATION OPENROUTER FACT JUDGE EGRESS"
-)
-HELDOUT_FACT_JUDGE_APPROVAL_TOKEN = "APPROVE ATV320 HELDOUT OPENROUTER FACT JUDGE EGRESS"
-ACTIVE_CALIBRATION_PATH = Path("data/eval/phase7/calibration-v3.jsonl")
-ACTIVE_MANIFEST_PATH = Path("artifacts/metrics/phase-7-evaluation-manifest-v3.json")
+HELDOUT_PROVIDER_APPROVAL_TOKEN = "APPROVE PHASE 7 HELDOUT PROVIDER EGRESS"
+RAGAS_APPROVAL_TOKENS = {
+    "development": "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS SCORECARD EGRESS",
+    "confirmation": "APPROVE ATV320 CONFIRMATION OPENROUTER RAGAS SCORECARD EGRESS",
+    "heldout-v2": "APPROVE ATV320 HELDOUT OPENROUTER RAGAS SCORECARD EGRESS",
+}
 ACTIVE_DEVELOPMENT_PATH = Path("data/eval/atv320/development-v1.jsonl")
-ACTIVE_DEVELOPMENT_MANIFEST_PATH = Path(
-    "data/eval/atv320/development-v1-manifest.json"
-)
+ACTIVE_DEVELOPMENT_MANIFEST_PATH = Path("data/eval/atv320/development-v1-manifest.json")
 PRIVATE_CONFIRMATION_ROOT = Path("data/eval/atv320/private-confirmation-v1")
 PRIVATE_CONFIRMATION_DATASET_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v1.jsonl"
 PRIVATE_CONFIRMATION_MANIFEST_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v1-manifest.json"
 PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
-PRIVATE_LOCAL_REVIEW_ROOT = Path("artifacts/local-review")
-ARTIFACT_SCHEMA_VERSION = 14
-SOURCE_IDENTITY_VERSION = 10
+FROZEN_CHUNKS_PATH = Path("artifacts/phase7/frozen-chunks.jsonl")
+ARTIFACT_SCHEMA_VERSION = 15
+SOURCE_IDENTITY_VERSION = 11
 SOURCE_IDENTITY_PATHS = {
-    "citation_policy": Path("app/domain/citations.py"),
-    "content_identity": Path("app/domain/content_identity.py"),
     "dataset_contract": Path("evaluation/dataset.py"),
-    "dense_search_adapter": Path("app/infrastructure/qdrant/dense.py"),
-    "development_review": Path("evaluation/development_review.py"),
     "evaluator": Path("evaluation/e2e.py"),
-    "fact_evaluator": Path("evaluation/facts.py"),
-    "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
-    "evidence_policy": Path("app/domain/evidence.py"),
-    "fusion_policy": Path("app/domain/policies/fusion.py"),
-    "generation_adapter": Path("app/infrastructure/generation/langchain_structured.py"),
-    "generation_endpoints": Path("app/infrastructure/generation/endpoints.py"),
-    "generation_contract": Path("app/domain/generation.py"),
-    "generation_experiments": Path("evaluation/generation_experiments.py"),
-    "generation_prompt_policy": Path("app/application/generation_prompt.py"),
-    "list_completeness_policy": Path("app/domain/policies/list_completeness.py"),
-    "query_analysis_policy": Path("app/domain/policies/query_analysis.py"),
-    "query_role_policy": Path("app/domain/policies/query_roles.py"),
-    "query_service": Path("app/application/query_service.py"),
-    "retrieval_types": Path("app/domain/retrieval.py"),
-    "reranker_adapter": Path("app/infrastructure/models/reranker.py"),
-    "reranking_service": Path("app/application/reranking_service.py"),
-    "retrieval_metrics": Path("evaluation/retrieval.py"),
     "semantic_evaluator": Path("evaluation/semantic.py"),
+    "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
+    "generation_prompt": Path("app/application/generation_prompt.py"),
+    "query_service": Path("app/application/query_service.py"),
     "retrieval_composition": Path("app/composition/retrieval.py"),
     "retrieval_contract": Path("app/domain/retrieval_contracts.py"),
-    "search_adapters": Path("app/infrastructure/qdrant/search.py"),
-    "sparse_search_adapter": Path("app/infrastructure/qdrant/hybrid.py"),
 }
 
 
-def main() -> int:
-    args = _parse_args()
-    local_review_output = _resolve_private_local_review_output(
-        args.local_review_output
-    )
-    if args.review_item_id:
-        _configure_utf8_stdout()
-    _validate_execution_approval(args)
-    experiment = generation_experiment_for(args.generation_variant)
-    chunks = load_frozen_chunks(args.chunks)
-    dataset, validation, manifest = _load_selected_dataset(args, chunks)
-    selected = list(dataset)
-    if args.review_item_id:
-        items_by_id = {item.id: item for item in selected}
-        missing_ids = [
-            item_id for item_id in args.review_item_id if item_id not in items_by_id
-        ]
-        if missing_ids:
-            raise SystemExit(
-                "Targeted review item IDs were not found: " + ", ".join(missing_ids)
-            )
-        selected = [items_by_id[item_id] for item_id in args.review_item_id]
-    elif args.item_id is not None:
-        selected = [item for item in selected if item.id == args.item_id]
-        if not selected:
-            raise SystemExit(f"Diagnostic item ID was not found: {args.item_id}")
-    if args.max_queries is not None:
-        selected = selected[: args.max_queries]
-
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(argv)
+    _validate_approvals(args)
+    chunks = load_frozen_chunks(FROZEN_CHUNKS_PATH)
+    dataset, validation, manifest = _load_dataset(args.dataset, chunks)
+    selected = _select_items(dataset, args)
     settings = _runtime_settings(Settings())
-    _validate_semantic_approval(args)
-    semantic_judge = _build_semantic_judge(args)
-    _validate_fact_judge_approval(args)
-    fact_judge = _build_fact_judge(args)
+    judge = _build_judge(args)
 
     from app.composition.retrieval import (
         LazyQueryRetriever,
@@ -201,556 +115,233 @@ def main() -> int:
             lambda: build_query_retriever(
                 settings,
                 contract=ATV320_RETRIEVAL_CONTRACT,
-                capture_trace=True,
+                capture_trace=False,
             )
         ),
         evidence_gate=EvidenceGate(score_threshold=settings.evidence_score_threshold),
-        generator=_build_generation_adapter(settings, experiment),
+        generator=_build_generation_adapter(settings),
         settings=settings,
     )
-    full_dataset_hash = dataset_sha256(dataset)
-    exact_content_equivalence = build_corpus_exact_content_equivalence(chunks)
-    generation_configuration = _generation_configuration(settings, experiment)
-    identity = {
-        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
-        "dataset": args.dataset,
-        "dataset_sha256": full_dataset_hash,
-        "selected_item_ids": [item.id for item in selected],
-        "corpus": chunk_set_metadata(chunks),
-        "contract_chunk_ids_sha256": ATV320_RETRIEVAL_CONTRACT.chunk_ids_sha256,
-        "strategy": settings.retrieval_strategy,
-        "rerank_enabled": settings.rerank_enabled,
-        "dense_candidate_limit": settings.dense_candidate_limit,
-        "sparse_candidate_limit": settings.sparse_candidate_limit,
-        "union_rrf_prune_limit": ATV320_RETRIEVAL_CONTRACT.union_rrf_prune_limit,
-        "query_expansion_profile": ATV320_RETRIEVAL_CONTRACT.query_expansion_profile,
-        "candidate_text_format": CANDIDATE_TEXT_FORMAT,
-        "generation_provider": generation_configuration["provider"],
-        "generation_endpoint_profile": settings.generation_endpoint_profile,
-        "generation_model": settings.generation_model,
-        "generation_configuration": generation_configuration,
-        "generation_experiment": generation_experiment_identity(experiment),
-        "answer_boundary_configuration": _answer_boundary_configuration(
-            settings,
-            top_k=args.top_k,
-        ),
-        "repeat_schedule": {
-            "count": args.repeat_count,
-            "ordering": "repeat-major-dataset-order",
-        },
-        "semantic_evaluation": semantic_run_identity(args.semantic_judge),
-        "fact_evaluation": fact_evaluator_run_identity(args.fact_evaluator),
-        "source_identity": _source_identity(experiment),
-        "runtime_profile": _runtime_profile(),
-        "libraries": _library_versions(semantic_mode=args.semantic_judge),
-        "sealed_comparison_dataset_sha256": _sealed_comparison_dataset_sha256(
-            manifest, args.dataset
-        ),
-        "deduplicate_exact_content": settings.rerank_deduplicate_content,
-        "diagnostic_mode": (
-            (
-                "targeted_development_local_markdown_review"
-                if args.local_review_output is not None
-                else "targeted_development_terminal_review"
-            )
-            if args.review_item_id
-            else "sanitized_evaluation"
-        ),
-    }
+    identity = _run_identity(
+        args=args,
+        dataset=dataset,
+        selected=selected,
+        chunks=chunks,
+        settings=settings,
+        manifest=manifest,
+    )
     records = _load_checkpoint(args.checkpoint, identity)
-    _require_empty_targeted_review_checkpoint(records, enabled=bool(args.review_item_id))
-    schedule = _execution_schedule(selected, repeat_count=args.repeat_count)
-    _validate_checkpoint_prefix(records, schedule)
-    observed_keys = [_checkpoint_key(record) for record in records]
-    completed_keys = set(observed_keys)
-    live_reviews: list[Mapping[str, Any]] = []
-    for repeat_index, item in schedule:
-        if (item.id, repeat_index) in completed_keys:
+    _validate_checkpoint_prefix(records, selected)
+    completed_ids = {str(record["id"]) for record in records}
+    for item in selected:
+        if item.id in completed_ids:
             continue
         try:
-            execution = service.execute(
-                question=item.question,
-                document_id=None,
-                top_k=args.top_k,
-            )
-            record = score_query_execution(
+            execution = service.execute(question=item.question, document_id=None, top_k=5)
+            scores = _score_execution(
                 item,
                 execution,
-                exact_content_equivalence=exact_content_equivalence,
-                fact_evaluator_mode=args.fact_evaluator,
-                fact_judge=fact_judge,
+                judge=judge,
+                include_diagnostics=args.ragas_diagnostics,
+                max_context_chars=settings.generation_max_context_chars,
             )
-            record["repeat_index"] = repeat_index
-            if semantic_judge is not None:
-                record["semantic_evaluation"] = _score_semantic_execution(
-                    item,
-                    execution,
-                    judge=semantic_judge,
-                    max_context_chars=settings.generation_max_context_chars,
-                ).to_payload()
-        except (SemanticJudgeError, FactJudgeError) as exc:
+            records.append(build_case_record(item, execution, scores))
+            _write_checkpoint(args.checkpoint, identity, records)
+        except SemanticJudgeError as exc:
             _write_checkpoint(args.checkpoint, identity, records)
             raise RuntimeError(str(exc)) from None
         except Exception as exc:
             _write_checkpoint(args.checkpoint, identity, records)
             raise RuntimeError(f"ATV320 execution failed for dataset item {item.id}.") from exc
-        records.append(record)
-        _write_checkpoint(args.checkpoint, identity, records)
-        if args.review_item_id:
-            review = build_live_development_review(
-                item=item,
-                execution=execution,
-                record=record,
-                chunks=chunks,
-                destination=(
-                    "private_local_markdown"
-                    if local_review_output is not None
-                    else "terminal_stdout_only"
-                ),
-            )
-            if local_review_output is None:
-                _print_live_development_review(review)
-            else:
-                live_reviews.append(review)
 
-    if len(records) != len(schedule):
-        raise RuntimeError("Checkpoint result count does not match the selected dataset.")
-    if local_review_output is not None:
-        _write_private_local_review(local_review_output, live_reviews)
-    complete_evaluation = len(selected) == len(dataset)
-    run_aggregate = _aggregate_run_records(
-        records,
-        repeat_count=args.repeat_count,
-        complete_evaluation=complete_evaluation,
-    )
-    overall = run_aggregate["overall"]
-    repeated_runs = run_aggregate["repeated_runs"]
-    semantic_evaluation = (
-        {"status": "disabled", "run_identity": semantic_run_identity("none")}
-        if semantic_judge is None
-        else {
-            "status": "complete",
-            "run_identity": semantic_run_identity("ragas"),
-            "aggregate": aggregate_semantic_records(records),
-        }
-    )
-    quality_gates = run_aggregate["quality_gates"]
+    if len(records) != len(selected):
+        raise RuntimeError("Checkpoint result count does not match selected items.")
     output = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "timestamp": datetime.now(UTC).isoformat(),
         "run_identity": identity,
-        "dataset_validation": validation,
-        "overall": overall,
-        "repeated_runs": repeated_runs,
-        "semantic_evaluation": semantic_evaluation,
-        "quality_gates": quality_gates,
-        "evaluation_methodology": {
-            "headline_answer_metric": (
-                "final_fact_accuracy_when_answered"
-                if args.fact_evaluator == HYBRID_FACT_EVALUATOR
-                else "deterministic_fact_accuracy_when_answered"
-            ),
-            "fact_evaluator_id": FACT_EVALUATOR_ID,
-            "fact_evaluator_mode": args.fact_evaluator,
-            "claim_completeness_evaluator_id": CLAIM_COMPLETENESS_EVALUATOR_ID,
-            "generation_variant": experiment.identifier,
-            "repeat_schedule": "repeat-major-dataset-order",
-            "repeat_aggregation": "per_run_only_not_pooled",
-            "strict_phrase_accuracy": "diagnostic_only",
-            "token_coverage": "diagnostic_only",
-            "retrieval_relevance": "stable relevant_chunk_ids only",
-            "exact_content_equivalence": (
-                "diagnostic_only_corpus_wide_exact_normalized_content"
-            ),
-            "retrieval_trace": "sanitized_ids_counts_ranks_and_allowlisted_role_signals",
-        },
-        "per_query": records,
+        "scorecard": build_scorecard(records),
+        "cases": records,
         "sanitization": {
             "raw_question": "excluded",
             "raw_answer": "excluded",
+            "reference_facts": "excluded",
             "evidence_text": "excluded",
             "provider_response": "excluded",
             "judge_reasoning": "excluded",
-            "expected_fact_text": "excluded",
-            "candidate_text_and_unlisted_metadata": "excluded",
-            "targeted_review_stdout": (
-                (
-                    "disabled_raw_content_written_to_private_local_markdown"
-                    if args.local_review_output is not None
-                    else "raw_content_printed_ephemerally_not_persisted"
-                )
-                if args.review_item_id
-                else "disabled"
-            ),
+            "retrieval_trace": "excluded_use_evaluate_retrieval",
         },
     }
     write_json_atomic(args.output, output)
-    quality_passed = bool(output["quality_gates"]["overall_pass"])
-    if not complete_evaluation:
-        print(f"ATV320 {args.dataset} partial diagnostic completed: {args.output}")
-        return 0
-    quality_status = "PASS" if quality_passed else "FAIL"
-    print(
-        f"ATV320 {args.dataset} E2E evaluation completed; "
-        f"variant {experiment.identifier} r{args.repeat_count}; "
-        f"quality gates {quality_status}: {args.output}"
-    )
-    return 0 if quality_passed else 2
+    print(f"ATV320 {args.dataset} Ragas scorecard completed: {args.output}")
+    return 0
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--dataset",
-        choices=("calibration", "development", "confirmation", "test", "heldout-v2"),
-        required=True,
+        "--dataset", choices=("development", "confirmation", "heldout-v2"), required=True
     )
-    parser.add_argument("--calibration", type=Path, default=ACTIVE_CALIBRATION_PATH)
-    parser.add_argument("--development", type=Path, default=ACTIVE_DEVELOPMENT_PATH)
-    parser.add_argument(
-        "--confirmation", type=Path, default=PRIVATE_CONFIRMATION_DATASET_PATH
-    )
-    parser.add_argument("--test", type=Path, default=Path("data/eval/phase7/test.jsonl"))
-    parser.add_argument(
-        "--heldout-v2", type=Path, default=PRIVATE_HELDOUT_DATASET_PATH
-    )
-    parser.add_argument("--chunks", type=Path, default=Path("artifacts/phase7/frozen-chunks.jsonl"))
-    parser.add_argument("--manifest", type=Path, default=None)
-    parser.add_argument("--top-k", type=int, default=5, choices=range(1, 11))
-    parser.add_argument(
-        "--generation-variant",
-        choices=tuple(GENERATION_EXPERIMENTS),
-        default=BASELINE_GENERATION_VARIANT,
-        help="Preregistered generation contract used only by this evaluation run.",
-    )
-    parser.add_argument(
-        "--repeat-count",
-        type=int,
-        choices=(1, 3),
-        default=1,
-        help="Evaluate once, or repeat the complete development split three times.",
-    )
-    parser.add_argument(
-        "--provider-approval-token",
-        required=True,
-        help="Required exact approval before a question/evidence is sent to a provider.",
-    )
-    parser.add_argument(
-        "--semantic-judge",
-        choices=("none", "ragas"),
-        default="none",
-        help="Optional Ragas semantic scoring through the pinned OpenRouter gateway.",
-    )
-    parser.add_argument(
-        "--judge-provider-approval-token",
-        default=None,
-        help="Separate exact approval for OpenRouter semantic-judge egress.",
-    )
-    parser.add_argument(
-        "--fact-evaluator",
-        choices=FACT_EVALUATOR_MODES,
-        default=DETERMINISTIC_FACT_EVALUATOR,
-        help="Fact scoring mode; the default deterministic evaluator never calls a provider.",
-    )
-    parser.add_argument(
-        "--fact-judge-approval-token",
-        default=None,
-        help="Separate exact approval for OpenRouter Luna fact-judge egress.",
-    )
-    parser.add_argument("--max-queries", type=int, default=None)
-    parser.add_argument(
-        "--item-id",
-        default=None,
-        help=(
-            "Calibration/development item ID for a sanitized targeted diagnostic; "
-            "development requires explicit output and checkpoint paths."
-        ),
-    )
-    parser.add_argument(
-        "--review-item-id",
-        action="append",
-        default=[],
-        help=(
-            "Development item ID for an approved live local review; repeat the option "
-            "for a bounded cohort of at most 20 unique items."
-        ),
-    )
-    parser.add_argument(
-        "--local-review-output",
-        type=Path,
-        default=None,
-        help=(
-            "Write raw targeted review content to a new ignored Markdown file under "
-            "artifacts/local-review instead of printing it to stdout."
-        ),
-    )
-    parser.add_argument("--checkpoint", type=Path, default=None)
-    parser.add_argument("--output", type=Path, default=None)
-    args = parser.parse_args()
-    if args.max_queries is not None and args.max_queries <= 0:
-        parser.error("--max-queries must be positive")
-    if args.item_id is not None and args.dataset not in {"calibration", "development"}:
-        parser.error("--item-id is permitted only for calibration or development diagnostics")
-    if args.item_id is not None and args.max_queries is not None:
-        parser.error("--item-id and --max-queries are mutually exclusive")
-    if args.review_item_id and args.dataset != "development":
-        parser.error("--review-item-id is permitted only for development diagnostics")
-    if args.review_item_id and (args.item_id is not None or args.max_queries is not None):
-        parser.error("--review-item-id cannot be combined with --item-id or --max-queries")
-    if len(args.review_item_id) > 20:
-        parser.error("Targeted development review is limited to 20 items")
-    if len(set(args.review_item_id)) != len(args.review_item_id):
-        parser.error("Targeted development review item IDs must be unique")
-    if args.review_item_id and args.generation_variant != BASELINE_GENERATION_VARIANT:
-        parser.error("Targeted development review requires baseline-v1")
-    if args.review_item_id and args.repeat_count != 1:
-        parser.error("Targeted development review requires --repeat-count 1")
-    if args.review_item_id and args.semantic_judge != "none":
-        parser.error("Targeted development review cannot run semantic evaluation")
-    if args.local_review_output is not None and not args.review_item_id:
-        parser.error("--local-review-output requires --review-item-id")
-    if (
-        args.generation_variant != BASELINE_GENERATION_VARIANT
-        and args.dataset != "development"
-    ):
-        parser.error("Experimental generation variants are development-only")
-    if args.repeat_count == 3 and args.dataset != "development":
-        parser.error("--repeat-count 3 is permitted only for the development dataset")
-    if args.repeat_count == 3 and (
-        args.item_id is not None or args.max_queries is not None
-    ):
-        parser.error("--repeat-count 3 requires the complete development dataset")
-    if args.repeat_count == 3 and args.semantic_judge != "none":
-        parser.error("Semantic evaluation cannot be combined with repeated generation runs")
-    if args.repeat_count == 3 and args.fact_evaluator == HYBRID_FACT_EVALUATOR:
-        parser.error("Hybrid fact evaluation cannot be combined with repeated generation runs")
-    if args.dataset in {"confirmation", "heldout-v2"} and args.max_queries is not None:
-        parser.error("--max-queries is not permitted for sealed evaluation datasets")
-    if (
-        args.dataset == "development"
-        and (
-            args.item_id is not None
-            or args.max_queries is not None
-            or args.review_item_id
-        )
-        and (args.output is None or args.checkpoint is None)
-    ):
-        parser.error(
-            "Partial development diagnostics require explicit --output and --checkpoint paths"
-        )
-    if args.manifest is None:
-        args.manifest = {
-            "development": ACTIVE_DEVELOPMENT_MANIFEST_PATH,
-            "confirmation": PRIVATE_CONFIRMATION_MANIFEST_PATH,
-            "heldout-v2": PRIVATE_HELDOUT_MANIFEST_PATH,
-        }.get(args.dataset, ACTIVE_MANIFEST_PATH)
+    parser.add_argument("--provider-approval-token", required=True)
+    parser.add_argument("--judge-provider-approval-token", required=True)
+    parser.add_argument("--ragas-diagnostics", action="store_true")
+    parser.add_argument("--review-cohort", choices=("judge-validation-v1",))
+    parser.add_argument("--review-item-id", action="append", default=[])
+    parser.add_argument("--local-review-output", type=Path)
+    parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args(argv)
+    if args.review_cohort and args.review_item_id:
+        parser.error("--review-cohort and --review-item-id are mutually exclusive")
+    if (args.review_cohort or args.review_item_id) and args.dataset != "development":
+        parser.error("Review selection is permitted only for development")
+    if len(args.review_item_id) > 40 or len(set(args.review_item_id)) != len(args.review_item_id):
+        parser.error("Targeted review requires at most 40 unique item IDs")
+    partial = bool(args.review_cohort or args.review_item_id)
+    if partial and args.local_review_output is None:
+        parser.error("Review selection requires --local-review-output")
+    if args.local_review_output is not None and not partial:
+        parser.error("--local-review-output requires a review selection")
+    if partial and (args.output is None or args.checkpoint is None):
+        parser.error("Partial review requires explicit --output and --checkpoint")
+    if args.local_review_output is not None:
+        _require_private_review_path(args.local_review_output)
     if args.output is None:
-        args.output = Path(
-            f"artifacts/metrics/atv320-{args.dataset}-{args.generation_variant}"
-            f"-r{args.repeat_count}-e2e-v{ARTIFACT_SCHEMA_VERSION}.json"
-        )
+        args.output = Path(f"artifacts/metrics/atv320-{args.dataset}-e2e-v15.json")
     if args.checkpoint is None:
-        args.checkpoint = Path(
-            f"artifacts/metrics/atv320-{args.dataset}-{args.generation_variant}"
-            f"-r{args.repeat_count}-e2e-v{ARTIFACT_SCHEMA_VERSION}"
-            "-checkpoint.jsonl"
-        )
+        args.checkpoint = Path(f"artifacts/metrics/atv320-{args.dataset}-e2e-v15-checkpoint.jsonl")
     return args
 
 
-def _validate_execution_approval(args: argparse.Namespace) -> None:
-    if getattr(args, "review_item_id", None):
-        expected = DEVELOPMENT_REVIEW_PROVIDER_APPROVAL_TOKEN
-    else:
-        expected = {
-            "calibration": CALIBRATION_PROVIDER_APPROVAL_TOKEN,
-            "development": DEVELOPMENT_PROVIDER_APPROVAL_TOKEN,
-            "confirmation": CONFIRMATION_PROVIDER_APPROVAL_TOKEN,
-            "test": HELDOUT_PROVIDER_APPROVAL_TOKEN,
-            "heldout-v2": HELDOUT_PROVIDER_APPROVAL_TOKEN,
-        }[args.dataset]
-    if args.provider_approval_token != expected:
-        raise SystemExit("ATV320 provider approval token is missing or invalid for this dataset.")
-
-
-def _validate_semantic_approval(
-    args: argparse.Namespace,
-    *,
-    environ: Mapping[str, str] | None = None,
+def _validate_approvals(
+    args: argparse.Namespace, *, environ: Mapping[str, str] | None = None
 ) -> None:
-    if args.semantic_judge == "none":
-        if args.judge_provider_approval_token is not None:
-            raise SystemExit(
-                "Semantic approval token was supplied while semantic evaluation is disabled."
-            )
-        return
-    expected = {
-        "calibration": CALIBRATION_SEMANTIC_APPROVAL_TOKEN,
-        "development": DEVELOPMENT_SEMANTIC_APPROVAL_TOKEN,
-        "confirmation": CONFIRMATION_SEMANTIC_APPROVAL_TOKEN,
-        "test": HELDOUT_SEMANTIC_APPROVAL_TOKEN,
-        "heldout-v2": HELDOUT_SEMANTIC_APPROVAL_TOKEN,
+    expected_generator = {
+        "development": DEVELOPMENT_PROVIDER_APPROVAL_TOKEN,
+        "confirmation": CONFIRMATION_PROVIDER_APPROVAL_TOKEN,
+        "heldout-v2": HELDOUT_PROVIDER_APPROVAL_TOKEN,
     }[args.dataset]
-    if args.judge_provider_approval_token != expected:
-        raise SystemExit(
-            "OpenRouter semantic-judge approval token is missing or invalid for this dataset."
-        )
+    if args.provider_approval_token != expected_generator:
+        raise SystemExit("Generator approval token is missing or invalid for this dataset.")
+    if args.judge_provider_approval_token != RAGAS_APPROVAL_TOKENS[args.dataset]:
+        raise SystemExit("Ragas scorecard approval token is missing or invalid for this dataset.")
     if _openrouter_api_key(environ) is None:
-        raise SystemExit("OPENROUTER_API_KEY is required for Ragas semantic evaluation.")
+        raise SystemExit("OPENROUTER_API_KEY is required for the Ragas scorecard.")
 
 
-def _build_semantic_judge(
-    args: argparse.Namespace,
-    *,
-    environ: Mapping[str, str] | None = None,
-) -> SemanticJudge | None:
-    if args.semantic_judge == "none":
-        return None
+def _build_judge(
+    args: argparse.Namespace, *, environ: Mapping[str, str] | None = None
+) -> RagasJudge:
     api_key = _openrouter_api_key(environ)
     if api_key is None:
-        raise SemanticConfigurationError(
-            "OPENROUTER_API_KEY is required for Ragas semantic evaluation."
-        )
-    return RagasSemanticJudge(api_key=api_key)
+        raise SemanticConfigurationError("OPENROUTER_API_KEY is required for the Ragas scorecard.")
+    return RagasScorecardJudge(api_key=api_key, include_diagnostics=args.ragas_diagnostics)
 
 
-def _validate_fact_judge_approval(
-    args: argparse.Namespace,
-    *,
-    environ: Mapping[str, str] | None = None,
-) -> None:
-    if args.fact_evaluator == DETERMINISTIC_FACT_EVALUATOR:
-        if args.fact_judge_approval_token is not None:
-            raise SystemExit(
-                "Fact-judge approval token was supplied while hybrid evaluation is disabled."
-            )
-        return
-    expected = {
-        "calibration": CALIBRATION_FACT_JUDGE_APPROVAL_TOKEN,
-        "development": DEVELOPMENT_FACT_JUDGE_APPROVAL_TOKEN,
-        "confirmation": CONFIRMATION_FACT_JUDGE_APPROVAL_TOKEN,
-        "test": HELDOUT_FACT_JUDGE_APPROVAL_TOKEN,
-        "heldout-v2": HELDOUT_FACT_JUDGE_APPROVAL_TOKEN,
-    }[args.dataset]
-    if args.fact_judge_approval_token != expected:
-        raise SystemExit(
-            "OpenRouter fact-judge approval token is missing or invalid for this dataset."
-        )
-    if _openrouter_api_key(environ) is None:
-        raise SystemExit("OPENROUTER_API_KEY is required for hybrid fact evaluation.")
-
-
-def _build_fact_judge(
-    args: argparse.Namespace,
-    *,
-    environ: Mapping[str, str] | None = None,
-) -> FactJudge | None:
-    if args.fact_evaluator == DETERMINISTIC_FACT_EVALUATOR:
-        return None
-    api_key = _openrouter_api_key(environ)
-    if api_key is None:
-        raise FactJudgeError(item_id="configuration", category="missing_api_key")
-    return OpenRouterLunaFactJudge(api_key=api_key)
-
-
-def _openrouter_api_key(environ: Mapping[str, str] | None = None) -> str | None:
-    source = os.environ if environ is None else environ
-    value = source.get("OPENROUTER_API_KEY", "").strip()
-    return value or None
-
-
-def _score_semantic_execution(
+def _score_execution(
     item: EvaluationItem,
     execution: QueryExecution,
     *,
-    judge: SemanticJudge,
+    judge: RagasJudge,
+    include_diagnostics: bool,
     max_context_chars: int,
-) -> SemanticScores:
-    if execution.response.abstained:
-        return SemanticScores.not_applicable_abstained()
-    candidates = execution.evidence_candidates
-    if not candidates:
-        raise SemanticJudgeError(
-            item_id=item.id,
-            metric="input_boundary",
-            category="missing_final_evidence",
+) -> RagasScores:
+    not_applicable = MetricScore.not_applicable()
+    if not item.answerable:
+        return RagasScores(*(not_applicable for _ in range(5)))
+
+    generator_saw_evidence = execution.evidence_context_chars > 0
+    generation_context = ""
+    if generator_saw_evidence and execution.evidence_candidates:
+        generation_context = format_evidence(
+            execution.evidence_candidates, max_chars=max_context_chars
+        ).text
+    answered = not execution.response.abstained
+    citation_ids = [citation.chunk_id for citation in execution.response.citations]
+    candidates_by_id = {row.chunk_id: row for row in execution.evidence_candidates}
+    citations_valid = bool(citation_ids) and set(citation_ids) <= set(candidates_by_id)
+    cited_contexts = tuple(
+        candidates_by_id[chunk_id].text
+        for chunk_id in dict.fromkeys(citation_ids)
+        if chunk_id in candidates_by_id
+    )
+    if not generation_context:
+        return RagasScores(
+            not_applicable,
+            MetricScore.deterministic_zero("invalid_citations") if answered else not_applicable,
+            MetricScore.deterministic_zero("empty_context"),
+            not_applicable,
+            not_applicable,
         )
-    evidence = format_evidence(candidates, max_chars=max_context_chars)
-    return judge.score(
-        SemanticEvaluationInput(
+
+    scores = judge.score(
+        RagasEvaluationInput(
             item_id=item.id,
             question=item.question,
-            answer=execution.response.answer,
-            rendered_generation_evidence=evidence.text,
-            ranked_final_contexts=tuple(candidate.text for candidate in candidates),
+            answer=execution.response.answer if answered else "",
+            reference=render_reviewed_reference(item),
+            cited_contexts=cited_contexts,
+            generation_context=generation_context,
+            final_contexts=tuple(row.text for row in execution.evidence_candidates),
+        ),
+        score_factual_correctness=answered,
+        score_faithfulness=answered and citations_valid,
+        score_context_recall=True,
+        include_diagnostics=include_diagnostics,
+    )
+    if answered and not citations_valid:
+        scores = replace(
+            scores,
+            faithfulness=MetricScore.deterministic_zero("invalid_citations"),
         )
-    )
+    return scores
 
 
-def _load_selected_dataset(
-    args: argparse.Namespace, chunks: list[Any]
-) -> tuple[list[Any], dict[str, Any], dict[str, Any]]:
-    """Load exactly one approved split without opening its sealed counterpart."""
-
-    if args.dataset == "calibration":
-        dataset_path = args.calibration
-        validation_kind = "calibration"
-        dataset_key = "calibration_dataset_sha256"
-    elif args.dataset == "development":
-        dataset_path = args.development
-        validation_kind = "development"
-        dataset_key = "development_dataset_sha256"
-    elif args.dataset == "confirmation":
-        dataset_path = args.confirmation
-        validation_kind = "confirmation"
-        dataset_key = "confirmation_dataset_sha256"
-        _require_private_confirmation_path(dataset_path)
-        _require_private_confirmation_path(args.manifest)
-    elif args.dataset == "test":
-        dataset_path = args.test
-        validation_kind = "test"
-        dataset_key = "test_dataset_sha256"
-    else:
-        dataset_path = args.heldout_v2
-        validation_kind = "test"
-        dataset_key = "heldout_dataset_sha256"
-        _require_private_heldout_path(dataset_path)
-        _require_private_heldout_path(args.manifest)
-    dataset = read_dataset(dataset_path)
-    validation = validate_dataset(dataset, chunks, kind=validation_kind)
-    if any(item.review_status != "approved" for item in dataset):
-        raise SystemExit("ATV320 evaluation requires an explicitly approved dataset.")
-    manifest = validate_evaluation_manifest(
-        args.manifest,
-        chunks,
-        dataset,
-        dataset_key=dataset_key,
-    )
-    return dataset, validation, manifest
+def _select_items(items: list[EvaluationItem], args: argparse.Namespace) -> list[EvaluationItem]:
+    if args.review_cohort or args.review_item_id:
+        raise SystemExit("Private judge-validation review is implemented in E04 Batch 2.")
+    return items
 
 
-def _require_private_heldout_path(path: Path) -> None:
-    try:
-        path.resolve().relative_to(PRIVATE_HELDOUT_ROOT.resolve())
-    except ValueError as exc:
-        raise SystemExit(
-            f"Held-out v2 input and manifest must remain under {PRIVATE_HELDOUT_ROOT}."
-        ) from exc
-
-
-def _require_private_confirmation_path(path: Path) -> None:
-    try:
-        path.resolve().relative_to(PRIVATE_CONFIRMATION_ROOT.resolve())
-    except ValueError as exc:
-        raise SystemExit(
-            "Confirmation input and manifest must remain under "
-            f"{PRIVATE_CONFIRMATION_ROOT}."
-        ) from exc
+def _load_dataset(
+    dataset_name: str, chunks: list[Any]
+) -> tuple[list[EvaluationItem], dict[str, Any], dict[str, Any]]:
+    paths = {
+        "development": (
+            ACTIVE_DEVELOPMENT_PATH,
+            ACTIVE_DEVELOPMENT_MANIFEST_PATH,
+            "development",
+            "development_dataset_sha256",
+        ),
+        "confirmation": (
+            PRIVATE_CONFIRMATION_DATASET_PATH,
+            PRIVATE_CONFIRMATION_MANIFEST_PATH,
+            "confirmation",
+            "confirmation_dataset_sha256",
+        ),
+        "heldout-v2": (
+            PRIVATE_HELDOUT_DATASET_PATH,
+            PRIVATE_HELDOUT_MANIFEST_PATH,
+            "test",
+            "heldout_dataset_sha256",
+        ),
+    }
+    dataset_path, manifest_path, validation_kind, hash_key = paths[dataset_name]
+    if dataset_name == "confirmation":
+        _require_under(dataset_path, PRIVATE_CONFIRMATION_ROOT, "Confirmation")
+        _require_under(manifest_path, PRIVATE_CONFIRMATION_ROOT, "Confirmation")
+    if dataset_name == "heldout-v2":
+        _require_under(dataset_path, PRIVATE_HELDOUT_ROOT, "Held-out v2")
+        _require_under(manifest_path, PRIVATE_HELDOUT_ROOT, "Held-out v2")
+    items = read_dataset(dataset_path)
+    validation = validate_dataset(items, chunks, kind=validation_kind)
+    if any(item.review_status != "approved" for item in items):
+        raise SystemExit("ATV320 evaluation requires an approved dataset.")
+    manifest = validate_evaluation_manifest(manifest_path, chunks, items, dataset_key=hash_key)
+    return items, validation, manifest
 
 
 def _runtime_settings(settings: Settings) -> Settings:
-    """Make the fixed ATV320 runtime selection explicit and artifact-independent."""
-
     return settings.model_copy(
         update={
             "qdrant_collection": ATV320_RETRIEVAL_CONTRACT.dense_collection,
@@ -766,30 +357,119 @@ def _runtime_settings(settings: Settings) -> Settings:
     )
 
 
-def _build_generation_adapter(
-    settings: Settings,
-    experiment: GenerationExperiment,
-) -> LangChainStructuredGenerator:
-    """Compose the selected evaluation-only generation contract without model I/O."""
-
+def _build_generation_adapter(settings: Settings) -> LangChainStructuredGenerator:
     return LangChainStructuredGenerator(
         settings,
-        system_prompt=experiment.system_prompt,
-        human_prompt=experiment.human_prompt,
+        system_prompt=SYSTEM_PROMPT,
+        human_prompt=HUMAN_PROMPT,
         correction_text_builder=build_correction_text,
-        output_schema=experiment.output_schema,
-        output_mapper=experiment.output_mapper,
     )
 
 
-def _sealed_comparison_dataset_sha256(
-    manifest: Mapping[str, Any], dataset: str
-) -> str:
+def _run_identity(
+    *,
+    args: argparse.Namespace,
+    dataset: list[EvaluationItem],
+    selected: list[EvaluationItem],
+    chunks: list[Any],
+    settings: Settings,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    generation = generation_endpoint_identity(settings)
+    return {
+        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "dataset": args.dataset,
+        "dataset_sha256": dataset_sha256(dataset),
+        "selected_item_ids": [item.id for item in selected],
+        "corpus": chunk_set_metadata(chunks),
+        "contract_chunk_ids_sha256": ATV320_RETRIEVAL_CONTRACT.chunk_ids_sha256,
+        "candidate_text_format": CANDIDATE_TEXT_FORMAT,
+        "evidence_top_k": 5,
+        "generation": generation,
+        "generation_max_context_chars": settings.generation_max_context_chars,
+        "ragas": semantic_run_identity(include_diagnostics=args.ragas_diagnostics),
+        "source_identity": _source_identity(),
+        "runtime": _runtime_profile(),
+        "libraries": _library_versions(),
+        "sealed_comparison_dataset_sha256": _sealed_comparison_hash(manifest, args.dataset),
+        "review": {
+            "cohort": args.review_cohort,
+            "selected_ids_sha256": _selected_ids_hash(selected),
+        },
+    }
+
+
+def _source_identity() -> dict[str, Any]:
+    return {
+        "version": SOURCE_IDENTITY_VERSION,
+        "files": {name: _file_sha256(path) for name, path in SOURCE_IDENTITY_PATHS.items()},
+        "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
+    }
+
+
+def _runtime_profile() -> dict[str, Any]:
+    contract = ATV320_RETRIEVAL_CONTRACT
+    return {
+        "contract_id": contract.contract_id,
+        "dense_candidate_limit": contract.dense_candidate_limit,
+        "sparse_candidate_limit": contract.sparse_candidate_limit,
+        "candidate_budget": contract.union_rrf_prune_limit,
+        "capture_trace": False,
+    }
+
+
+def _library_versions() -> dict[str, str]:
+    versions = {"python": platform.python_version()}
+    for name in (
+        "fastembed",
+        "langchain-core",
+        "langchain-openai",
+        "onnxruntime",
+        "pydantic",
+        "qdrant-client",
+        "langchain-community",
+        "openai",
+        "ragas",
+    ):
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = "not-installed"
+    return versions
+
+
+def _load_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        header = json.loads(lines[0]) if lines else {}
+        records = [json.loads(line) for line in lines[1:]]
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Malformed ATV320 checkpoint: {path}") from exc
+    if header != {"run_identity": identity}:
+        raise RuntimeError("Existing ATV320 checkpoint belongs to a different frozen run.")
+    ids = [record.get("id") for record in records]
+    if len(ids) != len(set(ids)):
+        raise RuntimeError("Existing ATV320 checkpoint contains duplicate item IDs.")
+    return records
+
+
+def _write_checkpoint(path: Path, identity: dict[str, Any], records: list[dict[str, Any]]) -> None:
+    write_jsonl_atomic(path, [{"run_identity": identity}, *records])
+
+
+def _validate_checkpoint_prefix(
+    records: list[dict[str, Any]], selected: list[EvaluationItem]
+) -> None:
+    if [record.get("id") for record in records] != [item.id for item in selected[: len(records)]]:
+        raise RuntimeError("Existing ATV320 checkpoint does not match dataset order.")
+
+
+def _sealed_comparison_hash(manifest: Mapping[str, Any], dataset: str) -> str:
     key = {
-        "calibration": "test_dataset_sha256",
         "development": "confirmation_dataset_sha256",
         "confirmation": "development_dataset_sha256",
-        "test": "test_dataset_sha256",
         "heldout-v2": "heldout_dataset_sha256",
     }[dataset]
     value = manifest.get(key)
@@ -798,260 +478,33 @@ def _sealed_comparison_dataset_sha256(
     return value
 
 
-def _generation_configuration(
-    settings: Settings,
-    experiment: GenerationExperiment,
-) -> dict[str, Any]:
-    return {
-        **generation_endpoint_identity(settings),
-        "structured_output": {
-            "schema": experiment.output_schema.__name__,
-            "method": "json_schema",
-            "strict": True,
-            "include_raw": True,
-        },
-        "maximum_correction_retries": 1,
-    }
-
-
-def _answer_boundary_configuration(
-    settings: Settings,
-    *,
-    top_k: int,
-) -> dict[str, int | float | None]:
-    """Seal every resolved setting that changes answer evidence or citations."""
-
-    return {
-        "evidence_top_k": top_k,
-        "evidence_score_threshold": settings.evidence_score_threshold,
-        "generation_max_context_chars": settings.generation_max_context_chars,
-        "citation_excerpt_max_chars": settings.citation_excerpt_max_chars,
-    }
-
-
-def _source_identity(
-    experiment: GenerationExperiment | None = None,
-) -> dict[str, Any]:
-    """Hash canonical behavior owners under the explicit v8 provenance schema."""
-
-    selected = experiment or generation_experiment_for(BASELINE_GENERATION_VARIANT)
-
-    return {
-        "version": SOURCE_IDENTITY_VERSION,
-        "files": {
-            name: _file_sha256(path) for name, path in SOURCE_IDENTITY_PATHS.items()
-        },
-        "system_prompt_sha256": hashlib.sha256(
-            selected.system_prompt.encode("utf-8")
-        ).hexdigest(),
-    }
-
-
-def _aggregate_run_records(
-    records: list[dict[str, Any]],
-    *,
-    repeat_count: int,
-    complete_evaluation: bool,
-) -> dict[str, Any]:
-    if not complete_evaluation:
-        return {
-            "overall": None,
-            "repeated_runs": None,
-            "quality_gates": {
-                "overall_pass": False,
-                "status": "NOT_EVALUATED_PARTIAL_SELECTION",
-                "gates": {},
-            },
-        }
-    repeated_runs = aggregate_repeated_query_records(
-        records,
-        repeat_count=repeat_count,
-    )
-    if repeat_count == 1:
-        first_run = repeated_runs["per_repeat"][0]
-        return {
-            "overall": first_run["overall"],
-            "repeated_runs": repeated_runs,
-            "quality_gates": first_run["quality_gates"],
-        }
-    per_repeat = [
-        {
-            "repeat_index": row["repeat_index"],
-            "quality_gates": row["quality_gates"],
-        }
-        for row in repeated_runs["per_repeat"]
-    ]
-    return {
-        "overall": None,
-        "repeated_runs": repeated_runs,
-        "quality_gates": {
-            "overall_pass": all(
-                row["quality_gates"]["overall_pass"] for row in per_repeat
-            ),
-            "status": "ALL_REPEATS_EVALUATED",
-            "selection_policy": "all_repeats_must_pass",
-            "per_repeat": per_repeat,
-        },
-    }
-
-
-def _runtime_profile() -> dict[str, Any]:
-    contract = ATV320_RETRIEVAL_CONTRACT
-    profile = contract.fusion_profile
-    return {
-        "dense_candidate_limit": contract.dense_candidate_limit,
-        "sparse_candidate_limit": contract.sparse_candidate_limit,
-        "candidate_budget": contract.union_rrf_prune_limit,
-        "refill_after_content_dedup": contract.refill_after_content_dedup,
-        "diagnostic_component_limit": contract.diagnostic_component_limit,
-        "rrf_k": contract.rrf_k,
-        "rerank_batch_size": contract.frozen_rerank_batch_size,
-        "rerank_threads": contract.frozen_rerank_threads,
-        "fusion_profile": None if profile is None else profile.__dict__,
-    }
-
-
-def _library_versions(*, semantic_mode: str = "none") -> dict[str, str]:
-    names = [
-        "fastembed",
-        "langchain-core",
-        "langchain-openai",
-        "onnxruntime",
-        "pydantic",
-        "qdrant-client",
-    ]
-    if semantic_mode == "ragas":
-        names.extend(("langchain-community", "openai", "ragas"))
-    versions: dict[str, str] = {
-        "python": platform.python_version(),
-    }
-    for name in names:
-        try:
-            versions[name] = importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            versions[name] = "not-installed"
-    return versions
+def _selected_ids_hash(items: Sequence[EvaluationItem]) -> str:
+    return hashlib.sha256("\n".join(item.id for item in items).encode("utf-8")).hexdigest()
 
 
 def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _load_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines:
-        return []
+def _openrouter_api_key(environ: Mapping[str, str] | None = None) -> str | None:
+    source = os.environ if environ is None else environ
+    return source.get("OPENROUTER_API_KEY", "").strip() or None
+
+
+def _require_under(path: Path, root: Path, label: str) -> None:
     try:
-        header = json.loads(lines[0])
-        records = [json.loads(line) for line in lines[1:]]
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Malformed ATV320 checkpoint: {path}") from exc
-    if header != {"run_identity": identity}:
-        raise RuntimeError("Existing ATV320 checkpoint belongs to a different frozen run.")
-    keys = [_checkpoint_key(record) for record in records]
-    if len(set(keys)) != len(records):
-        raise RuntimeError("Existing ATV320 checkpoint has duplicate item/repeat keys.")
-    return records
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise SystemExit(f"{label} inputs must remain under {root}.") from None
 
 
-def _write_checkpoint(path: Path, identity: dict[str, Any], records: list[dict[str, Any]]) -> None:
-    payload = [{"run_identity": identity}, *records]
-    write_jsonl_atomic(path, payload)
-
-
-def _execution_schedule(
-    items: list[EvaluationItem],
-    *,
-    repeat_count: int,
-) -> list[tuple[int, EvaluationItem]]:
-    """Return a deterministic repeat-major schedule for resumable provider calls."""
-
-    return [
-        (repeat_index, item)
-        for repeat_index in range(1, repeat_count + 1)
-        for item in items
-    ]
-
-
-def _checkpoint_key(record: Mapping[str, Any]) -> tuple[str, int]:
-    if not isinstance(record, Mapping):
-        raise RuntimeError("Existing ATV320 checkpoint contains a malformed record.")
-    item_id = record.get("id")
-    repeat_index = record.get("repeat_index")
-    if not isinstance(item_id, str) or not item_id:
-        raise RuntimeError("Existing ATV320 checkpoint record has no stable item ID.")
-    if type(repeat_index) is not int or repeat_index not in {1, 2, 3}:
-        raise RuntimeError(
-            "Existing ATV320 checkpoint record has an invalid repeat index."
-        )
-    return item_id, repeat_index
-
-
-def _validate_checkpoint_prefix(
-    records: list[dict[str, Any]],
-    schedule: list[tuple[int, EvaluationItem]],
-) -> None:
-    expected_keys = [(item.id, repeat_index) for repeat_index, item in schedule]
-    observed_keys = [_checkpoint_key(record) for record in records]
-    if observed_keys != expected_keys[: len(observed_keys)]:
-        raise RuntimeError(
-            "Existing ATV320 checkpoint does not match repeat-major dataset order."
-        )
-
-
-def _require_empty_targeted_review_checkpoint(
-    records: list[dict[str, Any]], *, enabled: bool
-) -> None:
-    if enabled and records:
-        raise RuntimeError(
-            "Targeted development review requires a new or empty checkpoint because raw "
-            "answers are never persisted for resume."
-        )
-
-
-def _configure_utf8_stdout() -> None:
-    reconfigure = getattr(sys.stdout, "reconfigure", None)
-    if callable(reconfigure):
-        reconfigure(encoding="utf-8")
-
-
-def _print_live_development_review(payload: Mapping[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
-
-
-def _resolve_private_local_review_output(path: Path | None) -> Path | None:
-    if path is None:
-        return None
-    if path.suffix.lower() != ".md":
-        raise SystemExit("Local review output must use the .md extension.")
-    root = (Path.cwd() / PRIVATE_LOCAL_REVIEW_ROOT).resolve()
+def _require_private_review_path(path: Path) -> None:
+    root = (Path.cwd() / "artifacts/local-review").resolve()
     target = (path if path.is_absolute() else Path.cwd() / path).resolve()
     try:
         target.relative_to(root)
     except ValueError:
-        raise SystemExit(
-            "Local review output must remain under artifacts/local-review."
-        ) from None
-    if target.exists():
-        raise SystemExit("Local review output already exists; refusing to overwrite it.")
-    return target
-
-
-def _write_private_local_review(
-    path: Path, reviews: list[Mapping[str, Any]]
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    markdown = render_live_development_reviews_markdown(reviews)
-    try:
-        with path.open("x", encoding="utf-8", newline="\n") as stream:
-            stream.write(markdown)
-    except FileExistsError:
-        raise RuntimeError(
-            "Local review output appeared during evaluation; refusing to overwrite it."
-        ) from None
-    print(f"Private local review written: {path}")
+        raise SystemExit("Local review output must remain under artifacts/local-review.") from None
 
 
 if __name__ == "__main__":
