@@ -54,8 +54,8 @@ private helpers from another command. E2E evaluation can call a real provider an
 without explicit provider and data-egress approval. Its optional `--semantic-judge ragas` mode uses
 the separate evaluator image and requires an independent OpenRouter approval token; the default
 `none` mode does not import Ragas. The OpenRouter gateway is pinned to OpenAI upstream endpoints with
-provider fallback disabled. Optional `--fact-evaluator hybrid-luna-v1` uses the same pinned Luna
-model through a separate adapter and approval token, while the default `deterministic-v3` mode is
+provider fallback disabled. Optional `--fact-evaluator hybrid-luna-v2` uses the same pinned Luna
+model through a separate adapter and approval token, while the default `deterministic-v4` mode is
 offline. The `test` choice is the public regression split; `heldout-v2` is a
 separate sealed private split with path and manifest containment checks. Exposed held-out v2 is
 regression evidence, not tuning data. The E2E adapter declares sanitized artifact schema v13 and

@@ -339,12 +339,12 @@ schema v13/source identity v9. Never use any held-out result to tune the current
 
 ## Optional hybrid fact evaluation
 
-The default `--fact-evaluator deterministic-v3` is offline. It matches exact numeric/unit and
+The default `--fact-evaluator deterministic-v4` is offline. It matches exact numeric/unit and
 identifier facts, then applies reviewed clause-local text alternatives with decimal-safe splitting,
 bounded English inflections, EN/VI function-word tolerance, and negation guards. Its result is both
 the deterministic and final verdict.
 
-`--fact-evaluator hybrid-luna-v1` keeps deterministic positives, sends all unresolved text facts
+`--fact-evaluator hybrid-luna-v2` keeps deterministic positives, sends all unresolved text facts
 for one item in a single request to OpenRouter model `openai/gpt-5.6-luna`, and treats exact
 numeric/identifier misses as authoritative failures. The judge receives only the question, generated
 answer, and reviewed unresolved fact contracts—never retrieved evidence. It must return exactly one
@@ -359,7 +359,7 @@ The route is pinned to OpenAI upstream with provider fallback disabled, low reas
 docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
   --dataset development `
   --max-queries 5 `
-  --fact-evaluator hybrid-luna-v1 `
+  --fact-evaluator hybrid-luna-v2 `
   --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS" `
   --fact-judge-approval-token "APPROVE ATV320 DEVELOPMENT OPENROUTER FACT JUDGE EGRESS" `
   --checkpoint artifacts/metrics/atv320-fact-judge-development-preflight-checkpoint.jsonl `

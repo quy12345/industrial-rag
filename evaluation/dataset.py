@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -691,6 +691,7 @@ def _validate_dataset_shape(
                 f"{kind} answerable question-type quota is at least {minimum} per type; "
                 f"below quota: {below_quota}"
             )
+        _validate_bilingual_fact_families(items, kind=kind)
 
 
 def _dataset_summary(items: Sequence[EvaluationItem]) -> dict[str, Any]:
@@ -703,6 +704,64 @@ def _dataset_summary(items: Sequence[EvaluationItem]) -> dict[str, Any]:
         "by_question_type": dict(sorted(Counter(item.question_type for item in items).items())),
         "sha256": dataset_sha256(items),
     }
+
+
+def _validate_bilingual_fact_families(
+    items: Sequence[EvaluationItem], *, kind: DatasetKind
+) -> None:
+    """Keep paired EN/VI annotations structurally equivalent without comparing text aliases."""
+
+    families: dict[str, list[EvaluationItem]] = defaultdict(list)
+    for item in items:
+        if item.fact_family_id is not None:
+            families[item.fact_family_id].append(item)
+    invalid_size = {
+        family_id: len(members)
+        for family_id, members in families.items()
+        if len(members) != 2
+    }
+    if invalid_size:
+        raise DatasetValidationError(
+            f"{kind} fact families require exactly one EN and one VI item; "
+            f"invalid family sizes: {invalid_size}"
+        )
+    for family_id, members in sorted(families.items()):
+        languages = {item.language for item in members}
+        if languages != {"en", "vi"}:
+            raise DatasetValidationError(
+                f"{kind} fact family {family_id} requires one EN and one VI item."
+            )
+        first, second = members
+        if (
+            first.answerable != second.answerable
+            or first.question_type != second.question_type
+            or first.citation_required != second.citation_required
+            or first.expected_document_ids != second.expected_document_ids
+            or first.relevant_chunk_ids != second.relevant_chunk_ids
+            or first.expected_pages != second.expected_pages
+        ):
+            raise DatasetValidationError(
+                f"{kind} fact family {family_id} has mismatched retrieval contract."
+            )
+        if _fact_structure(first) != _fact_structure(second):
+            raise DatasetValidationError(
+                f"{kind} fact family {family_id} has mismatched expected-fact structure."
+            )
+
+
+def _fact_structure(item: EvaluationItem) -> tuple[tuple[Any, ...], ...]:
+    """Return language-independent fact fields that define evaluator obligations."""
+
+    return tuple(
+        (
+            fact.id,
+            fact.type,
+            fact.value,
+            fact.unit,
+            tuple(fact.acceptable_values),
+        )
+        for fact in item.expected_answer_facts
+    )
 
 
 def _normalized_question(value: str) -> str:

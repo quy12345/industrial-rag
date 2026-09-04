@@ -128,33 +128,44 @@ def _optimization_split(
         "cross_document",
     ]
     items: list[EvaluationItem] = []
+    answerable_pairs = answerable_count // 2
     for offset in range(answerable_count):
-        index = first_index + offset
-        language = "en" if offset < answerable_count // 2 else "vi"
+        pair_index = offset % answerable_pairs
+        language = "en" if offset < answerable_pairs else "vi"
         items.append(
             _answerable(
-                index,
+                first_index + pair_index,
                 language=language,
-                question_type=required_types[offset % len(required_types)],
+                question_type=required_types[pair_index % len(required_types)],
             ).model_copy(
                 update={
-                    "fact_family_id": f"{prefix}-family-{offset}",
+                    "id": f"{prefix}-item-{offset}",
+                    "question": f"{language} question {prefix} {offset}",
+                    "fact_family_id": f"{prefix}-family-{pair_index}",
                     "review_status": "approved",
                 }
             )
         )
+    unanswerable_pairs = unanswerable_count // 2
     for offset in range(unanswerable_count):
-        index = first_index + answerable_count + offset
-        language = "en" if offset < unanswerable_count // 2 else "vi"
+        pair_index = offset % unanswerable_pairs
+        language = "en" if offset < unanswerable_pairs else "vi"
         items.append(
-            _unanswerable(index, language=language).model_copy(
+            _unanswerable(
+                first_index + answerable_count + pair_index,
+                language=language,
+            ).model_copy(
                 update={
-                    "fact_family_id": f"{prefix}-unsupported-family-{offset}",
+                    "id": f"{prefix}-unsupported-item-{offset}",
+                    "question": f"{language} unsupported question {prefix} {offset}",
+                    "fact_family_id": f"{prefix}-unsupported-family-{pair_index}",
                     "review_status": "approved",
                 }
             )
         )
-    chunks = [
+    chunks_by_id = {
+        chunk.chunk_id: chunk
+        for chunk in [
         _chunk(
             item.relevant_chunk_ids[0],
             item.expected_document_ids[0],
@@ -163,8 +174,9 @@ def _optimization_split(
         )
         for item in items
         if item.answerable
-    ]
-    return items, chunks
+        ]
+    }
+    return items, list(chunks_by_id.values())
 
 
 def test_valid_dataset_splits_have_deterministic_hashes() -> None:
@@ -269,6 +281,40 @@ def test_development_contract_requires_fact_family_balance_and_type_coverage() -
         validate_dataset(below_quota, chunks, kind="development")
 
 
+def test_optimization_fact_families_require_bilingual_structural_parity() -> None:
+    development, chunks = _optimization_split(
+        prefix="development",
+        first_index=100,
+        answerable_count=80,
+        unanswerable_count=40,
+    )
+    paired_index = next(
+        index
+        for index, item in enumerate(development)
+        if item.fact_family_id == development[0].fact_family_id and item.language == "vi"
+    )
+    mismatch = development.copy()
+    mismatch[paired_index] = mismatch[paired_index].model_copy(
+        update={
+            "expected_answer_facts": [
+                mismatch[paired_index].expected_answer_facts[0].model_copy(
+                    update={"id": "different-fact"}
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(DatasetValidationError, match="mismatched expected-fact structure"):
+        validate_dataset(mismatch, chunks, kind="development")
+
+    orphaned = development.copy()
+    orphaned[paired_index] = orphaned[paired_index].model_copy(
+        update={"fact_family_id": "orphan-family"}
+    )
+    with pytest.raises(DatasetValidationError, match="invalid family sizes"):
+        validate_dataset(orphaned, chunks, kind="development")
+
+
 def test_development_split_rejects_fact_family_and_question_leakage() -> None:
     development, development_chunks = _optimization_split(
         prefix="development",
@@ -285,9 +331,12 @@ def test_development_split_rejects_fact_family_and_question_leakage() -> None:
     chunks = [*development_chunks, *confirmation_chunks]
 
     family_overlap = confirmation.copy()
-    family_overlap[0] = family_overlap[0].model_copy(
-        update={"fact_family_id": development[0].fact_family_id}
-    )
+    overlapping_family = development[0].fact_family_id
+    for index, item in enumerate(family_overlap):
+        if item.fact_family_id == confirmation[0].fact_family_id:
+            family_overlap[index] = item.model_copy(
+                update={"fact_family_id": overlapping_family}
+            )
     with pytest.raises(DatasetValidationError, match="fact families overlap"):
         validate_development_dataset_splits(development, family_overlap, chunks)
 

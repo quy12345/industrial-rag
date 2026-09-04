@@ -14,10 +14,10 @@ from typing import Any, Literal, Protocol
 from evaluation.dataset import EvaluationItem, ExpectedAnswerFact
 from evaluation.retrieval import phrase_matches
 
-FACT_EVALUATOR_ID = "deterministic_typed_facts_v3"
+FACT_EVALUATOR_ID = "deterministic_typed_facts_v4"
 CLAIM_COMPLETENESS_EVALUATOR_ID = "deterministic_expected_fact_completeness_v2"
-DETERMINISTIC_FACT_EVALUATOR = "deterministic-v3"
-HYBRID_FACT_EVALUATOR = "hybrid-luna-v1"
+DETERMINISTIC_FACT_EVALUATOR = "deterministic-v4"
+HYBRID_FACT_EVALUATOR = "hybrid-luna-v2"
 FACT_EVALUATOR_MODES = (DETERMINISTIC_FACT_EVALUATOR, HYBRID_FACT_EVALUATOR)
 
 LUNA_FACT_JUDGE_MODEL = "openai/gpt-5.6-luna"
@@ -180,7 +180,7 @@ def score_answer_facts(
 
 
 def score_expected_answer_fact(fact: ExpectedAnswerFact, answer: str) -> dict[str, Any]:
-    """Score one reviewed fact with typed, deterministic v3 matching rules."""
+    """Score one reviewed fact with typed, deterministic v4 matching rules."""
 
     answer_tokens = _diagnostic_tokens(answer)
     alias_token_scores = [
@@ -190,7 +190,7 @@ def score_expected_answer_fact(fact: ExpectedAnswerFact, answer: str) -> dict[st
     text_trace: _TextMatch | None = None
     if fact.type == "numeric_unit":
         deterministic_match = _numeric_unit_matches(answer, fact.value or "", fact.unit or "")
-        matcher = "numeric_unit_v1"
+        matcher = "numeric_unit_v2"
     elif fact.type == "identifier":
         deterministic_match = any(
             _identifier_matches(answer, value) for value in fact.acceptable_values
@@ -626,17 +626,54 @@ def _identifier_matches(answer: str, expected: str) -> bool:
 
 
 def _numeric_unit_matches(answer: str, value: str, unit: str) -> bool:
+    """Match an exact numeric-unit fact with only single trailing-zero equivalence.
+
+    This deliberately accepts ``20``, ``20.0``, and ``20,0`` as the same value,
+    while rejecting broader numeric normalization, conversion, and ranges.
+    """
+
     normalized_answer = unicodedata.normalize("NFKC", answer).casefold()
     normalized_value = unicodedata.normalize("NFKC", value).casefold().strip()
     normalized_unit = unicodedata.normalize("NFKC", unit).casefold().strip()
-    if not normalized_value or not normalized_unit:
+    expected_value = _parse_numeric_representation(normalized_value)
+    if expected_value is None or not normalized_unit:
         return False
-    value_pattern = re.escape(normalized_value).replace(r"\.", r"[.,]")
     unit_pattern = r"\s*".join(re.escape(part) for part in normalized_unit.split())
-    leading_boundary = r"(?<![\d.,+\-])"
-    return re.search(
-        rf"{leading_boundary}{value_pattern}\s*{unit_pattern}(?![\w])", normalized_answer
-    ) is not None
+    pattern = re.compile(
+        rf"(?<![\w.,+\-\u2013\u2014])"
+        rf"(?P<value>[+-]?\d+(?:[.,]\d+)?)(?![\d.,])"
+        rf"\s*{unit_pattern}(?![\w/])"
+    )
+    return any(
+        _numeric_values_are_equivalent(
+            expected_value,
+            _parse_numeric_representation(match["value"]),
+        )
+        for match in pattern.finditer(normalized_answer)
+    )
+
+
+def _parse_numeric_representation(value: str) -> tuple[str, str, str | None] | None:
+    """Return sign, integer digits, and optional fraction without numeric coercion."""
+
+    match = re.fullmatch(r"(?P<sign>[+-]?)(?P<integer>\d+)(?:[.,](?P<fraction>\d+))?", value)
+    if match is None:
+        return None
+    return match["sign"], match["integer"], match["fraction"]
+
+
+def _numeric_values_are_equivalent(
+    expected: tuple[str, str, str | None], candidate: tuple[str, str, str | None] | None
+) -> bool:
+    """Apply the narrow representation equivalence documented for numeric facts."""
+
+    if candidate is None or expected[:2] != candidate[:2]:
+        return False
+    expected_fraction, candidate_fraction = expected[2], candidate[2]
+    return expected_fraction == candidate_fraction or {
+        expected_fraction,
+        candidate_fraction,
+    } == {None, "0"}
 
 
 def _token_overlap(answer_tokens: set[str], alias_tokens: set[str]) -> tuple[float, float]:

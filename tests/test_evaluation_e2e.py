@@ -547,13 +547,13 @@ def test_hybrid_fact_verdict_drives_final_metric_but_preserves_deterministic_met
             pool=[_candidate("qrel")],
             answer="A semantically equivalent response.",
         ),
-        fact_evaluator_mode="hybrid-luna-v1",
+        fact_evaluator_mode="hybrid-luna-v2",
         fact_judge=judge,
     )
     unanswerable = score_query_execution(
         _item(answerable=False),
         _execution(final=[_candidate("other")], pool=[_candidate("other")], abstained=True),
-        fact_evaluator_mode="hybrid-luna-v1",
+        fact_evaluator_mode="hybrid-luna-v2",
         fact_judge=judge,
     )
 
@@ -1096,7 +1096,7 @@ def test_provider_execution_requires_dataset_specific_approval() -> None:
 def test_hybrid_fact_judge_requires_independent_dataset_approval_and_key() -> None:
     disabled = SimpleNamespace(
         dataset="development",
-        fact_evaluator="deterministic-v3",
+        fact_evaluator="deterministic-v4",
         fact_judge_approval_token=None,
     )
     evaluate_e2e._validate_fact_judge_approval(disabled, environ={})
@@ -1105,7 +1105,7 @@ def test_hybrid_fact_judge_requires_independent_dataset_approval_and_key() -> No
         evaluate_e2e._validate_fact_judge_approval(
             SimpleNamespace(
                 dataset="development",
-                fact_evaluator="deterministic-v3",
+                fact_evaluator="deterministic-v4",
                 fact_judge_approval_token="unexpected",
             ),
             environ={},
@@ -1113,7 +1113,7 @@ def test_hybrid_fact_judge_requires_independent_dataset_approval_and_key() -> No
 
     hybrid = SimpleNamespace(
         dataset="development",
-        fact_evaluator="hybrid-luna-v1",
+        fact_evaluator="hybrid-luna-v2",
         fact_judge_approval_token=evaluate_e2e.DEVELOPMENT_FACT_JUDGE_APPROVAL_TOKEN,
     )
     with pytest.raises(SystemExit, match="OPENROUTER_API_KEY"):

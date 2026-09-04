@@ -44,12 +44,12 @@ def _item(*facts: ExpectedAnswerFact):
     )
 
 
-def test_v3_identity_and_default_result_contract() -> None:
+def test_v4_identity_and_default_result_contract() -> None:
     result = score_expected_answer_fact(
         _text_fact(), "Before work, all power sources must disconnect safely."
     )
 
-    assert FACT_EVALUATOR_ID == "deterministic_typed_facts_v3"
+    assert FACT_EVALUATOR_ID == "deterministic_typed_facts_v4"
     assert result["deterministic_matched"] is True
     assert result["final_matched"] is True
     assert result["matched"] is True
@@ -142,6 +142,64 @@ def test_numeric_and_identifier_matching_remain_exact() -> None:
     assert not score_expected_answer_fact(negative, "Supply: --24 VDC.")[
         "deterministic_matched"
     ]
+
+
+@pytest.mark.parametrize(
+    ("expected", "answer"),
+    [
+        ("20", "Set 20 Hz."),
+        ("20", "Set 20.0 Hz."),
+        ("20", "Set 20,0 Hz."),
+        ("20.0", "Set 20 Hz."),
+        ("20.0", "Set 20,0 Hz."),
+        ("-20", "Set -20.0 Hz."),
+        ("19.2", "Set 19,2 Kbps."),
+    ],
+)
+def test_numeric_unit_v2_accepts_only_single_trailing_zero_equivalence(
+    expected: str, answer: str
+) -> None:
+    fact = ExpectedAnswerFact(
+        id="numeric",
+        aliases=[f"{expected} Hz"],
+        type="numeric_unit",
+        value=expected,
+        unit="Kbps" if "19" in expected else "Hz",
+    )
+
+    result = score_expected_answer_fact(fact, answer)
+
+    assert result["deterministic_matched"] is True
+    assert result["matcher"] == "numeric_unit_v2"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Set 20.00 Hz.",
+        "Set +20 Hz.",
+        "Set -20 Hz.",
+        "Set 20.1 Hz.",
+        "Set 120 Hz.",
+        "Set 20 kHz.",
+        "Set 0.02 kHz.",
+        "Set 10-20 Hz.",
+        "Set 10–20 Hz.",
+        "Set 20 Hz/s.",
+        "Set 20 Hz2.",
+        "Set 2e1 Hz.",
+    ],
+)
+def test_numeric_unit_v2_rejects_broader_normalization_and_boundaries(answer: str) -> None:
+    fact = ExpectedAnswerFact(
+        id="numeric",
+        aliases=["20 Hz"],
+        type="numeric_unit",
+        value="20",
+        unit="Hz",
+    )
+
+    assert not score_expected_answer_fact(fact, answer)["deterministic_matched"]
 
 
 @pytest.mark.parametrize(
