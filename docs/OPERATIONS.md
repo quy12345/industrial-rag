@@ -253,6 +253,27 @@ root, FastAPI request/response schema, evidence gate, citation validation, or de
 behavior. This runbook records supported commands only; it does not claim that either variant has
 been executed or improved quality.
 
+## Local development failure review
+
+The sanitized E2E artifact cannot contain raw questions, answers, expected facts, or evidence text.
+To diagnose a bounded set of development failures, join that artifact with the local development
+dataset and frozen chunks and print the result only to the current terminal:
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.evaluation.review_development `
+  --artifact artifacts/metrics/q04-qwen-development-baseline-v1-r1-e2e-v11.json `
+  --item-id dvi015 `
+  --item-id dvi024 `
+  --item-id dvi071
+```
+
+The command performs no Qdrant, model, or provider access and offers no output-file option. It
+validates the development dataset and frozen-corpus hashes before revealing local text, rejects
+non-development artifacts, and labels automated conclusions as diagnostic hints requiring human
+confirmation. The original generated answer remains unavailable because the sanitized artifact
+never stored it; a later targeted provider rerun is a new sample, not recovery of the old output.
+Do not redirect this command into a tracked file or paste its output into logs, issues, or commits.
+
 ## Approved held-out regression run
 
 Held-out v2 is exposed regression evidence, not an unseen benchmark. Run it only after the user has

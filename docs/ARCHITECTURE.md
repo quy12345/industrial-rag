@@ -35,7 +35,8 @@ app/
 evaluation/
 |-- dataset.py           Dataset parsing and validation contracts
 |-- retrieval.py         Current retrieval metrics and aggregation
-`-- e2e.py               Query-record scoring and quality-gate aggregation
+|-- e2e.py               Query-record scoring and quality-gate aggregation
+`-- development_review.py Local-only joins for inspectable failure diagnosis
 
 scripts/
 |-- operations/          Supported operational adapters

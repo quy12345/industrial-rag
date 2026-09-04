@@ -51,6 +51,16 @@ SUPPORTED_CLI_OPTIONS = [
         },
     ),
     (
+        "scripts.evaluation.review_development",
+        {
+            "--artifact",
+            "--development",
+            "--chunks",
+            "--item-id",
+            "--repeat-index",
+        },
+    ),
+    (
         "scripts.operations.index_corpus",
         {
             "--page-batch-size",

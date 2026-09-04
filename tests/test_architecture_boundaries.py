@@ -526,6 +526,7 @@ def test_historical_evaluation_helpers_are_outside_the_active_package() -> None:
     assert {path.name for path in EVALUATION_ROOT.glob("*.py")} == {
         "__init__.py",
         "dataset.py",
+        "development_review.py",
         "e2e.py",
         "generation_experiments.py",
         "retrieval.py",
