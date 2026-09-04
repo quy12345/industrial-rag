@@ -233,6 +233,31 @@ def authoritative_requirement_coverage(
     }
 
 
+def authoritative_chunk_provenance(
+    chunk_id: str,
+    item: EvaluationItemLike,
+    *,
+    equivalence: Mapping[str, Sequence[str]] | None,
+) -> list[dict[str, str]]:
+    """Classify one cited chunk against reviewed requirements only.
+
+    The result intentionally records IDs and classifications, never evidence text.
+    A chunk may satisfy more than one reviewed requirement only when annotations
+    deliberately declare it so.
+    """
+
+    matches: list[dict[str, str]] = []
+    for requirement in resolve_evidence_requirements(item):
+        provenance = _authoritative_provenance(
+            chunk_id,
+            requirement,
+            equivalence=equivalence,
+        )
+        if provenance != "unreviewed":
+            matches.append({"requirement_id": requirement.id, "provenance": provenance})
+    return matches
+
+
 def _authoritative_requirement_diagnostic(
     requirement: ResolvedEvidenceRequirement,
     results: Sequence[RetrievedLike],
@@ -674,12 +699,13 @@ def evaluate_retrieval_quality_gates(
             "raw_component_recall_at_least_candidate_recall": (
                 overall["raw_component_recall"] >= overall["candidate_recall"]
             ),
-            "candidate_recall_at_least_0_9167": (
-                overall["candidate_recall"] >= 11 / 12
+            "complete_candidate_requirement_rate_at_least_0_9167": (
+                overall["authoritative_candidate_complete_rate"] >= 11 / 12
             ),
-            "hit_rate_at_5_at_least_0_85": overall["hit_rate_at_5"] >= 0.85,
+            "complete_evidence_requirement_hit_at_5_at_least_0_85": (
+                overall["authoritative_evidence_complete_rate"] >= 0.85
+            ),
             "reranker_input_at_most_30": overall["candidate_count_maximum"] <= 30,
-            "wrong_document_top1_zero": overall["wrong_document_top1_rate"] == 0.0,
             "document_context_complete": (
                 overall["document_context_complete_rate"] == 1.0
             ),
@@ -833,6 +859,18 @@ def aggregate_retrieval_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     rerank_values = [float(row["rerank_ms"]) for row in rows]
     retrieval_values = [float(row["retrieval_ms"]) for row in rows]
+    candidate_authoritative = [
+        _requirement_coverage(row, "candidate_authoritative_requirement_coverage")
+        for row in rows
+    ]
+    final_authoritative = [
+        _requirement_coverage(row, "final_authoritative_requirement_coverage")
+        for row in rows
+    ]
+    evidence_authoritative = [
+        _requirement_coverage(row, "evidence_authoritative_requirement_coverage")
+        for row in rows
+    ]
     return {
         "query_count": len(rows),
         "raw_component_recall": sum(raw_component_hits) / len(rows),
@@ -841,6 +879,12 @@ def aggregate_retrieval_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             rank is not None for rank in exact_candidate_ranks
         )
         / len(rows),
+        "authoritative_candidate_complete_rate": _complete_rate(candidate_authoritative),
+        "authoritative_final_complete_rate": _complete_rate(final_authoritative),
+        "authoritative_evidence_complete_rate": _complete_rate(evidence_authoritative),
+        "authoritative_candidate_requirement_coverage": _coverage_rate(candidate_authoritative),
+        "authoritative_final_requirement_coverage": _coverage_rate(final_authoritative),
+        "authoritative_evidence_requirement_coverage": _coverage_rate(evidence_authoritative),
         "hit_rate_at_5": sum(rank is not None and rank <= 5 for rank in final_ranks)
         / len(rows),
         "exact_equivalent_hit_rate_at_5": sum(
@@ -940,6 +984,14 @@ def aggregate_retrieval_rows_by_language(
     for language, group in sorted(groups.items()):
         total_top5 = sum(min(int(row["final_candidate_count"]), 5) for row in group)
         total_evidence = sum(int(row["evidence_candidate_count"]) for row in group)
+        candidate_authoritative = [
+            _requirement_coverage(row, "candidate_authoritative_requirement_coverage")
+            for row in group
+        ]
+        evidence_authoritative = [
+            _requirement_coverage(row, "evidence_authoritative_requirement_coverage")
+            for row in group
+        ]
         result[language] = {
             "query_count": len(group),
             "raw_component_recall": sum(
@@ -965,6 +1017,10 @@ def aggregate_retrieval_rows_by_language(
                 for row in group
             )
             / len(group),
+            "authoritative_candidate_complete_rate": _complete_rate(candidate_authoritative),
+            "authoritative_evidence_complete_rate": _complete_rate(evidence_authoritative),
+            "authoritative_candidate_requirement_coverage": _coverage_rate(candidate_authoritative),
+            "authoritative_evidence_requirement_coverage": _coverage_rate(evidence_authoritative),
             "hit_rate_at_5": sum(
                 row["final_direct_evidence_rank"] is not None
                 and row["final_direct_evidence_rank"] <= 5
@@ -1040,6 +1096,28 @@ def aggregate_retrieval_rows_by_language(
             ),
         }
     return result
+
+
+def _requirement_coverage(row: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    payload = row.get(key)
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Retrieval row lacks authoritative coverage: {key}")
+    count = payload.get("requirement_count")
+    covered = payload.get("covered_requirement_count")
+    complete = payload.get("complete")
+    if type(count) is not int or type(covered) is not int or type(complete) is not bool:
+        raise ValueError(f"Retrieval row has malformed authoritative coverage: {key}")
+    return payload
+
+
+def _complete_rate(coverages: Sequence[Mapping[str, Any]]) -> float:
+    return sum(bool(coverage["complete"]) for coverage in coverages) / len(coverages)
+
+
+def _coverage_rate(coverages: Sequence[Mapping[str, Any]]) -> float:
+    requirement_count = sum(int(coverage["requirement_count"]) for coverage in coverages)
+    covered_count = sum(int(coverage["covered_requirement_count"]) for coverage in coverages)
+    return covered_count / requirement_count if requirement_count else 0.0
 
 
 def _latency_summary(values: list[float]) -> dict[str, float]:

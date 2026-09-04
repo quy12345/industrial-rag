@@ -105,7 +105,7 @@ answerable qrels, expected documents, pages, phrases, and the frozen corpus as i
 legacy suite.
 
 Use opaque lowercase item IDs, `fact_family_id` values, and expected-fact IDs (letters, digits, `.`,
-`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v13 rows retain
+`_`, or `-`; at most 64 characters), never question or fact sentences. Sanitized v14 rows retain
 these IDs so later paired and clustered comparisons can group translations/paraphrases and diagnose
 fact outcomes without persisting the underlying question or expected fact.
 
@@ -157,17 +157,17 @@ docker compose run --rm evaluation python -m scripts.evaluation.evaluate_retriev
 The command uses Qdrant plus local embedding/reranker models but makes zero generator or judge calls
 and never writes a collection. Each variant makes separate trace-only dense and sparse probes to
 rank 100; normal fusion still consumes only dense top 60 and sparse top 40, the reranker still sees
-at most 30 candidates, and probe latency is excluded from the runtime-quality comparison. Schema-v4
+at most 30 candidates, and probe latency is excluded from the runtime-quality comparison. Schema-v5
 output and checkpoint names include the variant ID, and a checkpoint from another variant or the old
-schema fails closed. The v4 evaluator additionally applies the canonical evidence selector with a
+schema fails closed. The v5 evaluator additionally applies the canonical evidence selector with a
 fixed diagnostic `top_k=5`. Its artifact retains stable chunk/document IDs, page numbers, heading
 counts, and exact-duplicate alternatives, but excludes the question, chunk text, headings, filename,
-and unlisted metadata. Strict wrong-document rates remain authoritative; parallel
-exact-content-equivalent rates explain repeated manual content without relaxing those strict
+and unlisted metadata. Strict wrong-document rates remain diagnostics; reviewed authoritative
+alternatives explain repeated manual content. Development gates require complete coverage of every
 metrics. This fixed evaluation boundary does not reduce the API's supported `top_k` range of 1–10.
-The command labels its result `retrieval gates PASS/FAIL`: schema-v4 evidence metrics are diagnostic
-and do not affect the exit code until promotion criteria have been selected on reviewed development
-data.
+The command labels its result `retrieval gates PASS/FAIL`: reviewed-authority coverage is gated;
+strict document identity remains diagnostic. Any metric movement is an evaluation-contract
+correction, not a production quality claim.
 Non-baseline variants are rejected for the legacy suite, and the command has no
 confirmation or held-out dataset choice. The current
 repository does not yet contain the reviewed development/confirmation payloads, so no variant run,
@@ -239,14 +239,14 @@ checkpoint must be an exact prefix of the same dataset order and must match the 
 count, schema, source identity, resolved evidence `top_k`/gate, context/citation limits, and other
 run identity fields. Repeated metrics are reported per run rather than pooled across all records.
 
-Schema-v13 default paths encode the full experiment identity:
+Schema-v14 default paths encode the full experiment identity:
 
 | Variant and repeats | Artifact | Checkpoint |
 | --- | --- | --- |
-| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v13.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v13-checkpoint.jsonl` |
-| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v13.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v13-checkpoint.jsonl` |
-| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v13.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v13-checkpoint.jsonl` |
-| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v13.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v13-checkpoint.jsonl` |
+| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v14.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v14-checkpoint.jsonl` |
+| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v14.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v14-checkpoint.jsonl` |
+| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v14.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v14-checkpoint.jsonl` |
+| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v14.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v14-checkpoint.jsonl` |
 
 These switches exist only in the evaluation CLI. They do not change the production composition
 root, FastAPI request/response schema, evidence gate, citation validation, or default generator
@@ -320,10 +320,10 @@ Python 3.11 before running:
 to remain under `data/eval/phase7/private-heldout-v2/`, then validates their hash, the frozen corpus,
 collection identities, runtime source identity, and configured provider before completing.
 
-The current evaluator declares artifact schema v13. If the command above is approved and executed,
+The current evaluator declares artifact schema v14. If the command above is approved and executed,
 its default paths are
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v13-checkpoint.jsonl` and
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v13.json`. V13 records a sanitized
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v14-checkpoint.jsonl` and
+`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v14.json`. V14 records a sanitized
 retrieval trace because the E2E adapter explicitly opts in; production builders default to
 `capture_trace=False` and the production bootstrap does not opt in. The artifact includes stage
 counts, IDs, ranks, and allowlisted role signals, but still excludes raw questions, evidence,
@@ -333,9 +333,9 @@ are persisted.
 
 Schema availability is not execution evidence. The latest executed held-out result remains the v8
 checkpoint at `artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and final artifact at
-`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9-v13 held-out run is claimed.
-Existing v7 and v8 evidence remain immutable. A v12-or-earlier checkpoint cannot resume under
-schema v13/source identity v9. Never use any held-out result to tune the current runtime.
+`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9-v14 held-out run is claimed.
+Existing v7 and v8 evidence remain immutable. A v13-or-earlier checkpoint cannot resume under
+schema v14/source identity v10. Never use any held-out result to tune the current runtime.
 
 ## Optional hybrid fact evaluation
 
@@ -367,7 +367,7 @@ docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
 ```
 
 Do not run this command until the named items, egress, model, and cost have fresh approval. Generator,
-Ragas, and fact-judge tokens are non-interchangeable. Schema-v13 artifacts persist only fact IDs,
+Ragas, and fact-judge tokens are non-interchangeable. Schema-v14 artifacts persist only fact IDs,
 deterministic/final outcomes, resolution, verdict categories, counts, and latency. They exclude
 question, answer, aliases, judge reasoning, provider bodies, and keys. Deterministic and final
 accuracy are reported separately; the unchanged `0.85` quality gate uses final accuracy only in
@@ -435,7 +435,7 @@ run shown above:
 --judge-provider-approval-token "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
 ```
 
-Schema-v13 checkpoints fail closed if the schema, source identity, endpoint profile, generation
+Schema-v14 checkpoints fail closed if the schema, source identity, endpoint profile, generation
 model, generation variant, repeat
 schedule, judge model, embedding model,
 metric configuration, or input policy differs. Only a fully answered item with all three finite

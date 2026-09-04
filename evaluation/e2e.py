@@ -28,6 +28,7 @@ from evaluation.facts import (
     score_answer_facts,
 )
 from evaluation.retrieval import (
+    authoritative_chunk_provenance,
     authoritative_requirement_coverage,
     direct_evidence_rank,
     exact_equivalent_evidence_rank,
@@ -277,6 +278,17 @@ def score_query_execution(
                         equivalence=exact_content_equivalence,
                     )
                 ),
+                "citation_authoritative_provenance": [
+                    {
+                        "chunk_id": citation.chunk_id,
+                        "matches": authoritative_chunk_provenance(
+                            citation.chunk_id,
+                            item,
+                            equivalence=exact_content_equivalence,
+                        ),
+                    }
+                    for citation in response.citations
+                ],
                 "citation_document_correct": bool(citation_ids)
                 and citation_documents.issubset(set(item.expected_document_ids)),
                 "citation_exact_equivalent_document_correct": bool(citation_ids)
@@ -370,6 +382,7 @@ def score_query_execution(
                 "citation_authoritative_requirement_coverage": (
                     _not_applicable_authoritative_coverage()
                 ),
+                "citation_authoritative_provenance": [],
                 "citation_document_correct": None,
                 "citation_exact_equivalent_document_correct": None,
                 "unexpected_citation_document_ids": [],
@@ -566,9 +579,14 @@ def evaluate_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
     precision = float(abstention["precision"])
     recall = float(abstention["recall"])
     gates = {
-        "candidate_recall": _gate(
-            float(metrics["retrieval"]["candidate_recall"]),
+        "complete_candidate_requirement_rate": _gate(
+            float(metrics["retrieval"]["authoritative_candidate_complete_rate"]),
             11 / 12,
+            comparison="at_least",
+        ),
+        "complete_evidence_requirement_hit_at_5": _gate(
+            float(metrics["retrieval"]["authoritative_evidence_complete_rate"]),
+            0.85,
             comparison="at_least",
         ),
         "valid_citation_ids": _gate(
@@ -577,18 +595,26 @@ def evaluate_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
         "unsupported_citation_ids": _gate(
             float(citations["unsupported_citation_count"]), 0.0, comparison="at_most"
         ),
-        "wrong_document_citations": _gate(
-            float(citations["wrong_document_citation_count"]),
+        "unreviewed_citation_provenance": _gate(
+            float(citations["unreviewed_citation_provenance_count"]),
             0.0,
             comparison="at_most",
+        ),
+        "complete_citation_requirement_coverage": _gate(
+            float(citations["authoritative_requirement_complete_rate_when_answered"]),
+            1.0,
+            comparison="equal",
         ),
         "fact_accuracy": _gate(
             float(answer_quality[fact_accuracy_key]),
             0.85,
             comparison="at_least",
         ),
+        "false_answers": _gate(
+            float(abstention["false_answer_count"]), 0.0, comparison="at_most"
+        ),
         "abstention_precision": _gate(precision, 0.90, comparison="at_least"),
-        "abstention_recall": _gate(recall, 0.80, comparison="at_least"),
+        "abstention_recall": _gate(recall, 0.90, comparison="at_least"),
     }
     return {
         "overall_pass": all(gate["passed"] for gate in gates.values()),
@@ -597,8 +623,9 @@ def evaluate_quality_gates(metrics: dict[str, Any]) -> dict[str, Any]:
             f"Headline answer accuracy uses {fact_evaluator_mode} with {FACT_EVALUATOR_ID}. "
             "Strict contiguous aliases and "
             "token coverage remain diagnostics. Evidence phrases validate qrels only. "
-            "Exact-content-equivalent ranks and document provenance are diagnostic; release "
-            "gates continue to use strict qrel and expected-document identity."
+            "Strict qrel ranks and document provenance remain diagnostics. Release gates use "
+            "reviewed authoritative evidence requirements: AND across requirements and OR "
+            "within each requirement."
         ),
     }
 
@@ -617,8 +644,20 @@ def _retrieval_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float]:
         )
         for row in rows
     ]
+    candidate_authoritative = [
+        _requirement_coverage(row, "candidate_authoritative_requirement_coverage")
+        for row in rows
+    ]
+    evidence_authoritative = [
+        _requirement_coverage(row, "evidence_authoritative_requirement_coverage")
+        for row in rows
+    ]
     return {
         "candidate_recall": _hit_rate(candidate_ranks, cutoff=None),
+        "authoritative_candidate_complete_rate": _complete_rate(candidate_authoritative),
+        "authoritative_evidence_complete_rate": _complete_rate(evidence_authoritative),
+        "authoritative_candidate_requirement_coverage": _coverage_rate(candidate_authoritative),
+        "authoritative_evidence_requirement_coverage": _coverage_rate(evidence_authoritative),
         "hit_rate_at_1": _hit_rate(final_ranks, cutoff=1),
         "hit_rate_at_3": _hit_rate(final_ranks, cutoff=3),
         "hit_rate_at_5": _hit_rate(final_ranks, cutoff=5),
@@ -644,6 +683,42 @@ def _retrieval_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float]:
         "exact_equivalent_mrr_at_20": _mrr(exact_equivalent_final_ranks, cutoff=20),
         "candidate_count_maximum": float(max(int(row["candidate_count"]) for row in rows)),
     }
+
+
+def _requirement_coverage(row: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    payload = row.get(key)
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Evaluation row lacks authoritative coverage: {key}")
+    count = payload.get("requirement_count")
+    covered = payload.get("covered_requirement_count")
+    complete = payload.get("complete")
+    if type(count) is not int or type(covered) is not int or type(complete) is not bool:
+        raise ValueError(f"Evaluation row has malformed authoritative coverage: {key}")
+    return payload
+
+
+def _complete_rate(coverages: Sequence[Mapping[str, Any]]) -> float:
+    return sum(bool(coverage["complete"]) for coverage in coverages) / len(coverages)
+
+
+def _coverage_rate(coverages: Sequence[Mapping[str, Any]]) -> float:
+    requirement_count = sum(int(coverage["requirement_count"]) for coverage in coverages)
+    covered_count = sum(int(coverage["covered_requirement_count"]) for coverage in coverages)
+    return covered_count / requirement_count if requirement_count else 0.0
+
+
+def _unreviewed_citation_count(payload: object) -> int:
+    if not isinstance(payload, list):
+        return 0
+    count = 0
+    for citation in payload:
+        if not isinstance(citation, Mapping):
+            count += 1
+            continue
+        matches = citation.get("matches")
+        if not isinstance(matches, list) or not matches:
+            count += 1
+    return count
 
 
 def _answer_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -942,12 +1017,18 @@ def _citation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
             "exact_equivalent_document_correct_rate_when_answered": 0.0,
             "referential_valid_rate_when_answered": 0.0,
             "unsupported_citation_count": 0,
+            "unreviewed_citation_provenance_count": 0,
+            "authoritative_requirement_complete_rate_when_answered": 0.0,
             "wrong_document_citation_count": 0,
             "wrong_document_citation_rate_when_answered": 0.0,
             "wrong_document_citation_count_excluding_exact_equivalents": 0,
             "wrong_document_citation_rate_when_answered_excluding_exact_equivalents": 0.0,
             "answered_count": 0,
         }
+    citation_authoritative = [
+        _requirement_coverage(row, "citation_authoritative_requirement_coverage")
+        for row in answered
+    ]
     return {
         "direct_evidence_rate_when_answered": sum(
             bool(row["citation_direct_evidence"]) for row in answered
@@ -989,6 +1070,13 @@ def _citation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, float | int]:
                 )
             )
             for row in answered
+        ),
+        "unreviewed_citation_provenance_count": sum(
+            _unreviewed_citation_count(row.get("citation_authoritative_provenance"))
+            for row in answered
+        ),
+        "authoritative_requirement_complete_rate_when_answered": _complete_rate(
+            citation_authoritative
         ),
         "wrong_document_citation_count": sum(
             bool(row.get("unexpected_citation_document_ids")) for row in answered
@@ -1073,11 +1161,13 @@ def _abstention_metrics(
     false_negative = len(unanswerable) - true_positive
     false_positive = sum(row["abstained"] for row in answerable)
     true_negative = len(answerable) - false_positive
+    false_answer_count = sum(not row["abstained"] for row in unanswerable)
     return {
         "true_positive": true_positive,
         "false_negative": false_negative,
         "false_positive": false_positive,
         "true_negative": true_negative,
+        "false_answer_count": false_answer_count,
         "unanswerable_abstention_rate": true_positive / len(unanswerable),
         "answerable_non_abstention_rate": true_negative / len(answerable),
         "precision": (

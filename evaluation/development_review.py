@@ -141,6 +141,57 @@ def render_live_development_reviews_markdown(
                     "",
                 ]
             )
+        lines.extend(["### Authoritative evidence requirements", ""])
+        requirements = _mapping_list(expected.get("evidence_requirements"))
+        if not requirements:
+            lines.extend(["No answerable evidence requirements.", ""])
+        for requirement in requirements:
+            requirement_id = str(requirement.get("id", "unknown-requirement"))
+            coverage_value = observed.get("citation_authoritative_requirement_coverage")
+            coverage = coverage_value if isinstance(coverage_value, Mapping) else {}
+            requirement_result = next(
+                (
+                    candidate
+                    for candidate in _mapping_list(coverage.get("requirements"))
+                    if candidate.get("id") == requirement_id
+                ),
+                {},
+            )
+            lines.extend(
+                [
+                    f"#### Requirement `{_markdown_inline(requirement_id)}`",
+                    "",
+                    (
+                        "- Citation coverage: `"
+                        f"{_markdown_inline(requirement_result.get('rank') is not None)}`\n"
+                        "- Matched chunk: `"
+                        f"{_markdown_inline(requirement_result.get('matched_chunk_id'))}`\n"
+                        "- Provenance: `"
+                        f"{_markdown_inline(requirement_result.get('provenance'))}`"
+                    ),
+                    "",
+                    "Canonical sources:",
+                    "",
+                    _markdown_pre(
+                        json.dumps(
+                            requirement.get("canonical_sources", []),
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                    ),
+                    "",
+                    "Reviewed alternatives:",
+                    "",
+                    _markdown_pre(
+                        json.dumps(
+                            requirement.get("reviewed_alternative_sources", []),
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                    ),
+                    "",
+                ]
+            )
         lines.extend(["### Citations and cited evidence", ""])
         citations = _mapping_list(observed.get("citations"))
         evidence_by_chunk_id = {
@@ -310,6 +361,7 @@ def _review_case(
                 _chunk_payload(_required_chunk(chunk_by_id, chunk_id), source_id=None)
                 for chunk_id in item.relevant_chunk_ids
             ],
+            "evidence_requirements": _review_evidence_requirements(item, chunk_by_id),
             "unanswerable_reason": item.unanswerable_reason,
         },
         "observed": {
@@ -319,6 +371,12 @@ def _review_case(
             "failure_class": record.get("failure_class"),
             "citation_ids": record.get("citation_ids"),
             "citation_document_ids": record.get("citation_document_ids"),
+            "citation_authoritative_requirement_coverage": record.get(
+                "citation_authoritative_requirement_coverage"
+            ),
+            "citation_authoritative_provenance": record.get(
+                "citation_authoritative_provenance"
+            ),
             "missing_answer_fact_ids": record.get("missing_answer_fact_ids"),
             "answer_fact_results": record.get("answer_fact_results"),
             "candidate_direct_evidence_rank": record.get(
@@ -376,6 +434,38 @@ def _diagnostic_hints(
     if record.get("unexpected_citation_document_ids"):
         hints.append("citation_provenance_mismatch")
     return hints or ["no_known_failure_signal"]
+
+
+def _review_evidence_requirements(
+    item: EvaluationItem,
+    chunk_by_id: Mapping[str, DocumentChunk],
+) -> list[dict[str, Any]]:
+    requirements = item.evidence_requirements
+    if not requirements and item.relevant_chunk_ids:
+        return [
+            {
+                "id": "legacy-qrel-group",
+                "canonical_sources": [
+                    _chunk_payload(_required_chunk(chunk_by_id, chunk_id), source_id=None)
+                    for chunk_id in item.relevant_chunk_ids
+                ],
+                "reviewed_alternative_sources": [],
+            }
+        ]
+    return [
+        {
+            "id": requirement.id,
+            "canonical_sources": [
+                _chunk_payload(_required_chunk(chunk_by_id, chunk_id), source_id=None)
+                for chunk_id in requirement.canonical_chunk_ids
+            ],
+            "reviewed_alternative_sources": [
+                _chunk_payload(_required_chunk(chunk_by_id, chunk_id), source_id=None)
+                for chunk_id in requirement.reviewed_alternative_chunk_ids
+            ],
+        }
+        for requirement in requirements
+    ]
 
 
 def _chunk_payload(chunk: DocumentChunk, *, source_id: str | None) -> dict[str, Any]:

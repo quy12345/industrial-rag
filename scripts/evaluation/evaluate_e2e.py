@@ -114,8 +114,8 @@ PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
 PRIVATE_LOCAL_REVIEW_ROOT = Path("artifacts/local-review")
-ARTIFACT_SCHEMA_VERSION = 13
-SOURCE_IDENTITY_VERSION = 9
+ARTIFACT_SCHEMA_VERSION = 14
+SOURCE_IDENTITY_VERSION = 10
 SOURCE_IDENTITY_PATHS = {
     "citation_policy": Path("app/domain/citations.py"),
     "content_identity": Path("app/domain/content_identity.py"),

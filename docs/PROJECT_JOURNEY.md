@@ -259,6 +259,24 @@ revalidated against the frozen corpus. No live Luna result or quality improvemen
 the separately approved preflight runs. **Commit/artifact** -> E02 implementation pending review;
 future evidence must use a sanitized schema-v13 artifact.
 
+### Strict provenance treated reviewed duplicate evidence as an error
+
+**Symptom** -> Development diagnostics reported a wrong-document citation even when the cited chunk
+was a reviewed authoritative alternative or a frozen-corpus exact-content duplicate. Conversely, a
+citation from the expected manual could pass without supporting the reviewed fact, and multi-source
+qrels were treated as one flat OR list. **Root cause** -> Release gates used document identity and
+flat qrel membership rather than reviewed fact-level evidence requirements. **Fix** -> Model
+canonical and explicitly reviewed alternative chunks as OR choices within an evidence requirement,
+combine requirements with AND, and classify citation provenance as canonical, reviewed alternative,
+exact-content equivalent, or unreviewed. Schema v14/v5 gates authoritative coverage and rejects an
+unreviewed citation; strict document/qrel metrics remain diagnostics. Numeric facts also distinguish
+only the reviewed formatting equivalence (`20`, `20.0`, `20,0`). **Proof** -> Offline tests cover
+cross-manual reviewed alternatives, unreviewed same-manual chunks, exact duplicates, partial
+multi-source coverage, and checkpoint version rejection. No new development, confirmation, or
+held-out evaluation has been run, so no changed score is claimed. **Commit/artifact** ->
+`fix: correct deterministic fact evaluation contracts`, `feat: model reviewed authoritative evidence`,
+and `fix: align evaluation gates with authoritative coverage`.
+
 ## Portfolio conclusions
 
 - Correct evaluation labels are as important as the retrieval implementation.

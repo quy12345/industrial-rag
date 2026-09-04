@@ -42,7 +42,7 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
 - validate either the legacy frozen pair or the development/confirmation optimization pair;
 - evaluate the frozen legacy retrieval baseline or one of six preregistered development-only
   retrieval variants, with trace-only dense/sparse top-100 ceiling probes limited to development,
-  apply the canonical evaluation-only evidence top five, and write a sanitized schema-v4
+  apply the canonical evaluation-only evidence top five, and write a sanitized schema-v5
   checkpoint/artifact;
 - run approval-gated end-to-end generation evaluation.
 - join a sanitized development artifact with local questions, expected facts, and frozen evidence
@@ -58,7 +58,7 @@ provider fallback disabled. Optional `--fact-evaluator hybrid-luna-v2` uses the 
 model through a separate adapter and approval token, while the default `deterministic-v4` mode is
 offline. The `test` choice is the public regression split; `heldout-v2` is a
 separate sealed private split with path and manifest containment checks. Exposed held-out v2 is
-regression evidence, not tuning data. The E2E adapter declares sanitized artifact schema v13 and
+regression evidence, not tuning data. The E2E adapter declares sanitized artifact schema v14 and
 explicitly opts into retrieval tracing; normal production composition leaves tracing disabled. It
 offers the preregistered `baseline-v1` and development-only `claim-coverage-v1` generation
 contracts, plus full-development one- or three-run schedules. Its bounded `--review-item-id` mode
@@ -67,7 +67,7 @@ can remain terminal-only or be written to a new private Markdown file below the 
 `artifacts/local-review/` directory; the sanitized metrics artifact and checkpoint never contain
 that raw content. The mode rejects sealed splits, semantic judging, experimental variants, repeats,
 and resumed checkpoints. A schema declaration is not proof of
-execution: the latest executed held-out artifact remains v8, and no v9-v13 held-out result is
+execution: the latest executed held-out artifact remains v8, and no v9-v14 held-out result is
 claimed. See [Operations](../docs/OPERATIONS.md) for dataset-suite validation, provider-free
 retrieval variants, generation experiments, the two-run semantic calibration preflight, and
 artifact provenance. Retrieval variants never appear in production settings or the E2E command,

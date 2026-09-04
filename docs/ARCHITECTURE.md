@@ -144,22 +144,24 @@ remains optional for legacy items. Their answerable records must cover `mounting
 answerable confirmation items per type. Pair validation rejects overlapping item IDs, normalized
 exact questions, or fact families.
 
-The provider-free retrieval evaluator emits sanitized schema-v4 checkpoints and artifacts for the
+The provider-free retrieval evaluator emits sanitized schema-v5 checkpoints and artifacts for the
 legacy baseline or one of six development-only variants. The legacy baseline keeps its normal
 component limits. For development only, a trace-only probe measures raw dense and sparse
 reachability to rank 100 without changing the normal 60/40 component inputs, fusion, or the
 30-candidate reranker budget. The evaluator also reports fusion and dedup boundaries, refill IDs, raw
-cross-encoder rank, final policy rank, and strict versus exact-content-equivalent outcomes. Schema v4
+cross-encoder rank, final policy rank, and strict versus exact-content-equivalent outcomes. Schema v5
 also applies the canonical evidence selector at a fixed evaluation-only top five and records only
 stable IDs, document IDs, pages, heading counts, and exact-duplicate alternatives. The production
 API retains its existing `top_k` range; this diagnostic cap is not a runtime configuration change.
 Evidence metrics in this schema are measured diagnostics, not additional exit-code gates; promotion
 criteria remain deferred until a reviewed development winner exists. The E2E evaluator emits
-sanitized schema-v12 checkpoints and artifacts, binds checkpoints to endpoint/model identity,
+sanitized schema-v14 checkpoints and artifacts, binds checkpoints to endpoint/model identity,
 supports two preregistered generation contracts,
-and keeps three-run development metrics separated by run. Strict qrel identity, expected-document
-metrics, failure classification, and deterministic release gates remain authoritative and are not
-relaxed by exact-content diagnostics. Current production composition does not capture the trace.
+and keeps three-run development metrics separated by run. Strict qrel identity and expected-document
+metrics remain diagnostics. Release gates use reviewed authoritative evidence requirements: every
+requirement must be covered, while its canonical chunks, explicitly reviewed alternatives, or a
+frozen-corpus exact-content duplicate are valid alternatives. No metadata, fuzzy match, or model may
+authorize an alternative. Current production composition does not capture the trace.
 
 ## Invariants
 

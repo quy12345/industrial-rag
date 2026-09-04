@@ -222,7 +222,7 @@ def test_aggregate_reports_retrieval_citations_abstention_and_latency() -> None:
     gates = evaluate_quality_gates(metrics)
     assert gates["overall_pass"] is True
     assert gates["gates"]["unsupported_citation_ids"]["actual"] == 0
-    assert gates["gates"]["wrong_document_citations"]["actual"] == 0
+    assert gates["gates"]["unreviewed_citation_provenance"]["actual"] == 0
 
 
 def test_answerable_abstention_does_not_claim_answer_or_citation_success() -> None:
@@ -565,7 +565,7 @@ def test_hybrid_fact_verdict_drives_final_metric_but_preserves_deterministic_met
     assert evaluate_quality_gates(metrics)["gates"]["fact_accuracy"]["passed"] is True
 
 
-def test_document_contamination_metrics_and_gate_are_explicit() -> None:
+def test_document_contamination_is_diagnostic_when_chunk_is_authoritative() -> None:
     wrong = score_query_execution(
         _item(),
         _execution(
@@ -581,8 +581,8 @@ def test_document_contamination_metrics_and_gate_are_explicit() -> None:
     assert metrics["document_contamination"]["wrong_document_retrieval_at_1_rate"] == 1.0
     assert metrics["citations"]["wrong_document_citation_rate_when_answered"] == 1.0
     gates = evaluate_quality_gates(metrics)
-    assert gates["overall_pass"] is False
-    assert gates["gates"]["wrong_document_citations"]["passed"] is False
+    assert gates["overall_pass"] is True
+    assert gates["gates"]["unreviewed_citation_provenance"]["passed"] is True
 
 
 def test_retrieval_trace_serializes_only_allowlisted_ids_and_rank_signals() -> None:
@@ -723,7 +723,7 @@ def test_sanitized_record_excludes_raw_dataset_answer_and_evidence_text() -> Non
         assert sentinel not in persisted
 
 
-def test_exact_content_equivalent_metrics_do_not_relax_strict_quality_gates() -> None:
+def test_exact_content_equivalent_metrics_are_authoritative_when_verified() -> None:
     representative = _candidate("programming-copy", document_id="programming")
     item = _item().model_copy(update={"relevant_chunk_ids": ["installation-copy"]})
     record = score_query_execution(
@@ -782,9 +782,9 @@ def test_exact_content_equivalent_metrics_do_not_relax_strict_quality_gates() ->
     )
 
     gates = evaluate_quality_gates(metrics)
-    assert gates["overall_pass"] is False
-    assert gates["gates"]["candidate_recall"]["actual"] == 0.0
-    assert gates["gates"]["wrong_document_citations"]["actual"] == 1.0
+    assert gates["overall_pass"] is True
+    assert gates["gates"]["complete_candidate_requirement_rate"]["actual"] == 1.0
+    assert gates["gates"]["unreviewed_citation_provenance"]["actual"] == 0.0
 
 
 def test_reviewed_cross_document_alternative_is_authoritative_but_not_canonical() -> None:
@@ -829,6 +829,37 @@ def test_reviewed_cross_document_alternative_is_authoritative_but_not_canonical(
     assert record["citation_authoritative_requirement_coverage"]["complete"] is True
 
 
+def test_unreviewed_citation_and_partial_requirement_coverage_fail_release_gates() -> None:
+    item = EvaluationItem.model_validate(
+        _item().model_dump()
+        | {
+            "relevant_chunk_ids": ["qrel", "wiring"],
+            "evidence_requirements": [
+                {"id": "safety", "canonical_chunk_ids": ["qrel"]},
+                {"id": "wiring", "canonical_chunk_ids": ["wiring"]},
+            ],
+        }
+    )
+    unreviewed = _candidate("unreviewed", document_id="programming")
+    answerable = score_query_execution(
+        item,
+        _execution(final=[unreviewed], pool=[unreviewed]),
+    )
+    unanswerable = score_query_execution(
+        _item(answerable=False),
+        _execution(final=[_candidate("other")], pool=[_candidate("other")], abstained=True),
+    )
+
+    metrics = aggregate_query_records([answerable, unanswerable])
+    gates = evaluate_quality_gates(metrics)
+
+    assert metrics["citations"]["unreviewed_citation_provenance_count"] == 1
+    assert metrics["citations"]["authoritative_requirement_complete_rate_when_answered"] == 0.0
+    assert gates["gates"]["unreviewed_citation_provenance"]["passed"] is False
+    assert gates["gates"]["complete_citation_requirement_coverage"]["passed"] is False
+    assert gates["overall_pass"] is False
+
+
 def test_document_alternative_metadata_cannot_exempt_unrelated_wrong_provenance() -> None:
     unrelated = _candidate("unrelated", document_id="programming").model_copy(
         update={
@@ -852,7 +883,7 @@ def test_document_alternative_metadata_cannot_exempt_unrelated_wrong_provenance(
     assert record["wrong_document_retrieval_at_1_excluding_exact_equivalents"] is True
 
 
-def test_v13_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
+def test_v14_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -864,13 +895,13 @@ def test_v13_cli_uses_variant_and_repeat_versioned_artifact_paths(monkeypatch) -
         ],
     )
     args = evaluate_e2e._parse_args()
-    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 13
+    assert evaluate_e2e.ARTIFACT_SCHEMA_VERSION == 14
     assert args.generation_variant == BASELINE_GENERATION_VARIANT
     assert args.repeat_count == 1
-    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v13.json"
+    assert args.output.name == "atv320-calibration-baseline-v1-r1-e2e-v14.json"
     assert (
         args.checkpoint.name
-        == "atv320-calibration-baseline-v1-r1-e2e-v13-checkpoint.jsonl"
+        == "atv320-calibration-baseline-v1-r1-e2e-v14-checkpoint.jsonl"
     )
     assert args.semantic_judge == "none"
     settings = evaluate_e2e._runtime_settings(evaluate_e2e.Settings())
@@ -895,10 +926,10 @@ def test_heldout_v2_cli_uses_private_sealed_paths(monkeypatch) -> None:
 
     assert args.heldout_v2 == evaluate_e2e.PRIVATE_HELDOUT_DATASET_PATH
     assert args.manifest == evaluate_e2e.PRIVATE_HELDOUT_MANIFEST_PATH
-    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v13.json"
+    assert args.output.name == "atv320-heldout-v2-baseline-v1-r1-e2e-v14.json"
     assert (
         args.checkpoint.name
-        == "atv320-heldout-v2-baseline-v1-r1-e2e-v13-checkpoint.jsonl"
+        == "atv320-heldout-v2-baseline-v1-r1-e2e-v14-checkpoint.jsonl"
     )
 
 
@@ -929,10 +960,10 @@ def test_optimization_cli_uses_versioned_and_sealed_defaults(
 
     assert args.manifest == expected_manifest
     assert getattr(args, dataset) == expected_dataset
-    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v13.json"
+    assert args.output.name == f"atv320-{dataset}-baseline-v1-r1-e2e-v14.json"
     assert (
         args.checkpoint.name
-        == f"atv320-{dataset}-baseline-v1-r1-e2e-v13-checkpoint.jsonl"
+        == f"atv320-{dataset}-baseline-v1-r1-e2e-v14-checkpoint.jsonl"
     )
 
 
@@ -955,10 +986,10 @@ def test_development_cli_selects_claim_variant_and_repeat_schedule(monkeypatch) 
     args = evaluate_e2e._parse_args()
 
     assert args.output.name == (
-        "atv320-development-claim-coverage-v1-r3-e2e-v13.json"
+        "atv320-development-claim-coverage-v1-r3-e2e-v14.json"
     )
     assert args.checkpoint.name == (
-        "atv320-development-claim-coverage-v1-r3-e2e-v13-checkpoint.jsonl"
+        "atv320-development-claim-coverage-v1-r3-e2e-v14-checkpoint.jsonl"
     )
 
 
@@ -1165,12 +1196,12 @@ def test_hybrid_fact_judge_requires_independent_dataset_approval_and_key() -> No
     )
 
 
-def test_fact_evaluator_identity_change_invalidates_v12_checkpoint(tmp_path) -> None:
-    checkpoint = tmp_path / "v12-checkpoint.jsonl"
+def test_fact_evaluator_identity_change_invalidates_v13_checkpoint(tmp_path) -> None:
+    checkpoint = tmp_path / "v13-checkpoint.jsonl"
     evaluate_e2e._write_checkpoint(
         checkpoint,
         {
-            "artifact_schema_version": 12,
+            "artifact_schema_version": 13,
             "source_identity": {"version": 8},
         },
         [],
@@ -1180,7 +1211,7 @@ def test_fact_evaluator_identity_change_invalidates_v12_checkpoint(tmp_path) -> 
         evaluate_e2e._load_checkpoint(
             checkpoint,
             {
-                "artifact_schema_version": 13,
+                "artifact_schema_version": 14,
                 "source_identity": {"version": 9},
             },
         )

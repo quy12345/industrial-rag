@@ -56,10 +56,10 @@ LEGACY_TEST_PATH = Path("data/eval/phase7/test.jsonl")
 DEVELOPMENT_PATH = Path("data/eval/atv320/development-v1.jsonl")
 DEVELOPMENT_MANIFEST_PATH = Path("data/eval/atv320/development-v1-manifest.json")
 FROZEN_CHUNKS_PATH = Path("artifacts/phase7/frozen-chunks.jsonl")
-ARTIFACT_SCHEMA_VERSION = 4
-DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-retrieval-evaluation-v4.json")
+ARTIFACT_SCHEMA_VERSION = 5
+DEFAULT_OUTPUT = Path("artifacts/metrics/atv320-retrieval-evaluation-v5.json")
 DEFAULT_CHECKPOINT = Path(
-    "artifacts/metrics/atv320-retrieval-evaluation-v4-checkpoint.jsonl"
+    "artifacts/metrics/atv320-retrieval-evaluation-v5-checkpoint.jsonl"
 )
 SOURCE_IDENTITY_PATHS = {
     "content_identity": Path("app/domain/content_identity.py"),

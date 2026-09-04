@@ -50,6 +50,21 @@ def _row(identifier: str, rank: int | None, *, wrong_document: bool = False) -> 
             wrong_document
         ),
         "evidence_selection": {"duplicate_groups": []},
+        "candidate_authoritative_requirement_coverage": {
+            "requirement_count": 1,
+            "covered_requirement_count": int(rank is not None),
+            "complete": rank is not None,
+        },
+        "final_authoritative_requirement_coverage": {
+            "requirement_count": 1,
+            "covered_requirement_count": int(rank is not None),
+            "complete": rank is not None,
+        },
+        "evidence_authoritative_requirement_coverage": {
+            "requirement_count": 1,
+            "covered_requirement_count": int(rank is not None),
+            "complete": rank is not None,
+        },
         "document_context_complete": True,
         "retrieval_ms": 10.0,
         "rerank_ms": 100.0,
@@ -59,6 +74,8 @@ def _row(identifier: str, rank: int | None, *, wrong_document: bool = False) -> 
 def test_retrieval_aggregation_reports_recall_ranks_contamination_and_latency() -> None:
     metrics = aggregate_retrieval_rows([_row("a", 1), _row("b", None, wrong_document=True)])
     assert metrics["candidate_recall"] == 0.5
+    assert metrics["authoritative_candidate_complete_rate"] == 0.5
+    assert metrics["authoritative_evidence_complete_rate"] == 0.5
     assert metrics["raw_component_recall"] == 0.5
     assert metrics["candidate_exact_equivalent_recall"] == 0.5
     assert metrics["hit_rate_at_5"] == 0.5
@@ -245,8 +262,8 @@ def test_retrieval_evaluator_hashes_existing_canonical_behavior_owners() -> None
     assert identity["files_sha256"] == evaluate_retrieval._json_sha256(expected)
     assert identity == evaluate_retrieval._source_identity()
     assert "evidence_policy" in identity["files"]
-    assert evaluate_retrieval.ARTIFACT_SCHEMA_VERSION == 4
-    assert evaluate_retrieval.DEFAULT_OUTPUT.name == "atv320-retrieval-evaluation-v4.json"
+    assert evaluate_retrieval.ARTIFACT_SCHEMA_VERSION == 5
+    assert evaluate_retrieval.DEFAULT_OUTPUT.name == "atv320-retrieval-evaluation-v5.json"
 
 
 def test_six_development_variants_are_preregistered_and_behaviorally_distinct() -> None:
@@ -312,10 +329,10 @@ def test_retrieval_variant_cli_is_development_only_and_uses_distinct_paths() -> 
         ]
     )
     assert development.output.name == (
-        "atv320-development-retrieval-refill-query-expansion-v2-v4.json"
+        "atv320-development-retrieval-refill-query-expansion-v2-v5.json"
     )
     assert development.checkpoint.name == (
-        "atv320-development-retrieval-refill-query-expansion-v2-v4-checkpoint.jsonl"
+        "atv320-development-retrieval-refill-query-expansion-v2-v5-checkpoint.jsonl"
     )
     assert (
         evaluate_retrieval._active_retrieval_variant(
@@ -338,12 +355,12 @@ def test_retrieval_checkpoint_fails_closed_across_variants_and_legacy_schema(
 ) -> None:
     checkpoint = tmp_path / "retrieval-checkpoint.jsonl"
     baseline = {
-        "artifact_schema_version": 4,
+        "artifact_schema_version": 5,
         "variant": "baseline",
         "selected_item_ids": ["dev-001"],
     }
     refill = {
-        "artifact_schema_version": 4,
+        "artifact_schema_version": 5,
         "variant": "refill",
         "selected_item_ids": ["dev-001"],
     }
