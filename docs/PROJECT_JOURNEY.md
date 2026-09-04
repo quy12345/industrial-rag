@@ -210,6 +210,34 @@ and exact-content-equivalent evidence outcomes without raw content. **Commit/art
 commits `fix: preserve complete evidence provenance` and `feat: trace evidence selection boundaries`;
 no integration artifact is claimed yet.
 
+### Claim-level generation did not improve the Qwen development baseline
+
+**Symptom** -> A five-item preflight suggested that a claim-level structured answer might preserve
+more required facts, but that sample was too small to select a generation contract. **Root cause** ->
+`claim-coverage-v1` can validate the claims and source labels that the model emits, but it cannot
+know which reviewed expected facts the model omitted. Its stricter per-claim support rule also made
+Qwen more conservative, especially for Vietnamese and cross-document questions. **Fix/decision** ->
+Reject promotion of `claim-coverage-v1` and retain `baseline-v1` only as the current control. This is
+not a quality approval: the baseline still misses the development candidate-recall, Hit@5,
+fact-completeness, answerable-coverage, and wrong-document-citation promotion targets. Do not run confirmation
+or held-out evaluation from this result; investigate retrieval coverage, evidence provenance, and
+the reviewed development failure cohorts first. **Proof** -> One full, sanitized, single-repeat A/B
+run used the same 120 development items, Qwen model, corpus identity, and identical retrieval and
+evidence fingerprints. Baseline produced 46 complete answers out of 80 answerable items, `64.81%`
+fact coverage, four false abstentions, and three false answers. Claim coverage produced 45 complete
+answers, `62.35%` fact coverage, seven false abstentions, and two false answers. Both had `80.00%`
+candidate recall, `76.25%` Hit@5, two wrong-document citations, no unsupported citation IDs, and
+`100%` referentially valid citation IDs. Paired complete-answer outcomes favored baseline on four
+items and claim coverage on three (`McNemar p=1.0`); a 10,000-sample fact-family clustered bootstrap
+estimated the claim-coverage minus baseline complete-answer difference at `-1.25` percentage points
+with a 95% interval of `[-7.89, +5.36]`. This single repeat provides no basis to promote the experimental
+variant, and it cannot declare the retained baseline production-ready or superior to a generator that
+has not received the same full evaluation. **Commit/artifact** -> local ignored artifacts
+`q04-qwen-development-baseline-v1-r1-e2e-v11.json` (SHA-256 `c8795667ade92b5e36b5b16ae42ba66121f568c3468a770a581b201948dc1ebb`)
+and `q04-qwen-development-claim-coverage-v1-r1-e2e-v11.json` (SHA-256
+`99f57d0523174105491295cc70e5aa5b709bf72acc4dc1048b0ccbe54d813241`); Qwen non-thinking endpoint
+support is commit `e034469`.
+
 ## Portfolio conclusions
 
 - Correct evaluation labels are as important as the retrieval implementation.
