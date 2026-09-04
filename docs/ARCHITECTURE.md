@@ -34,9 +34,10 @@ app/
 
 evaluation/
 |-- dataset.py           Dataset parsing and validation contracts
-|-- retrieval.py         Current retrieval metrics and aggregation
-|-- e2e.py               Query-record scoring and quality-gate aggregation
-`-- development_review.py Local-only joins for inspectable failure diagnosis
+|-- retrieval.py         Deep provider-free retrieval diagnostics
+|-- e2e.py               Compact case records and four-outcome scorecard
+|-- semantic.py          Ragas/OpenRouter adapter and raw-input policy
+`-- human_review.py      Private review packs and sanitized judge agreement
 
 scripts/
 |-- operations/          Supported operational adapters
@@ -69,8 +70,8 @@ attempt may repair invalid source labels without rerunning retrieval; a second i
 safe abstention. Generation cannot run before the evidence gate passes.
 
 Retrieval tracing is an explicit observer boundary. The normal production composition uses the
-default `capture_trace=False` and does not opt in; the current E2E and provider-free retrieval
-evaluators opt in when they build a retriever. An enabled trace keeps immutable candidate snapshots
+default `capture_trace=False`; only the provider-free retrieval evaluator opts in when it builds a
+retriever. An enabled trace keeps immutable candidate snapshots
 in memory across dense, sparse,
 fusion, pre/post-deduplication, raw cross-encoder, and final policy stages. Evaluation serializes
 only allowlisted IDs, counts, ranks, and role signals, never candidate text. Enabling the observer

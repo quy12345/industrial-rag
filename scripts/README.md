@@ -14,6 +14,7 @@ scripts.operations.validate_query_runtime
 scripts.evaluation.validate_dataset
 scripts.evaluation.evaluate_retrieval
 scripts.evaluation.evaluate_e2e
+scripts.evaluation.validate_scorecard
 ```
 
 There are no supported command modules directly under `scripts/`, and the former phase-named module
@@ -36,7 +37,7 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
 
 ## Evaluation
 
-`scripts/evaluation/` owns three current adapters:
+`scripts/evaluation/` owns four current adapters:
 
 - validate either the legacy frozen pair or the development/confirmation optimization pair;
 - evaluate the frozen legacy retrieval baseline or one of six preregistered development-only
@@ -44,9 +45,10 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
   apply the canonical evaluation-only evidence top five, and write a sanitized schema-v5
   checkpoint/artifact;
 - run approval-gated end-to-end generation and Ragas evaluation.
+- validate a sanitized scorecard against private human labels.
 
 Reusable current contracts live in `evaluation/dataset.py`, `evaluation/retrieval.py`,
-`evaluation/e2e.py`, and `evaluation/semantic.py`. E2E evaluation always uses the baseline
+`evaluation/e2e.py`, `evaluation/semantic.py`, and `evaluation/human_review.py`. E2E evaluation always uses the baseline
 production generation contract and the three core Ragas metrics. Generator egress and Ragas egress
 require independent dataset-specific approval tokens. Optional Answer Relevancy and Context
 Precision diagnostics are enabled with `--ragas-diagnostics`; they are not scorecard outcomes.

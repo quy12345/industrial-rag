@@ -43,6 +43,10 @@ SUPPORTED_CLI_OPTIONS = [
         },
     ),
     (
+        "scripts.evaluation.validate_scorecard",
+        {"--artifact", "--labels", "--output"},
+    ),
+    (
         "scripts.operations.index_corpus",
         {
             "--page-batch-size",

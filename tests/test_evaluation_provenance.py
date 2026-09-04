@@ -14,6 +14,7 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 CANONICAL_SOURCE_IDENTITY_PATHS = {
     "dataset_contract": Path("evaluation/dataset.py"),
     "evaluator": Path("evaluation/e2e.py"),
+    "human_review": Path("evaluation/human_review.py"),
     "semantic_evaluator": Path("evaluation/semantic.py"),
     "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "generation_prompt": Path("app/application/generation_prompt.py"),

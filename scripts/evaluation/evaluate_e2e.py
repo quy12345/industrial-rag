@@ -45,6 +45,11 @@ from evaluation.dataset import (
     validate_evaluation_manifest,
 )
 from evaluation.e2e import build_case_record, build_scorecard
+from evaluation.human_review import (
+    PrivateReviewPack,
+    select_judge_validation_cohort,
+    selected_ids_sha256,
+)
 from evaluation.semantic import (
     MetricScore,
     RagasEvaluationInput,
@@ -79,6 +84,7 @@ SOURCE_IDENTITY_VERSION = 11
 SOURCE_IDENTITY_PATHS = {
     "dataset_contract": Path("evaluation/dataset.py"),
     "evaluator": Path("evaluation/e2e.py"),
+    "human_review": Path("evaluation/human_review.py"),
     "semantic_evaluator": Path("evaluation/semantic.py"),
     "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "generation_prompt": Path("app/application/generation_prompt.py"),
@@ -132,6 +138,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     records = _load_checkpoint(args.checkpoint, identity)
     _validate_checkpoint_prefix(records, selected)
+    review_pack = (
+        PrivateReviewPack.open(
+            args.local_review_output,
+            selected_ids=[item.id for item in selected],
+            checkpoint_ids=[str(record["id"]) for record in records],
+        )
+        if args.local_review_output is not None
+        else None
+    )
     completed_ids = {str(record["id"]) for record in records}
     for item in selected:
         if item.id in completed_ids:
@@ -145,7 +160,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 include_diagnostics=args.ragas_diagnostics,
                 max_context_chars=settings.generation_max_context_chars,
             )
-            records.append(build_case_record(item, execution, scores))
+            record = build_case_record(item, execution, scores)
+            if review_pack is not None:
+                review_pack.append(
+                    item=item,
+                    execution=execution,
+                    scores=scores,
+                    max_context_chars=settings.generation_max_context_chars,
+                )
+            records.append(record)
             _write_checkpoint(args.checkpoint, identity, records)
         except SemanticJudgeError as exc:
             _write_checkpoint(args.checkpoint, identity, records)
@@ -298,9 +321,15 @@ def _score_execution(
 
 
 def _select_items(items: list[EvaluationItem], args: argparse.Namespace) -> list[EvaluationItem]:
-    if args.review_cohort or args.review_item_id:
-        raise SystemExit("Private judge-validation review is implemented in E04 Batch 2.")
-    return items
+    if args.review_cohort:
+        return list(select_judge_validation_cohort(items))
+    if not args.review_item_id:
+        return items
+    by_id = {item.id: item for item in items}
+    missing = [item_id for item_id in args.review_item_id if item_id not in by_id]
+    if missing:
+        raise SystemExit("Review item IDs were not found: " + ", ".join(missing))
+    return [by_id[item_id] for item_id in args.review_item_id]
 
 
 def _load_dataset(
@@ -394,7 +423,7 @@ def _run_identity(
         "sealed_comparison_dataset_sha256": _sealed_comparison_hash(manifest, args.dataset),
         "review": {
             "cohort": args.review_cohort,
-            "selected_ids_sha256": _selected_ids_hash(selected),
+            "selected_ids_sha256": selected_ids_sha256(selected),
         },
     }
 
@@ -476,10 +505,6 @@ def _sealed_comparison_hash(manifest: Mapping[str, Any], dataset: str) -> str:
     if not isinstance(value, str) or len(value) != 64:
         raise RuntimeError(f"ATV320 manifest has no valid sealed comparison hash: {key}")
     return value
-
-
-def _selected_ids_hash(items: Sequence[EvaluationItem]) -> str:
-    return hashlib.sha256("\n".join(item.id for item in items).encode("utf-8")).hexdigest()
 
 
 def _file_sha256(path: Path) -> str:

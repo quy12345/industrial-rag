@@ -211,271 +211,56 @@ Ragas uses OpenRouter model `openai/gpt-5.6-luna`, low reasoning, OpenAI-only ro
 alone initialize `openai/text-embedding-3-small`. `OPENROUTER_API_KEY` remains in the untracked
 `.env`. The evaluator image is Python 3.11 and contains no Docling.
 
-## Historical E2E v14 workflow (unsupported)
+## Human validation of the scorecard
 
-The following commands document completed experiments and are retained temporarily as engineering
-history. Their flags and helper modules were hard-cut in E04 and must not be used for current runs.
-
-Optimization E2E is also provider- and cost-bearing. After the datasets, manifests, and egress have
-been explicitly approved, use the dataset-specific generator token below. Semantic and hybrid
-fact judging each require their own independent token.
-
-| Dataset | Generator approval token | Optional semantic approval token | Optional fact-judge token |
-| --- | --- | --- | --- |
-| development | `APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS` | `APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS EGRESS` | `APPROVE ATV320 DEVELOPMENT OPENROUTER FACT JUDGE EGRESS` |
-| confirmation | `APPROVE ATV320 CONFIRMATION GENERATOR EGRESS` | `APPROVE ATV320 CONFIRMATION OPENROUTER RAGAS EGRESS` | `APPROVE ATV320 CONFIRMATION OPENROUTER FACT JUDGE EGRESS` |
+Before any full development baseline, run the fixed 40-item metadata-selected cohort. This sends
+30 answerable and 10 unanswerable EN/VI-balanced cases to both the configured generator and Ragas,
+so it requires fresh approval for both egress paths:
 
 ```powershell
-# Inspectable development run; --item-id is allowed only for a sanitized diagnostic.
-.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
-  --dataset development `
-  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
-
-# Full sealed confirmation run; partial-selection flags are rejected.
-.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
-  --dataset confirmation `
-  --provider-approval-token "APPROVE ATV320 CONFIRMATION GENERATOR EGRESS"
+docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e \`
+  --dataset development \`
+  --review-cohort judge-validation-v1 \`
+  --local-review-output artifacts/local-review/judge-validation-v1/review.md \`
+  --checkpoint artifacts/metrics/atv320-judge-validation-v1-e2e-v15-checkpoint.jsonl \`
+  --output artifacts/metrics/atv320-judge-validation-v1-e2e-v15.json \`
+  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS" \`
+  --judge-provider-approval-token "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS SCORECARD EGRESS" \`
+  --ragas-diagnostics
 ```
 
-## Development generation variants
+The private directory contains `review.md` and `labels.jsonl`. It is Git-ignored and contains raw
+questions, answers, reviewed facts, citations, cited chunks, and final generation evidence. Never
+commit, upload, paste into CI, or share these files. Replace applicable `null` values in
+`labels.jsonl` with `true` or `false`; leave only genuinely non-applicable fields as `null`.
 
-The E2E evaluator supports two preregistered generation contracts on the inspectable development
-split:
-
-- `baseline-v1` uses the current answer-level structured contract.
-- `claim-coverage-v1` asks for separately sourced answer claims, validates their ephemeral source
-  labels, and renders them back to the existing answer/citation contract.
-
-Use `--repeat-count 1` for a single diagnostic run or `--repeat-count 3` to compare provider
-stability. Run both variants with the same repeat count; for example, a three-repeat comparison is:
+Validate agreement without provider access:
 
 ```powershell
-.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
-  --dataset development `
-  --generation-variant baseline-v1 `
-  --repeat-count 3 `
-  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
-
-.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
-  --dataset development `
-  --generation-variant claim-coverage-v1 `
-  --repeat-count 3 `
-  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS"
+.\.venv\Scripts\python.exe -m scripts.evaluation.validate_scorecard \`
+  --artifact artifacts/metrics/atv320-judge-validation-v1-e2e-v15.json \`
+  --labels artifacts/local-review/judge-validation-v1/labels.jsonl \`
+  --output artifacts/metrics/atv320-judge-validation-v1-agreement.json
 ```
 
-`claim-coverage-v1` is development-only. Three-repeat runs also require the complete development
-split, reject `--item-id` and `--max-queries`, and cannot be combined with Ragas
-(`--semantic-judge ragas`). Calibration, test, confirmation, and held-out evaluation remain
-restricted to `baseline-v1` with `--repeat-count 1`.
+The sanitized agreement artifact contains only hashes, applicable counts, TP/TN/FP/FN,
+disagreement IDs, and acceptance status. Each rubric must reach at least 85%, all applicable labels
+must be complete, correctness/faithfulness need at least 20 answered-answerable samples, and no
+human-confirmed unsafe false answer may be missed. Exit code is zero for PASS and two for a valid
+FAIL. If validation fails, stop and diagnose categories; do not tune a prompt or threshold to
+individual review items.
 
-The evaluator processes all development items for repeat 1 before repeat 2 and repeat 3. It writes
-each completed `(item_id, repeat_index)` in that repeat-major order. Resume is fail-closed: the
-checkpoint must be an exact prefix of the same dataset order and must match the variant, repeat
-count, schema, source identity, resolved evidence `top_k`/gate, context/citation limits, and other
-run identity fields. Repeated metrics are reported per run rather than pooled across all records.
+After agreement passes and only after a separate approval, run full development once using the
+current E2E command with `--ragas-diagnostics`. Do not run confirmation or held-out in E04 and do
+not derive thresholds from that same baseline.
 
-Schema-v14 default paths encode the full experiment identity:
+## Historical evaluator contracts
 
-| Variant and repeats | Artifact | Checkpoint |
-| --- | --- | --- |
-| baseline, once | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v14.json` | `artifacts/metrics/atv320-development-baseline-v1-r1-e2e-v14-checkpoint.jsonl` |
-| claim coverage, once | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v14.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r1-e2e-v14-checkpoint.jsonl` |
-| baseline, three repeats | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v14.json` | `artifacts/metrics/atv320-development-baseline-v1-r3-e2e-v14-checkpoint.jsonl` |
-| claim coverage, three repeats | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v14.json` | `artifacts/metrics/atv320-development-claim-coverage-v1-r3-e2e-v14-checkpoint.jsonl` |
-
-These switches exist only in the evaluation CLI. They do not change the production composition
-root, FastAPI request/response schema, evidence gate, citation validation, or default generator
-behavior. This runbook records supported commands only; it does not claim that either variant has
-been executed or improved quality.
-
-## Local development failure review
-
-The sanitized E2E artifact cannot contain raw questions, answers, expected facts, or evidence text.
-To diagnose a bounded set of development failures, join that artifact with the local development
-dataset and frozen chunks and print the result only to the current terminal:
-
-```powershell
-.\.venv\Scripts\python.exe -m scripts.evaluation.review_development `
-  --artifact artifacts/metrics/q04-qwen-development-baseline-v1-r1-e2e-v11.json `
-  --item-id dvi015 `
-  --item-id dvi024 `
-  --item-id dvi071
-```
-
-The command performs no Qdrant, model, or provider access and offers no output-file option. It
-validates the development dataset and frozen-corpus hashes before revealing local text, rejects
-non-development artifacts, and labels automated conclusions as diagnostic hints requiring human
-confirmation. The original generated answer remains unavailable because the sanitized artifact
-never stored it; a later targeted provider rerun is a new sample, not recovery of the old output.
-Do not redirect this command into a tracked file or paste its output into logs, issues, or commits.
-
-After provider-free review has isolated cases that genuinely require generation diagnosis, the E2E
-adapter can rerun a bounded cohort with the current `baseline-v1` generator. The recommended mode
-writes a private Markdown report with each question, new answer, expected-fact verdicts, citations,
-and only the cited generation evidence:
-
-```powershell
-.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
-  --dataset development `
-  --review-item-id dvi031 `
-  --review-item-id dvi065 `
-  --provider-approval-token "APPROVE ATV320 TARGETED DEVELOPMENT REVIEW EGRESS" `
-  --local-review-output artifacts/local-review/targeted-review.md `
-  --checkpoint artifacts/metrics/local-targeted-review-checkpoint.jsonl `
-  --output artifacts/metrics/local-targeted-review.json
-```
-
-This is an explicit provider call and therefore requires fresh user approval for the named IDs,
-configured model, and estimated cost before execution. At most 20 unique development IDs are
-accepted. The mode requires `baseline-v1`, one repeat, no Ragas, new explicit checkpoint/output
-paths, and a new or empty checkpoint. The artifact and checkpoint remain sanitized; raw content is
-written only to a new `.md` file below the Git-ignored `artifacts/local-review/` directory. The
-command refuses paths outside that directory and refuses to overwrite an existing report. Omit
-`--local-review-output` only when an ephemeral terminal JSON payload is explicitly preferred.
-Because provider output can vary, this is a new diagnostic sample rather than a reconstruction of
-the original full-run answer. Do not use this mode with confirmation or held-out data, commit or
-paste the private report into public logs, or select a favorable retry after repeated runs.
-
-## Approved held-out regression run
-
-Held-out v2 is exposed regression evidence, not an unseen benchmark. Run it only after the user has
-explicitly approved provider data egress and cost. The exact dataset-specific token prevents a
-calibration approval from authorizing held-out traffic accidentally. Confirm that the interpreter is
-Python 3.11 before running:
-
-```powershell
-.\.venv\Scripts\python.exe -c "import sys; assert sys.version_info[:2] == (3, 11)"
-.\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
-  --dataset heldout-v2 `
-  --provider-approval-token "APPROVE PHASE 7 HELDOUT PROVIDER EGRESS"
-```
-
-`heldout-v2` is the sealed private regression split. It is intentionally distinct from the public
-`test` split even though both contain 45 records. The command requires both its dataset and manifest
-to remain under `data/eval/phase7/private-heldout-v2/`, then validates their hash, the frozen corpus,
-collection identities, runtime source identity, and configured provider before completing.
-
-The current evaluator declares artifact schema v14. If the command above is approved and executed,
-its default paths are
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v14-checkpoint.jsonl` and
-`artifacts/metrics/atv320-heldout-v2-baseline-v1-r1-e2e-v14.json`. V14 records a sanitized
-retrieval trace because the E2E adapter explicitly opts in; production builders default to
-`capture_trace=False` and the production bootstrap does not opt in. The artifact includes stage
-counts, IDs, ranks, and allowlisted role signals, but still excludes raw questions, evidence,
-prompts, answers, and provider responses.
-Reviewed expected-fact text is also excluded; only fact IDs, matcher outcomes, counts, and positions
-are persisted.
-
-Schema availability is not execution evidence. The latest executed held-out result remains the v8
-checkpoint at `artifacts/metrics/atv320-heldout-v2-e2e-v8-checkpoint.jsonl` and final artifact at
-`artifacts/metrics/atv320-heldout-v2-e2e-v8.json`; no v9-v14 held-out run is claimed.
-Existing v7 and v8 evidence remain immutable. A v13-or-earlier checkpoint cannot resume under
-schema v14/source identity v10. Never use any held-out result to tune the current runtime.
-
-## Optional hybrid fact evaluation
-
-The default `--fact-evaluator deterministic-v4` is offline. It matches exact numeric/unit and
-identifier facts, then applies reviewed clause-local text alternatives with decimal-safe splitting,
-bounded English inflections, EN/VI function-word tolerance, and negation guards. Its result is both
-the deterministic and final verdict.
-
-`--fact-evaluator hybrid-luna-v2` keeps deterministic positives, sends all unresolved text facts
-for one item in a single request to OpenRouter model `openai/gpt-5.6-luna`, and treats exact
-numeric/identifier misses as authoritative failures. The judge receives only the question, generated
-answer, and reviewed unresolved fact contracts—never retrieved evidence. It must return exactly one
-`present`, `absent`, or `contradicted` verdict per requested fact ID. Missing, duplicate, extra,
-or invalid verdicts stop the run without checkpointing the incomplete item.
-
-The route is pinned to OpenAI upstream with provider fallback disabled, low reasoning,
-`store=false`, a 60-second timeout, and one retry. Set `OPENROUTER_API_KEY` only in the untracked
-`.env`. A development preflight additionally requires both independent approvals:
-
-```powershell
-docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
-  --dataset development `
-  --max-queries 5 `
-  --fact-evaluator hybrid-luna-v2 `
-  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS" `
-  --fact-judge-approval-token "APPROVE ATV320 DEVELOPMENT OPENROUTER FACT JUDGE EGRESS" `
-  --checkpoint artifacts/metrics/atv320-fact-judge-development-preflight-checkpoint.jsonl `
-  --output artifacts/metrics/atv320-fact-judge-development-preflight.json
-```
-
-Do not run this command until the named items, egress, model, and cost have fresh approval. Generator,
-Ragas, and fact-judge tokens are non-interchangeable. Schema-v14 artifacts persist only fact IDs,
-deterministic/final outcomes, resolution, verdict categories, counts, and latency. They exclude
-question, answer, aliases, judge reasoning, provider bodies, and keys. Deterministic and final
-accuracy are reported separately; the unchanged `0.85` quality gate uses final accuracy only in
-hybrid mode. Hybrid evaluation cannot be combined with a three-repeat generation run.
-
-## Optional Ragas semantic evaluation
-
-Semantic scoring runs in a separate Python 3.11 evaluator image. It contains retrieval, generation,
-Ragas, and the OpenAI-compatible SDK, but no Docling and no PDF mount. The default E2E mode is
-`none`, so normal runs neither import Ragas nor construct an OpenRouter judge.
-
-Build and verify only this smaller evaluator target:
-
-```powershell
-docker compose --progress=plain build evaluation
-docker compose run --rm --no-deps evaluation python -c "import sys; from importlib.metadata import version; assert sys.version_info[:2] == (3, 11); assert version('ragas') == '0.4.3'; assert version('openai') == '2.53.0'; assert version('langchain-community') == '0.3.31'; from ragas.metrics.collections import Faithfulness, AnswerRelevancy, ContextPrecisionWithoutReference; print('semantic imports OK')"
-docker compose run --rm --no-deps evaluation python -m scripts.evaluation.evaluate_e2e --help
-```
-
-Set `OPENROUTER_API_KEY=sk-or-v1-...` in the untracked `.env`; do not put the key in a command, log,
-artifact, or chat message. The base URL and model slugs are frozen in the evaluator rather than
-configurable through `.env`.
-
-Ragas uses OpenRouter model `openai/gpt-5.6-luna` with low reasoning effort for Faithfulness, Answer
-Relevancy, and Context Precision without reference. Answer Relevancy uses
-`openai/text-embedding-3-small`. Both request types are pinned to the OpenAI upstream, require full
-parameter support, and disable provider fallback. Requests set
-`store=false`, use a 60-second timeout with at most one retry, and do not use a persistent Ragas
-cache. The adapter also sets `RAGAS_DO_NOT_TRACK=true`; the approval token authorizes OpenRouter and
-its pinned OpenAI upstream, not Ragas usage telemetry. `store=false` prevents application-requested
-storage but does not promise zero retention; both OpenRouter and upstream data policies still apply.
-
-The evaluator pins `langchain-community==0.3.31` because Ragas 0.4.3 imports a legacy VertexAI
-module at package import time. Unbounded resolution to `langchain-community==0.4.2` breaks even this
-OpenAI-compatible evaluator before any metric runs. Keep this transitive pin until Ragas publishes
-and the project explicitly adopts a release with the corrected import.
-
-Semantic egress requires a second dataset-specific approval token. The generation token authorizes
-only the currently selected generation endpoint; the judge token independently authorizes
-OpenRouter plus the pinned OpenAI upstream. Run the same first five calibration items twice with
-separate outputs before any held-out execution:
-
-```powershell
-docker compose up -d qdrant
-docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
-  --dataset calibration `
-  --max-queries 5 `
-  --semantic-judge ragas `
-  --provider-approval-token "APPROVE PHASE 7 CALIBRATION V5 STABILITY EGRESS" `
-  --judge-provider-approval-token "APPROVE ATV320 CALIBRATION OPENROUTER RAGAS EGRESS" `
-  --checkpoint artifacts/metrics/atv320-ragas-calibration-preflight-a-checkpoint.jsonl `
-  --output artifacts/metrics/atv320-ragas-calibration-preflight-a.json
-```
-
-Repeat with suffix `b`, then compare finite scores, EN/VI behavior, latency, and run-to-run variance.
-Review the same five non-held-out questions locally through the current demo for human sanity; do not
-copy raw question, answer, or evidence into logs or artifacts. Stop if Luna produces invalid
-structured output or clearly unreliable judgments. Do not fall back to a different model.
-
-After that review is accepted, the held-out command adds these arguments to the approved regression
-run shown above:
-
-```text
---semantic-judge ragas
---judge-provider-approval-token "APPROVE ATV320 HELDOUT OPENROUTER RAGAS EGRESS"
-```
-
-Schema-v14 checkpoints fail closed if the schema, source identity, endpoint profile, generation
-model, generation variant, repeat
-schedule, judge model, embedding model,
-metric configuration, or input policy differs. Only a fully answered item with all three finite
-semantic scores is checkpointed. Abstentions are recorded as not applicable and excluded from
-semantic denominators. Deterministic quality gates remain the only source of exit code `0` or `2`.
+Schema v8 is the latest executed held-out evidence. Schemas v9-v14 recorded completed retrieval,
+fact-matcher, provenance, generation-variant, and hybrid-judge experiments. E04 hard-cut those
+active commands and modules after their durable lessons moved to `PROJECT_JOURNEY.md`. The original
+commands and artifacts remain discoverable in Git history; they are not supported operations and
+cannot resume under schema v15/source identity v11.
 
 ## Reproduce ingestion without indexing
 

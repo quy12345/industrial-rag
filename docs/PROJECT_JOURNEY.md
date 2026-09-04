@@ -277,6 +277,21 @@ held-out evaluation has been run, so no changed score is claimed. **Commit/artif
 `fix: correct deterministic fact evaluation contracts`, `feat: model reviewed authoritative evidence`,
 and `fix: align evaluation gates with authoritative coverage`.
 
+### Rule-heavy evaluation obscured the product outcomes
+
+**Symptom** -> Schema v14 grew to about 26.3 MB and mixed retrieval traces, strict provenance,
+typed fact matching, generation experiments, and release gates in one E2E artifact. **Root cause**
+-> Each investigation added another permanent rule and payload instead of keeping deep diagnostics
+separate from the small set of user-facing quality outcomes. **Fix** -> E04 replaces the active E2E
+contract with a compact schema-v15 Ragas scorecard for answer utility, unsafe-answer rate, citation
+faithfulness, and final-context recall. Retrieval traces remain in the provider-free retrieval
+evaluator. A fixed metadata-selected 40-item cohort and private human labels must reach 85% judge
+agreement before any full development baseline. **Proof** -> Offline tests validate scorecard
+arithmetic, raw-content exclusion, the 30/10 EN/VI cohort, private review resume, and confusion
+matrices; no live judge-validation or development result is claimed yet. **Commit/artifact** ->
+implementation commit `refactor: simplify end-to-end evaluation around ragas`; the validation
+artifact remains pending explicit egress approval and human review.
+
 ## Portfolio conclusions
 
 - Correct evaluation labels are as important as the retrieval implementation.
