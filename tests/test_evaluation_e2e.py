@@ -787,6 +787,48 @@ def test_exact_content_equivalent_metrics_do_not_relax_strict_quality_gates() ->
     assert gates["gates"]["wrong_document_citations"]["actual"] == 1.0
 
 
+def test_reviewed_cross_document_alternative_is_authoritative_but_not_canonical() -> None:
+    alternative = _candidate("programming-safety", document_id="programming")
+    item = EvaluationItem.model_validate(
+        _item().model_dump()
+        | {
+            "evidence_requirements": [
+                {
+                    "id": "safety",
+                    "canonical_chunk_ids": ["qrel"],
+                    "reviewed_alternative_chunk_ids": ["programming-safety"],
+                }
+            ]
+        }
+    )
+
+    record = score_query_execution(
+        item,
+        _execution(final=[alternative], pool=[alternative]),
+        exact_content_equivalence={},
+    )
+
+    assert record["candidate_direct_evidence_rank"] is None
+    assert record["citation_document_correct"] is False
+    assert record["candidate_authoritative_requirement_coverage"] == {
+        "contract_mode": "explicit",
+        "requirement_count": 1,
+        "covered_requirement_count": 1,
+        "complete": True,
+        "requirements": [
+            {
+                "id": "safety",
+                "canonical_chunk_ids": ["qrel"],
+                "reviewed_alternative_chunk_ids": ["programming-safety"],
+                "rank": 1,
+                "matched_chunk_id": "programming-safety",
+                "provenance": "reviewed_authoritative_alternative",
+            }
+        ],
+    }
+    assert record["citation_authoritative_requirement_coverage"]["complete"] is True
+
+
 def test_document_alternative_metadata_cannot_exempt_unrelated_wrong_provenance() -> None:
     unrelated = _candidate("unrelated", document_id="programming").model_copy(
         update={

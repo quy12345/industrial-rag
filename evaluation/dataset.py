@@ -166,6 +166,40 @@ class ExpectedAnswerFact(BaseModel):
         return self
 
 
+class EvidenceRequirement(BaseModel):
+    """One required evidence facet with canonical and human-reviewed source IDs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    canonical_chunk_ids: list[str] = Field(min_length=1)
+    reviewed_alternative_chunk_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("id")
+    @classmethod
+    def non_empty_requirement_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be empty")
+        return normalized
+
+    @field_validator("canonical_chunk_ids", "reviewed_alternative_chunk_ids")
+    @classmethod
+    def normalized_unique_chunk_ids(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("must not contain blank chunk IDs")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("must not contain duplicate chunk IDs")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_disjoint_sources(self) -> EvidenceRequirement:
+        if set(self.canonical_chunk_ids).intersection(self.reviewed_alternative_chunk_ids):
+            raise ValueError("canonical and reviewed alternative chunk IDs must be disjoint")
+        return self
+
+
 class CorpusSource(BaseModel):
     """Redistribution-safe source metadata; raw vendor content is never stored here."""
 
@@ -240,6 +274,7 @@ class EvaluationItem(BaseModel):
     question_type: QuestionType
     expected_document_ids: list[str]
     relevant_chunk_ids: list[str]
+    evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
     expected_pages: list[int]
     expected_phrases: list[str]
     phrase_match_mode: PhraseMatchMode = "all"
@@ -303,11 +338,34 @@ class EvaluationItem(BaseModel):
                 raise ValueError("expected_answer_facts must have unique IDs")
             if self.review_status == "approved" and not self.expected_answer_facts:
                 raise ValueError("approved answerable items require expected_answer_facts")
+            if self.evidence_requirements:
+                requirement_ids = [requirement.id for requirement in self.evidence_requirements]
+                if len(set(requirement_ids)) != len(requirement_ids):
+                    raise ValueError("evidence_requirements must have unique IDs")
+                canonical_ids = [
+                    chunk_id
+                    for requirement in self.evidence_requirements
+                    for chunk_id in requirement.canonical_chunk_ids
+                ]
+                alternative_ids = [
+                    chunk_id
+                    for requirement in self.evidence_requirements
+                    for chunk_id in requirement.reviewed_alternative_chunk_ids
+                ]
+                if len(set(canonical_ids)) != len(canonical_ids):
+                    raise ValueError("canonical chunk IDs cannot span multiple requirements")
+                if len(set(alternative_ids)) != len(alternative_ids):
+                    raise ValueError("reviewed alternatives cannot span multiple requirements")
+                if set(canonical_ids) != set(self.relevant_chunk_ids):
+                    raise ValueError(
+                        "evidence requirement canonical chunk IDs must equal relevant_chunk_ids"
+                    )
         else:
             if any(
                 (
                     self.expected_document_ids,
                     self.relevant_chunk_ids,
+                    self.evidence_requirements,
                     self.expected_pages,
                     self.expected_phrases,
                     self.expected_answer_facts,
@@ -485,6 +543,13 @@ def validate_dataset(
                     f"{item.id} qrel {chunk_id} belongs to an unexpected document"
                 )
             relevant.append(chunk)
+        for requirement in item.evidence_requirements:
+            for chunk_id in requirement.reviewed_alternative_chunk_ids:
+                if chunk_id not in by_id:
+                    raise DatasetValidationError(
+                        f"{item.id} reviewed alternative references missing frozen chunk ID: "
+                        f"{chunk_id}"
+                    )
         for phrase in item.expected_phrases:
             if not any(phrase_matches(chunk.text, phrase) for chunk in relevant):
                 raise DatasetValidationError(
@@ -659,6 +724,28 @@ def _validate_dataset_shape(
                 f"{kind} requires opaque lowercase item, fact-family, and expected-fact IDs; "
                 f"invalid record count: {invalid_identifier_count}."
             )
+        ambiguous_requirements = [
+            item.id
+            for item in items
+            if item.answerable
+            and len(item.relevant_chunk_ids) > 1
+            and not item.evidence_requirements
+        ]
+        if ambiguous_requirements:
+            raise DatasetValidationError(
+                f"{kind} multi-qrel items require explicit evidence_requirements; "
+                f"missing record count: {len(ambiguous_requirements)}."
+            )
+        invalid_requirement_identifier_count = sum(
+            not _is_opaque_identifier(requirement.id)
+            for item in items
+            for requirement in item.evidence_requirements
+        )
+        if invalid_requirement_identifier_count:
+            raise DatasetValidationError(
+                f"{kind} requires opaque lowercase evidence requirement IDs; "
+                f"invalid record count: {invalid_requirement_identifier_count}."
+            )
         for answerable, expected_count in (
             (True, expected_answerable),
             (False, expected_unanswerable),
@@ -739,6 +826,8 @@ def _validate_bilingual_fact_families(
             or first.expected_document_ids != second.expected_document_ids
             or first.relevant_chunk_ids != second.relevant_chunk_ids
             or first.expected_pages != second.expected_pages
+            or _evidence_requirement_structure(first)
+            != _evidence_requirement_structure(second)
         ):
             raise DatasetValidationError(
                 f"{kind} fact family {family_id} has mismatched retrieval contract."
@@ -761,6 +850,21 @@ def _fact_structure(item: EvaluationItem) -> tuple[tuple[Any, ...], ...]:
             tuple(fact.acceptable_values),
         )
         for fact in item.expected_answer_facts
+    )
+
+
+def _evidence_requirement_structure(
+    item: EvaluationItem,
+) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]:
+    """Return the reviewed source contract without exposing evidence text."""
+
+    return tuple(
+        (
+            requirement.id,
+            tuple(requirement.canonical_chunk_ids),
+            tuple(requirement.reviewed_alternative_chunk_ids),
+        )
+        for requirement in item.evidence_requirements
     )
 
 

@@ -13,6 +13,7 @@ from evaluation.retrieval import (
     DEVELOPMENT_RETRIEVAL_VARIANTS,
     aggregate_retrieval_rows,
     aggregate_retrieval_rows_by_language,
+    authoritative_requirement_coverage,
     build_corpus_exact_content_equivalence,
     development_retrieval_variant,
     direct_evidence_rank,
@@ -175,6 +176,58 @@ def test_corpus_equivalence_detects_cross_document_exact_content_without_text_ou
     assert direct_evidence_rank(
         [SimpleNamespace(chunk_id="programming-copy")], {"installation-copy"}
     ) is None
+
+
+def test_authoritative_requirements_need_every_group_and_ignore_candidate_metadata() -> None:
+    item = SimpleNamespace(
+        relevant_chunk_ids=["installation-safety", "installation-wiring"],
+        evidence_requirements=[
+            SimpleNamespace(
+                id="safety",
+                canonical_chunk_ids=["installation-safety"],
+                reviewed_alternative_chunk_ids=["programming-safety"],
+            ),
+            SimpleNamespace(
+                id="wiring",
+                canonical_chunk_ids=["installation-wiring"],
+                reviewed_alternative_chunk_ids=[],
+            ),
+        ],
+    )
+    reviewed_alternative = SimpleNamespace(
+        chunk_id="programming-safety",
+        metadata={"equivalent_chunk_ids": ["installation-wiring"]},
+    )
+
+    partial = authoritative_requirement_coverage(
+        [reviewed_alternative], item, equivalence={}
+    )
+
+    assert partial["contract_mode"] == "explicit"
+    assert partial["covered_requirement_count"] == 1
+    assert partial["complete"] is False
+    assert partial["requirements"][0]["provenance"] == "reviewed_authoritative_alternative"
+    assert partial["requirements"][1]["provenance"] == "unreviewed"
+
+    unrelated_same_document = authoritative_requirement_coverage(
+        [SimpleNamespace(chunk_id="installation-unrelated")], item, equivalence={}
+    )
+    assert unrelated_same_document["covered_requirement_count"] == 0
+    assert all(
+        requirement["provenance"] == "unreviewed"
+        for requirement in unrelated_same_document["requirements"]
+    )
+
+    exact_copy = authoritative_requirement_coverage(
+        [SimpleNamespace(chunk_id="programming-wiring")],
+        item,
+        equivalence={
+            "installation-wiring": ("installation-wiring", "programming-wiring"),
+            "programming-wiring": ("installation-wiring", "programming-wiring"),
+        },
+    )
+    assert exact_copy["covered_requirement_count"] == 1
+    assert exact_copy["requirements"][1]["provenance"] == "exact_content_equivalent"
 
 
 def test_retrieval_evaluator_hashes_existing_canonical_behavior_owners() -> None:

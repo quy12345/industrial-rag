@@ -28,6 +28,7 @@ from evaluation.facts import (
     score_answer_facts,
 )
 from evaluation.retrieval import (
+    authoritative_requirement_coverage,
     direct_evidence_rank,
     exact_equivalent_evidence_rank,
     expand_exact_content_ids,
@@ -100,6 +101,33 @@ def score_query_execution(
         if item.answerable
         else None
     )
+    candidate_authoritative_coverage = (
+        authoritative_requirement_coverage(
+            execution.candidate_pool,
+            item,
+            equivalence=exact_content_equivalence,
+        )
+        if item.answerable
+        else _not_applicable_authoritative_coverage()
+    )
+    ranked_authoritative_coverage = (
+        authoritative_requirement_coverage(
+            execution.candidates,
+            item,
+            equivalence=exact_content_equivalence,
+        )
+        if item.answerable
+        else _not_applicable_authoritative_coverage()
+    )
+    final_authoritative_coverage = (
+        authoritative_requirement_coverage(
+            evidence_candidates,
+            item,
+            equivalence=exact_content_equivalence,
+        )
+        if item.answerable
+        else _not_applicable_authoritative_coverage()
+    )
     response = execution.response
     citation_ids = [citation.chunk_id for citation in response.citations]
     final_ids = {candidate.chunk_id for candidate in evidence_candidates}
@@ -126,6 +154,9 @@ def score_query_execution(
         "candidate_exact_equivalent_evidence_rank": candidate_exact_equivalent_rank,
         "ranked_exact_equivalent_evidence_rank": ranked_exact_equivalent_rank,
         "exact_equivalent_evidence_rank": final_exact_equivalent_rank,
+        "candidate_authoritative_requirement_coverage": candidate_authoritative_coverage,
+        "ranked_authoritative_requirement_coverage": ranked_authoritative_coverage,
+        "evidence_authoritative_requirement_coverage": final_authoritative_coverage,
         "abstained": response.abstained,
         "abstention_reason": response.abstention_reason,
         "citation_count": len(citation_ids),
@@ -239,6 +270,13 @@ def score_query_execution(
                     equivalence=exact_content_equivalence,
                 )
                 is not None,
+                "citation_authoritative_requirement_coverage": (
+                    authoritative_requirement_coverage(
+                        response.citations,
+                        item,
+                        equivalence=exact_content_equivalence,
+                    )
+                ),
                 "citation_document_correct": bool(citation_ids)
                 and citation_documents.issubset(set(item.expected_document_ids)),
                 "citation_exact_equivalent_document_correct": bool(citation_ids)
@@ -329,6 +367,9 @@ def score_query_execution(
                 "qrel_reranked_diagnostics": [],
                 "citation_direct_evidence": None,
                 "citation_exact_equivalent_evidence": None,
+                "citation_authoritative_requirement_coverage": (
+                    _not_applicable_authoritative_coverage()
+                ),
                 "citation_document_correct": None,
                 "citation_exact_equivalent_document_correct": None,
                 "unexpected_citation_document_ids": [],
@@ -784,6 +825,18 @@ def _not_applicable_claim_completeness() -> dict[str, Any]:
         "expected_by_fact_type": {},
         "matched_by_fact_type": {},
         "evidence_boundary": None,
+    }
+
+
+def _not_applicable_authoritative_coverage() -> dict[str, Any]:
+    """Represent an unanswerable item without inventing evidence requirements."""
+
+    return {
+        "contract_mode": "not_applicable",
+        "requirement_count": 0,
+        "covered_requirement_count": None,
+        "complete": None,
+        "requirements": [],
     }
 
 

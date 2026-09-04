@@ -12,6 +12,7 @@ from evaluation.dataset import (
     CorpusSource,
     DatasetValidationError,
     EvaluationItem,
+    EvidenceRequirement,
     ExpectedAnswerFact,
     build_exact_content_equivalence,
     dataset_sha256,
@@ -439,6 +440,43 @@ def test_typed_answer_fact_schema_rejects_incomplete_or_mixed_contracts() -> Non
                 "required_token_groups": [[]],
             }
         )
+
+
+def test_evidence_requirement_requires_disjoint_reviewed_chunk_ids() -> None:
+    requirement = EvidenceRequirement(
+        id="safety",
+        canonical_chunk_ids=["canonical"],
+        reviewed_alternative_chunk_ids=["reviewed-alternative"],
+    )
+    assert requirement.canonical_chunk_ids == ["canonical"]
+
+    with pytest.raises(ValueError, match="must be disjoint"):
+        EvidenceRequirement(
+            id="safety",
+            canonical_chunk_ids=["canonical"],
+            reviewed_alternative_chunk_ids=["canonical"],
+        )
+
+
+def test_optimization_multi_qrel_requires_explicit_evidence_requirements() -> None:
+    development, chunks = _optimization_split(
+        prefix="development",
+        first_index=100,
+        answerable_count=80,
+        unanswerable_count=40,
+    )
+    item = development[0]
+    extra = _chunk("extra-qrel", item.expected_document_ids[0], item.expected_phrases[0], 99)
+    ambiguous = development.copy()
+    ambiguous[0] = item.model_copy(
+        update={
+            "relevant_chunk_ids": [item.relevant_chunk_ids[0], "extra-qrel"],
+            "expected_pages": [item.expected_pages[0], 99],
+        }
+    )
+
+    with pytest.raises(DatasetValidationError, match="require explicit evidence_requirements"):
+        validate_dataset(ambiguous, [*chunks, extra], kind="development")
 
 
 def test_rejects_missing_qrel_wrong_document_and_absent_phrase() -> None:

@@ -160,6 +160,135 @@ class EvaluationItemLike(Protocol):
     expected_document_ids: Sequence[str]
 
 
+EvidenceProvenance = Literal[
+    "canonical",
+    "reviewed_authoritative_alternative",
+    "exact_content_equivalent",
+    "unreviewed",
+]
+
+
+@dataclass(frozen=True)
+class ResolvedEvidenceRequirement:
+    """One AND-combined evidence facet resolved without importing dataset models."""
+
+    id: str
+    canonical_chunk_ids: tuple[str, ...]
+    reviewed_alternative_chunk_ids: tuple[str, ...]
+
+
+def resolve_evidence_requirements(
+    item: EvaluationItemLike,
+) -> tuple[ResolvedEvidenceRequirement, ...]:
+    """Resolve explicit reviewed requirements or the legacy one-group qrel contract."""
+
+    explicit = tuple(getattr(item, "evidence_requirements", ()))
+    if explicit:
+        return tuple(
+            ResolvedEvidenceRequirement(
+                id=requirement.id,
+                canonical_chunk_ids=tuple(requirement.canonical_chunk_ids),
+                reviewed_alternative_chunk_ids=tuple(
+                    requirement.reviewed_alternative_chunk_ids
+                ),
+            )
+            for requirement in explicit
+        )
+    relevant = tuple(item.relevant_chunk_ids)
+    if not relevant:
+        return ()
+    return (
+        ResolvedEvidenceRequirement(
+            id="legacy-qrel-group",
+            canonical_chunk_ids=relevant,
+            reviewed_alternative_chunk_ids=(),
+        ),
+    )
+
+
+def authoritative_requirement_coverage(
+    results: Sequence[RetrievedLike],
+    item: EvaluationItemLike,
+    *,
+    equivalence: Mapping[str, Sequence[str]] | None,
+) -> dict[str, Any]:
+    """Score reviewed canonical/alternative evidence without trusting result metadata."""
+
+    requirements = resolve_evidence_requirements(item)
+    diagnostics = [
+        _authoritative_requirement_diagnostic(
+            requirement,
+            results,
+            equivalence=equivalence,
+        )
+        for requirement in requirements
+    ]
+    covered = sum(diagnostic["rank"] is not None for diagnostic in diagnostics)
+    return {
+        "contract_mode": "explicit" if getattr(item, "evidence_requirements", ()) else "legacy",
+        "requirement_count": len(diagnostics),
+        "covered_requirement_count": covered,
+        "complete": bool(diagnostics) and covered == len(diagnostics),
+        "requirements": diagnostics,
+    }
+
+
+def _authoritative_requirement_diagnostic(
+    requirement: ResolvedEvidenceRequirement,
+    results: Sequence[RetrievedLike],
+    *,
+    equivalence: Mapping[str, Sequence[str]] | None,
+) -> dict[str, Any]:
+    for rank, result in enumerate(results, start=1):
+        classification = _authoritative_provenance(
+            result.chunk_id,
+            requirement,
+            equivalence=equivalence,
+        )
+        if classification != "unreviewed":
+            return {
+                "id": requirement.id,
+                "canonical_chunk_ids": list(requirement.canonical_chunk_ids),
+                "reviewed_alternative_chunk_ids": list(
+                    requirement.reviewed_alternative_chunk_ids
+                ),
+                "rank": rank,
+                "matched_chunk_id": result.chunk_id,
+                "provenance": classification,
+            }
+    return {
+        "id": requirement.id,
+        "canonical_chunk_ids": list(requirement.canonical_chunk_ids),
+        "reviewed_alternative_chunk_ids": list(requirement.reviewed_alternative_chunk_ids),
+        "rank": None,
+        "matched_chunk_id": None,
+        "provenance": "unreviewed",
+    }
+
+
+def _authoritative_provenance(
+    chunk_id: str,
+    requirement: ResolvedEvidenceRequirement,
+    *,
+    equivalence: Mapping[str, Sequence[str]] | None,
+) -> EvidenceProvenance:
+    if chunk_id in requirement.canonical_chunk_ids:
+        return "canonical"
+    if chunk_id in requirement.reviewed_alternative_chunk_ids:
+        return "reviewed_authoritative_alternative"
+    exact_sources = {
+        source_chunk_id
+        for source_chunk_id in (
+            *requirement.canonical_chunk_ids,
+            *requirement.reviewed_alternative_chunk_ids,
+        )
+        if equivalence is not None and chunk_id in equivalence.get(source_chunk_id, ())
+    }
+    if exact_sources:
+        return "exact_content_equivalent"
+    return "unreviewed"
+
+
 def build_corpus_exact_content_equivalence(
     chunks: Sequence[ContentLike],
 ) -> dict[str, tuple[str, ...]]:
@@ -422,6 +551,21 @@ def score_retrieval_execution(
         relevant,
         equivalence=corpus_equivalence,
     )
+    candidate_authoritative_coverage = authoritative_requirement_coverage(
+        candidate_pool,
+        item,
+        equivalence=corpus_equivalence,
+    )
+    final_authoritative_coverage = authoritative_requirement_coverage(
+        execution.candidates,
+        item,
+        equivalence=corpus_equivalence,
+    )
+    evidence_authoritative_coverage = authoritative_requirement_coverage(
+        evidence_candidates,
+        item,
+        equivalence=corpus_equivalence,
+    )
     trace = execution.trace
     dense_rank = (
         direct_evidence_rank(trace.dense_candidates, relevant) if trace is not None else None
@@ -459,6 +603,9 @@ def score_retrieval_execution(
         "final_exact_equivalent_evidence_rank": final_exact_rank,
         "evidence_direct_evidence_rank": evidence_rank,
         "evidence_exact_equivalent_evidence_rank": evidence_exact_rank,
+        "candidate_authoritative_requirement_coverage": candidate_authoritative_coverage,
+        "final_authoritative_requirement_coverage": final_authoritative_coverage,
+        "evidence_authoritative_requirement_coverage": evidence_authoritative_coverage,
         "failure_class": retrieval_failure_class(candidate_rank, final_rank),
         "evidence_failure_class": evidence_failure_class(
             candidate_rank,
