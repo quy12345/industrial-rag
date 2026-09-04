@@ -62,9 +62,11 @@ regression evidence, not tuning data. The E2E adapter declares sanitized artifac
 explicitly opts into retrieval tracing; normal production composition leaves tracing disabled. It
 offers the preregistered `baseline-v1` and development-only `claim-coverage-v1` generation
 contracts, plus full-development one- or three-run schedules. Its bounded `--review-item-id` mode
-uses a separate approval token to print a new baseline answer and its local evidence only to the
-terminal; it rejects sealed splits, semantic judging, experimental variants, repeats, and resumed
-checkpoints. A schema declaration is not proof of
+uses a separate approval token to expose a new baseline answer for local human review. Raw output
+can remain terminal-only or be written to a new private Markdown file below the ignored
+`artifacts/local-review/` directory; the sanitized metrics artifact and checkpoint never contain
+that raw content. The mode rejects sealed splits, semantic judging, experimental variants, repeats,
+and resumed checkpoints. A schema declaration is not proof of
 execution: the latest executed held-out artifact remains v8, and no v9-v13 held-out result is
 claimed. See [Operations](../docs/OPERATIONS.md) for dataset-suite validation, provider-free
 retrieval variants, generation experiments, the two-run semantic calibration preflight, and

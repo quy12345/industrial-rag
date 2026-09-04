@@ -40,7 +40,10 @@ from evaluation.dataset import (
     validate_dataset,
     validate_evaluation_manifest,
 )
-from evaluation.development_review import build_live_development_review
+from evaluation.development_review import (
+    build_live_development_review,
+    render_live_development_reviews_markdown,
+)
 from evaluation.e2e import (
     aggregate_repeated_query_records,
     score_query_execution,
@@ -110,6 +113,7 @@ PRIVATE_CONFIRMATION_MANIFEST_PATH = PRIVATE_CONFIRMATION_ROOT / "confirmation-v
 PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
+PRIVATE_LOCAL_REVIEW_ROOT = Path("artifacts/local-review")
 ARTIFACT_SCHEMA_VERSION = 13
 SOURCE_IDENTITY_VERSION = 9
 SOURCE_IDENTITY_PATHS = {
@@ -146,6 +150,9 @@ SOURCE_IDENTITY_PATHS = {
 
 def main() -> int:
     args = _parse_args()
+    local_review_output = _resolve_private_local_review_output(
+        args.local_review_output
+    )
     if args.review_item_id:
         _configure_utf8_stdout()
     _validate_execution_approval(args)
@@ -241,7 +248,11 @@ def main() -> int:
         ),
         "deduplicate_exact_content": settings.rerank_deduplicate_content,
         "diagnostic_mode": (
-            "targeted_development_terminal_review"
+            (
+                "targeted_development_local_markdown_review"
+                if args.local_review_output is not None
+                else "targeted_development_terminal_review"
+            )
             if args.review_item_id
             else "sanitized_evaluation"
         ),
@@ -252,6 +263,7 @@ def main() -> int:
     _validate_checkpoint_prefix(records, schedule)
     observed_keys = [_checkpoint_key(record) for record in records]
     completed_keys = set(observed_keys)
+    live_reviews: list[Mapping[str, Any]] = []
     for repeat_index, item in schedule:
         if (item.id, repeat_index) in completed_keys:
             continue
@@ -285,17 +297,26 @@ def main() -> int:
         records.append(record)
         _write_checkpoint(args.checkpoint, identity, records)
         if args.review_item_id:
-            _print_live_development_review(
-                build_live_development_review(
-                    item=item,
-                    execution=execution,
-                    record=record,
-                    chunks=chunks,
-                )
+            review = build_live_development_review(
+                item=item,
+                execution=execution,
+                record=record,
+                chunks=chunks,
+                destination=(
+                    "private_local_markdown"
+                    if local_review_output is not None
+                    else "terminal_stdout_only"
+                ),
             )
+            if local_review_output is None:
+                _print_live_development_review(review)
+            else:
+                live_reviews.append(review)
 
     if len(records) != len(schedule):
         raise RuntimeError("Checkpoint result count does not match the selected dataset.")
+    if local_review_output is not None:
+        _write_private_local_review(local_review_output, live_reviews)
     complete_evaluation = len(selected) == len(dataset)
     run_aggregate = _aggregate_run_records(
         records,
@@ -353,7 +374,11 @@ def main() -> int:
             "expected_fact_text": "excluded",
             "candidate_text_and_unlisted_metadata": "excluded",
             "targeted_review_stdout": (
-                "raw_content_printed_ephemerally_not_persisted"
+                (
+                    "disabled_raw_content_written_to_private_local_markdown"
+                    if args.local_review_output is not None
+                    else "raw_content_printed_ephemerally_not_persisted"
+                )
                 if args.review_item_id
                 else "disabled"
             ),
@@ -446,8 +471,17 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help=(
-            "Development item ID for an approved live terminal review; repeat the option "
+            "Development item ID for an approved live local review; repeat the option "
             "for a bounded cohort of at most 20 unique items."
+        ),
+    )
+    parser.add_argument(
+        "--local-review-output",
+        type=Path,
+        default=None,
+        help=(
+            "Write raw targeted review content to a new ignored Markdown file under "
+            "artifacts/local-review instead of printing it to stdout."
         ),
     )
     parser.add_argument("--checkpoint", type=Path, default=None)
@@ -473,6 +507,8 @@ def _parse_args() -> argparse.Namespace:
         parser.error("Targeted development review requires --repeat-count 1")
     if args.review_item_id and args.semantic_judge != "none":
         parser.error("Targeted development review cannot run semantic evaluation")
+    if args.local_review_output is not None and not args.review_item_id:
+        parser.error("--local-review-output requires --review-item-id")
     if (
         args.generation_variant != BASELINE_GENERATION_VARIANT
         and args.dataset != "development"
@@ -983,6 +1019,39 @@ def _configure_utf8_stdout() -> None:
 
 def _print_live_development_review(payload: Mapping[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _resolve_private_local_review_output(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    if path.suffix.lower() != ".md":
+        raise SystemExit("Local review output must use the .md extension.")
+    root = (Path.cwd() / PRIVATE_LOCAL_REVIEW_ROOT).resolve()
+    target = (path if path.is_absolute() else Path.cwd() / path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise SystemExit(
+            "Local review output must remain under artifacts/local-review."
+        ) from None
+    if target.exists():
+        raise SystemExit("Local review output already exists; refusing to overwrite it.")
+    return target
+
+
+def _write_private_local_review(
+    path: Path, reviews: list[Mapping[str, Any]]
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    markdown = render_live_development_reviews_markdown(reviews)
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(markdown)
+    except FileExistsError:
+        raise RuntimeError(
+            "Local review output appeared during evaluation; refusing to overwrite it."
+        ) from None
+    print(f"Private local review written: {path}")
 
 
 if __name__ == "__main__":

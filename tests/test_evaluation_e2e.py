@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1418,6 +1419,8 @@ def test_targeted_development_review_accepts_a_bounded_unique_cohort(monkeypatch
             "artifacts/metrics/targeted-review.json",
             "--checkpoint",
             "artifacts/metrics/targeted-review-checkpoint.jsonl",
+            "--local-review-output",
+            "artifacts/local-review/targeted-review.md",
             "--provider-approval-token",
             evaluate_e2e.DEVELOPMENT_REVIEW_PROVIDER_APPROVAL_TOKEN,
         ],
@@ -1429,6 +1432,9 @@ def test_targeted_development_review_accepts_a_bounded_unique_cohort(monkeypatch
     assert args.generation_variant == BASELINE_GENERATION_VARIANT
     assert args.repeat_count == 1
     assert args.semantic_judge == "none"
+    assert args.local_review_output == Path(
+        "artifacts/local-review/targeted-review.md"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1488,6 +1494,47 @@ def test_targeted_review_cannot_resume_without_raw_answer() -> None:
             [{"id": "dvi001", "repeat_index": 1}],
             enabled=True,
         )
+
+
+def test_private_local_review_output_is_new_markdown_under_ignored_root(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    relative = Path("artifacts/local-review/review.md")
+
+    resolved = evaluate_e2e._resolve_private_local_review_output(relative)
+
+    assert resolved == (tmp_path / relative).resolve()
+    assert resolved is not None
+    evaluate_e2e._write_private_local_review(resolved, [])
+    assert "DO NOT COMMIT" in resolved.read_text(encoding="utf-8")
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        evaluate_e2e._resolve_private_local_review_output(relative)
+    with pytest.raises(SystemExit, match="artifacts/local-review"):
+        evaluate_e2e._resolve_private_local_review_output(Path("outside.md"))
+    with pytest.raises(SystemExit, match=".md extension"):
+        evaluate_e2e._resolve_private_local_review_output(
+            Path("artifacts/local-review/review.json")
+        )
+
+
+def test_private_local_review_output_requires_targeted_review(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate_e2e",
+            "--dataset",
+            "development",
+            "--local-review-output",
+            "artifacts/local-review/review.md",
+            "--provider-approval-token",
+            "unused",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        evaluate_e2e._parse_args()
+    assert "requires --review-item-id" in capsys.readouterr().err
 
 
 def test_checkpoint_fails_closed_when_provider_identity_changes(tmp_path) -> None:

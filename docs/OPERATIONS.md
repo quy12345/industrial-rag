@@ -275,8 +275,9 @@ never stored it; a later targeted provider rerun is a new sample, not recovery o
 Do not redirect this command into a tracked file or paste its output into logs, issues, or commits.
 
 After provider-free review has isolated cases that genuinely require generation diagnosis, the E2E
-adapter can rerun a bounded cohort with the current `baseline-v1` generator and print the new raw
-answer alongside its exact generation evidence:
+adapter can rerun a bounded cohort with the current `baseline-v1` generator. The recommended mode
+writes a private Markdown report with each question, new answer, expected-fact verdicts, citations,
+and only the cited generation evidence:
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.evaluation.evaluate_e2e `
@@ -284,6 +285,7 @@ answer alongside its exact generation evidence:
   --review-item-id dvi031 `
   --review-item-id dvi065 `
   --provider-approval-token "APPROVE ATV320 TARGETED DEVELOPMENT REVIEW EGRESS" `
+  --local-review-output artifacts/local-review/targeted-review.md `
   --checkpoint artifacts/metrics/local-targeted-review-checkpoint.jsonl `
   --output artifacts/metrics/local-targeted-review.json
 ```
@@ -292,9 +294,12 @@ This is an explicit provider call and therefore requires fresh user approval for
 configured model, and estimated cost before execution. At most 20 unique development IDs are
 accepted. The mode requires `baseline-v1`, one repeat, no Ragas, new explicit checkpoint/output
 paths, and a new or empty checkpoint. The artifact and checkpoint remain sanitized; raw content is
-printed only to the current terminal. Because provider output can vary, this is a new diagnostic
-sample rather than a reconstruction of the original full-run answer. Do not use this mode with
-confirmation or held-out data, redirect its output, or select a favorable retry after repeated runs.
+written only to a new `.md` file below the Git-ignored `artifacts/local-review/` directory. The
+command refuses paths outside that directory and refuses to overwrite an existing report. Omit
+`--local-review-output` only when an ephemeral terminal JSON payload is explicitly preferred.
+Because provider output can vary, this is a new diagnostic sample rather than a reconstruction of
+the original full-run answer. Do not use this mode with confirmation or held-out data, commit or
+paste the private report into public logs, or select a favorable retry after repeated runs.
 
 ## Approved held-out regression run
 

@@ -8,8 +8,10 @@ changing or enriching the persisted artifact.
 from __future__ import annotations
 
 import hashlib
+import html
+import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from app.application.query_service import QueryExecution
 from app.domain.documents import DocumentChunk
@@ -26,6 +28,9 @@ def build_live_development_review(
     execution: QueryExecution,
     record: Mapping[str, Any],
     chunks: Sequence[DocumentChunk],
+    destination: Literal[
+        "terminal_stdout_only", "private_local_markdown"
+    ] = "terminal_stdout_only",
 ) -> dict[str, Any]:
     """Build one ephemeral review payload after an approved development rerun."""
 
@@ -58,13 +63,141 @@ def build_live_development_review(
     return {
         "review_policy": {
             "dataset": "development",
-            "destination": "terminal_stdout_only",
+            "destination": destination,
             "provider_calls": "approved_targeted_rerun",
-            "persistence": "raw_content_forbidden",
+            "persistence": "raw_content_forbidden_in_sanitized_artifacts",
             "interpretation": "new_provider_sample_not_original_artifact_output",
         },
         "case": case,
     }
+
+
+def render_live_development_reviews_markdown(
+    reviews: Sequence[Mapping[str, Any]],
+) -> str:
+    """Render approved raw development reviews for an ignored local file."""
+
+    lines = [
+        "# Private local development review",
+        "",
+        "> **LOCAL PRIVATE REPORT — DO NOT COMMIT OR PASTE INTO PUBLIC LOGS.**",
+        "> This file may contain evaluation questions, generated answers, and manual text.",
+        "",
+    ]
+    for review in reviews:
+        case = _required_mapping(review, "case")
+        item = _required_mapping(case, "item")
+        expected = _required_mapping(case, "expected")
+        observed = _required_mapping(case, "observed")
+        item_id = str(item.get("id", "unknown-item"))
+        lines.extend(
+            [
+                f"## {_markdown_inline(item_id)}",
+                "",
+                (
+                    f"- Language: `{_markdown_inline(item.get('language'))}`\n"
+                    f"- Question type: `{_markdown_inline(item.get('question_type'))}`\n"
+                    f"- Answerable: `{_markdown_inline(item.get('answerable'))}`\n"
+                    f"- Abstained: `{_markdown_inline(observed.get('abstained'))}`"
+                ),
+                "",
+                "### Question",
+                "",
+                _markdown_pre(item.get("question")),
+                "",
+                "### Generated answer",
+                "",
+                _markdown_pre(observed.get("answer")),
+                "",
+                "### Expected facts and evaluator verdicts",
+                "",
+            ]
+        )
+        fact_results = {
+            str(result.get("id")): result
+            for result in _mapping_list(observed.get("answer_fact_results"))
+        }
+        facts = _mapping_list(expected.get("answer_facts"))
+        if not facts:
+            lines.extend(["No expected facts.", ""])
+        for fact in facts:
+            fact_id = str(fact.get("id", "unknown-fact"))
+            result = fact_results.get(fact_id, {})
+            lines.extend(
+                [
+                    f"#### Fact `{_markdown_inline(fact_id)}`",
+                    "",
+                    (
+                        f"- Deterministic match: `"
+                        f"{_markdown_inline(result.get('deterministic_matched'))}`\n"
+                        f"- Final match: `{_markdown_inline(result.get('final_matched'))}`\n"
+                        f"- Resolution: `{_markdown_inline(result.get('resolution'))}`\n"
+                        f"- Judge verdict: `{_markdown_inline(result.get('judge_verdict'))}`"
+                    ),
+                    "",
+                    "Reviewed fact contract:",
+                    "",
+                    _markdown_pre(json.dumps(fact, ensure_ascii=False, indent=2)),
+                    "",
+                ]
+            )
+        lines.extend(["### Citations and cited evidence", ""])
+        citations = _mapping_list(observed.get("citations"))
+        evidence_by_chunk_id = {
+            str(evidence.get("chunk_id")): evidence
+            for evidence in _mapping_list(case.get("generation_evidence"))
+        }
+        if not citations:
+            lines.extend(["No citations.", ""])
+        for index, citation in enumerate(citations, start=1):
+            chunk_id = str(citation.get("chunk_id", "unknown-chunk"))
+            pages = ", ".join(str(page) for page in citation.get("page_numbers", []))
+            filename = str(citation.get("filename", "unknown-file"))
+            lines.extend(
+                [
+                    (
+                        f"#### Citation {index}: {_markdown_inline(filename)} — "
+                        f"page {pages or 'unknown'}"
+                    ),
+                    "",
+                    f"- Chunk ID: `{_markdown_inline(chunk_id)}`",
+                    "",
+                    "Citation excerpt:",
+                    "",
+                    _markdown_pre(citation.get("excerpt")),
+                    "",
+                ]
+            )
+            evidence = evidence_by_chunk_id.get(chunk_id)
+            if evidence is not None:
+                lines.extend(
+                    [
+                        "<details>",
+                        "<summary>Full cited generation evidence</summary>",
+                        "",
+                        _markdown_pre(evidence.get("text")),
+                        "",
+                        "</details>",
+                        "",
+                    ]
+                )
+        lines.extend(
+            [
+                "### Human review",
+                "",
+                "- [ ] The answer addresses the question.",
+                "- [ ] Every required fact is present and correctly related.",
+                "- [ ] Citation document and page are correct.",
+                "- [ ] Cited evidence supports the answer.",
+                "- [ ] The evaluator verdict is correct.",
+                "",
+                "Reviewer notes:",
+                "",
+                "---",
+                "",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def build_development_review(
@@ -308,6 +441,22 @@ def _required_mapping(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]
     if not isinstance(value, Mapping):
         raise DevelopmentReviewError(f"The E2E artifact has no valid {key} mapping.")
     return value
+
+
+def _mapping_list(value: object) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _markdown_pre(value: object) -> str:
+    rendered = "" if value is None else str(value)
+    return f"<pre>{html.escape(rendered)}</pre>"
+
+
+def _markdown_inline(value: object) -> str:
+    rendered = "" if value is None else str(value)
+    return html.escape(rendered.replace("`", "'"))
 
 
 def _string_list(payload: Mapping[str, Any], key: str) -> list[str]:

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.contracts.query import Citation
 from app.domain.documents import DocumentChunk
 from app.infrastructure.corpus_artifacts import chunk_set_metadata
 from evaluation.dataset import EvaluationItem, dataset_sha256
@@ -15,6 +16,7 @@ from evaluation.development_review import (
     DevelopmentReviewError,
     build_development_review,
     build_live_development_review,
+    render_live_development_reviews_markdown,
 )
 from scripts.evaluation import review_development
 
@@ -234,9 +236,28 @@ def test_live_review_exposes_new_answer_only_in_ephemeral_payload() -> None:
         content_type="text",
         text="SENTINEL_LIVE_EVIDENCE",
     )
+    citation = Citation(
+        chunk_id="evidence",
+        document_id="programming",
+        filename="programming.pdf",
+        page_numbers=[8],
+        headings=["Procedure"],
+        excerpt="SENTINEL_CITATION_EXCERPT",
+    )
+    uncited_candidate = SimpleNamespace(
+        chunk_id="uncited",
+        document_id="installation",
+        filename="installation.pdf",
+        page_numbers=[9],
+        headings=["Uncited"],
+        content_type="text",
+        text="SENTINEL_UNCITED_EVIDENCE",
+    )
     execution = SimpleNamespace(
-        response=SimpleNamespace(answer="SENTINEL_LIVE_ANSWER", citations=[]),
-        evidence_candidates=(candidate,),
+        response=SimpleNamespace(
+            answer="SENTINEL_LIVE_ANSWER <unsafe>", citations=[citation]
+        ),
+        evidence_candidates=(candidate, uncited_candidate),
     )
 
     review = build_live_development_review(
@@ -246,9 +267,23 @@ def test_live_review_exposes_new_answer_only_in_ephemeral_payload() -> None:
         chunks=chunks,
     )
 
-    assert review["review_policy"]["persistence"] == "raw_content_forbidden"
-    assert review["case"]["observed"]["answer"] == "SENTINEL_LIVE_ANSWER"
+    assert review["review_policy"]["persistence"] == (
+        "raw_content_forbidden_in_sanitized_artifacts"
+    )
+    assert review["case"]["observed"]["answer"] == (
+        "SENTINEL_LIVE_ANSWER <unsafe>"
+    )
     assert review["case"]["generation_evidence"][0]["text"] == (
         "SENTINEL_LIVE_EVIDENCE"
     )
     assert "SENTINEL_LIVE_ANSWER" not in str(record)
+
+    markdown = render_live_development_reviews_markdown([review])
+
+    assert "LOCAL PRIVATE REPORT — DO NOT COMMIT" in markdown
+    assert "SENTINEL_QUESTION" in markdown
+    assert "SENTINEL_LIVE_ANSWER &lt;unsafe&gt;" in markdown
+    assert "SENTINEL_EXPECTED_FACT" in markdown
+    assert "SENTINEL_CITATION_EXCERPT" in markdown
+    assert "SENTINEL_LIVE_EVIDENCE" in markdown
+    assert "SENTINEL_UNCITED_EVIDENCE" not in markdown

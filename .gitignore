@@ -34,5 +34,6 @@ artifacts/figures/*
 artifacts/*.jsonl
 artifacts/*.log
 artifacts/private-debug/
+artifacts/local-review/
 # Extracted corpus text remains local regardless of the artifact namespace.
 artifacts/**/frozen-chunks*.jsonl
