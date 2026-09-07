@@ -214,6 +214,54 @@ def test_configured_score_gate_is_not_a_probability_and_skips_generation() -> No
     assert generator.calls == []
 
 
+def test_missing_pre_generation_scope_abstains_without_provider_call() -> None:
+    generator = FakeGenerator()
+    execution = _service(
+        FakeRetriever(
+            [_candidate(text="The pairing password and public unlock code are documented.")]
+        ),
+        generator,
+    ).execute(question="What Bluetooth pairing PIN is required?", document_id=None, top_k=5)
+    assert execution.response.abstention_reason == "evidence_scope_missing"
+    assert execution.generation_attempts == 0
+    assert execution.response.citations == []
+    assert generator.calls == []
+
+
+def test_scope_guard_uses_rendered_content_not_untruncated_chunk_text() -> None:
+    generator = FakeGenerator()
+    text = "Pairing password " + ("x" * 5_000) + " Bluetooth"
+    execution = _service(
+        FakeRetriever([_candidate(text=text)]),
+        generator,
+        generation_max_context_chars=4_000,
+    ).execute(question="What Bluetooth pairing password is required?", document_id=None, top_k=5)
+    assert execution.response.abstention_reason == "evidence_scope_missing"
+    assert execution.evidence_truncated_source_ids == ("S1",)
+    assert generator.calls == []
+
+
+def test_missing_cited_scope_abstains_after_one_valid_generation() -> None:
+    bluetooth = _candidate("bluetooth", text="Bluetooth communication settings.")
+    pairing = _candidate("pairing", text="Pairing password is documented.")
+    generator = FakeGenerator(
+        [
+            GenerationResult(
+                GeneratedAnswer(
+                    answer="Use the password.", source_ids=["S2"], insufficient_evidence=False
+                )
+            )
+        ]
+    )
+    execution = _service(FakeRetriever([bluetooth, pairing]), generator).execute(
+        question="What Bluetooth pairing password is required?", document_id=None, top_k=5
+    )
+    assert execution.response.abstention_reason == "cited_evidence_scope_missing"
+    assert execution.generation_attempts == 1
+    assert execution.response.citations == []
+    assert len(generator.calls) == 1
+
+
 def test_llm_declared_insufficient_evidence_returns_valid_abstention() -> None:
     generator = FakeGenerator(
         [

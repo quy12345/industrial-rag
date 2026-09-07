@@ -14,7 +14,8 @@ from app.domain.evidence import EvidenceDuplicateGroup as EvidenceDuplicateGroup
 from app.domain.evidence import EvidenceGate as EvidenceGate
 from app.domain.evidence import EvidenceGateDecision as EvidenceGateDecision
 from app.domain.evidence import EvidenceSelectionError, select_evidence_candidates
-from app.domain.generation import AnswerGenerator, TokenUsage
+from app.domain.generation import AnswerGenerator, EvidenceBundle, TokenUsage
+from app.domain.policies.evidence_scope import evaluate_evidence_scope
 from app.domain.retrieval import QueryRetriever, RetrievalCandidate, RetrievalTrace
 from app.errors import CitationValidationError, GenerationValidationError, LLMRefusalError
 from app.request_context import request_id
@@ -26,6 +27,8 @@ AbstentionReason = Literal[
     "no_candidates",
     "invalid_candidate_metadata",
     "configured_score_gate_failed",
+    "evidence_scope_missing",
+    "cited_evidence_scope_missing",
     "llm_insufficient_evidence",
     "llm_refusal",
     "citation_validation_failed",
@@ -149,6 +152,24 @@ class QueryService:
                 retrieval_trace=retrieved.trace,
             )
 
+        scope = evaluate_evidence_scope(question, _scope_texts(evidence))
+        gate_ms = (perf_counter() - gate_started) * 1000
+        if scope.status == "missing_scope":
+            return self._abstained_execution(
+                reason="evidence_scope_missing",
+                total_started=total_started,
+                retrieval_ms=retrieved.retrieval_ms,
+                rerank_ms=retrieved.rerank_ms,
+                gate_ms=gate_ms,
+                candidates=tuple(retrieved.candidates),
+                candidate_pool=candidate_pool,
+                evidence_candidates=selection.candidates,
+                evidence_duplicate_groups=selection.duplicate_groups,
+                retrieval_trace=retrieved.trace,
+                evidence_context_chars=len(evidence.text),
+                evidence_truncated_source_ids=evidence.truncated_source_ids,
+            )
+
         generation_ms = 0.0
         citation_ms = 0.0
         usage: TokenUsage | None = None
@@ -240,6 +261,30 @@ class QueryService:
                 )
                 if not citations:
                     raise CitationValidationError(["grounded answer produced no citations"])
+                cited_scope = evaluate_evidence_scope(
+                    question,
+                    _scope_texts(evidence, source_ids=validated.source_ids),
+                )
+                if cited_scope.status == "missing_scope":
+                    citation_ms += (perf_counter() - citation_started) * 1000
+                    return self._abstained_execution(
+                        reason="cited_evidence_scope_missing",
+                        total_started=total_started,
+                        retrieval_ms=retrieved.retrieval_ms,
+                        rerank_ms=retrieved.rerank_ms,
+                        gate_ms=gate_ms,
+                        generation_ms=generation_ms,
+                        citation_ms=citation_ms,
+                        usage=usage,
+                        candidates=tuple(retrieved.candidates),
+                        candidate_pool=candidate_pool,
+                        evidence_candidates=selection.candidates,
+                        evidence_duplicate_groups=selection.duplicate_groups,
+                        generation_attempts=attempt + 1,
+                        retrieval_trace=retrieved.trace,
+                        evidence_context_chars=len(evidence.text),
+                        evidence_truncated_source_ids=evidence.truncated_source_ids,
+                    )
             except CitationValidationError as exc:
                 citation_ms += (perf_counter() - citation_started) * 1000
                 validation_errors = exc.errors
@@ -360,6 +405,15 @@ def _sum_optional(first: int | None, second: int | None) -> int | None:
     if first is None and second is None:
         return None
     return (first or 0) + (second or 0)
+
+
+def _scope_texts(
+    evidence: EvidenceBundle, *, source_ids: tuple[str, ...] | None = None
+) -> tuple[str, ...]:
+    """Return only the title, headings, and rendered content for selected sources."""
+
+    ids = source_ids if source_ids is not None else tuple(evidence.rendered_sources)
+    return tuple(evidence.rendered_sources[source_id].scope_text for source_id in ids)
 
 
 def _timings(

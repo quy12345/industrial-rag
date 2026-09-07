@@ -139,6 +139,9 @@ def test_evidence_labels_mapping_and_format_are_deterministic() -> None:
     assert "document_title: n/a" in first.text
     assert "document_role: n/a" in first.text
     assert "<untrusted_document>" in first.text
+    assert first.rendered_sources["S1"].document_title == "n/a"
+    assert first.rendered_sources["S1"].headings == ("Power", "Limits")
+    assert first.rendered_sources["S1"].content == candidates[0].text
 
 
 def test_single_evidence_block_has_exact_frozen_rendering() -> None:
@@ -222,6 +225,8 @@ def test_evidence_context_is_bounded_and_unicode_safe() -> None:
     assert len(bundle.text) <= 4_000
     assert bundle.truncated_source_ids == ("S1", "S2")
     assert "[…truncated…]" in bundle.text
+    assert bundle.rendered_sources["S1"].content.endswith("[…truncated…]")
+    assert len(bundle.rendered_sources["S1"].content) < len(text)
     bundle.text.encode("utf-8")
 
 

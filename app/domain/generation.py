@@ -31,11 +31,25 @@ class TokenUsage:
 
 
 @dataclass(frozen=True)
+class RenderedEvidenceSource:
+    """Trusted scope metadata and the exact content rendered for one source."""
+
+    document_title: str
+    headings: tuple[str, ...]
+    content: str
+
+    @property
+    def scope_text(self) -> str:
+        return "\n".join((self.document_title, *self.headings, self.content))
+
+
+@dataclass(frozen=True)
 class EvidenceBundle:
     """Rendered untrusted evidence plus the authoritative source-label mapping."""
 
     text: str
     source_map: dict[str, RetrievalCandidate]
+    rendered_sources: dict[str, RenderedEvidenceSource]
     truncated_source_ids: tuple[str, ...] = ()
 
     @property

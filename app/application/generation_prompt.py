@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from app.domain.generation import EvidenceBundle
+from app.domain.generation import EvidenceBundle, RenderedEvidenceSource
 from app.domain.retrieval import RetrievalCandidate
 from app.errors import GenerationValidationError
 
@@ -69,9 +69,13 @@ def format_evidence(
         )
         if len(content) > allocation
     )
+    rendered_contents = [
+        _truncate_to_allocation(content, allocation)
+        for content, allocation in zip(contents, allocations, strict=True)
+    ]
     blocks = [
-        header + _truncate_to_allocation(content, allocation) + suffix
-        for header, content, allocation in zip(headers, contents, allocations, strict=True)
+        header + content + suffix
+        for header, content in zip(headers, rendered_contents, strict=True)
     ]
     rendered = "\n\n".join(blocks)
     if len(rendered) > max_chars:
@@ -79,6 +83,18 @@ def format_evidence(
     return EvidenceBundle(
         text=rendered,
         source_map=source_map,
+        rendered_sources={
+            source_id: RenderedEvidenceSource(
+                document_title=(
+                    str(candidate.metadata.get("document_title", "n/a")).strip() or "n/a"
+                ),
+                headings=tuple(candidate.headings),
+                content=content,
+            )
+            for source_id, candidate, content in zip(
+                source_map, candidates, rendered_contents, strict=True
+            )
+        },
         truncated_source_ids=truncated_source_ids,
     )
 

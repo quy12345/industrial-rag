@@ -60,7 +60,7 @@ POST /query
   -> rank-only fusion and coverage policy form the bounded candidate pool
   -> reranker scores that pool
   -> evidence policy selects bounded evidence
-  -> evidence gate either permits generation or returns an abstention
+  -> evidence gate and deterministic evidence-scope guard either permit generation or return an abstention
   -> provider returns a structured answer with source labels
   -> source labels are validated against supplied evidence
   -> trusted citation metadata is constructed by the application
@@ -69,6 +69,14 @@ POST /query
 The provider never supplies trusted filenames, pages, or chunk metadata. One citation-correction
 attempt may repair invalid source labels without rerunning retrieval; a second invalid response is a
 safe abstention. Generation cannot run before the evidence gate passes.
+
+The evidence-scope guard is a conservative deterministic check over a small bilingual registry of
+protected technical concepts. It operates on trusted title/heading metadata and the exact final
+content rendered for generation, never on qrels, pages, expected answers, source labels, or an
+untruncated chunk. It applies only when a question contains at least two distinct protected concepts,
+and requires each to be present in the relevant evidence set. The same check runs after citation
+validation over cited rendered sources. A pass establishes only lexical scope presence; it does not
+establish entailment or relation correctness.
 
 Retrieval tracing is an explicit observer boundary. The normal production composition uses the
 default `capture_trace=False`; only the provider-free retrieval evaluator opts in when it builds a
