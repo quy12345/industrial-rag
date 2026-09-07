@@ -48,18 +48,32 @@ Docling or retrieval models, access Qdrant, and write files. `index_corpus` can 
 - validate a sanitized scorecard against private human labels.
 
 Reusable current contracts live in `evaluation/dataset.py`, `evaluation/retrieval.py`,
-`evaluation/e2e.py`, `evaluation/semantic.py`, and `evaluation/human_review.py`. E2E evaluation always uses the baseline
+`evaluation/e2e.py`, `evaluation/semantic.py`, `evaluation/review_inputs.py`, and
+`evaluation/human_review.py`. Live E2E evaluation uses the baseline
 production generation contract and the three core Ragas metrics. Generator egress and Ragas egress
 require independent dataset-specific approval tokens. Optional Answer Relevancy and Context
-Precision diagnostics are enabled with `--ragas-diagnostics`; they are not scorecard outcomes.
+Precision diagnostics are enabled with `--ragas-diagnostics`.
 
-The compact schema-v15 scorecard reports answer utility, unsafe-answer rate, citation
-faithfulness, and final-context recall. It fixes the final evidence boundary at five and disables
-retrieval trace capture. Use `evaluate_retrieval` for provider-free deep stage diagnostics. Schema
-v15 is `BASELINE_ONLY`: it has no thresholds and a valid run exits zero regardless of score.
+The compact schema-v18 scorecard exposes Ragas results under their standard names: Factual
+Correctness, Faithfulness, Context Recall, Answer Relevancy, and Context Precision without
+reference. It reports deterministic answerable-response, unsafe-answer, and citation-reference
+validity rates separately; none is relabeled as a Ragas metric or merged into a composite score. It
+fixes the final evidence boundary at five and disables retrieval trace capture. Answerable items
+require independent natural reference answers with a separate approved review status; expected
+fact aliases remain audit annotations and are not rendered as Ragas references. Use
+`evaluate_retrieval` for provider-free deep stage diagnostics. Schema v18 is `BASELINE_ONLY`: it
+has no thresholds and a valid run exits zero regardless of score.
 Development, sealed confirmation, and exposed held-out v2 are the only E2E dataset choices. The
 latest executed held-out artifact remains v8 until a newer run is explicitly approved and
 completed.
+
+`evaluate_e2e --replay-artifact ... --replay-review ...` re-judges fixed development answers
+without calling generation, Qdrant, or retrieval models. It requires only judge approval and explicit
+output/checkpoint paths. New private review packs include an identity-bound `inputs.jsonl` captured
+before judging, so interrupted review runs can reuse generation. See [Operations](../docs/OPERATIONS.md)
+for replay provenance, cost accounting and legacy import limitations. `validate_scorecard` emits
+assessment v2 (`REVIEW_REQUIRED`, exit zero for valid reports), with continuous F1 grouped by human
+labels, not `F1 == 1` answer-correctness verdicts.
 
 ## Archive
 

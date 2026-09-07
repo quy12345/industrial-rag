@@ -15,6 +15,7 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
     "dataset_contract": Path("evaluation/dataset.py"),
     "evaluator": Path("evaluation/e2e.py"),
     "human_review": Path("evaluation/human_review.py"),
+    "review_inputs": Path("evaluation/review_inputs.py"),
     "semantic_evaluator": Path("evaluation/semantic.py"),
     "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "generation_prompt": Path("app/application/generation_prompt.py"),
@@ -24,8 +25,8 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
 }
 
 
-def test_e2e_source_identity_v11_hashes_canonical_behavior_owners() -> None:
-    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 11
+def test_e2e_source_identity_v14_hashes_canonical_behavior_owners() -> None:
+    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 14
     assert evaluate_e2e.SOURCE_IDENTITY_PATHS == CANONICAL_SOURCE_IDENTITY_PATHS
 
     expected_files = {
@@ -34,7 +35,7 @@ def test_e2e_source_identity_v11_hashes_canonical_behavior_owners() -> None:
     }
 
     assert evaluate_e2e._source_identity() == {
-        "version": 11,
+        "version": 14,
         "files": expected_files,
         "system_prompt_sha256": (
             "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"

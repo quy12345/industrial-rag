@@ -288,9 +288,152 @@ faithfulness, and final-context recall. Retrieval traces remain in the provider-
 evaluator. A fixed metadata-selected 40-item cohort and private human labels must reach 85% judge
 agreement before any full development baseline. **Proof** -> Offline tests validate scorecard
 arithmetic, raw-content exclusion, the 30/10 EN/VI cohort, private review resume, and confusion
-matrices; no live judge-validation or development result is claimed yet. **Commit/artifact** ->
-implementation commit `refactor: simplify end-to-end evaluation around ragas`; the validation
-artifact remains pending explicit egress approval and human review.
+matrices. The completed live cohort produced a 95,622-byte sanitized artifact; subsequent human
+review found 24.14% answer-correctness agreement, 68.97% citation-support agreement, and 100%
+agreement for both context completeness and abstention. **Commit/artifact** -> implementation
+commits `refactor: simplify end-to-end evaluation around ragas` and
+`feat: add human scorecard validation`; sanitized agreement artifact
+`artifacts/metrics/atv320-judge-validation-v1-agreement.json`.
+
+### Custom outcome names hid the underlying Ragas metrics
+
+**Symptom** -> The schema-v16 artifact exposed `answer_utility`, `citation_faithfulness`, and
+`final_context_recall`, so readers could reasonably mistake project-specific aggregation for metric
+names defined by Ragas. **Root cause** -> The scorecard combined judge scores and deterministic
+abstention logic behind a four-outcome presentation layer. **Fix** -> Schema v17 reports Factual
+Correctness, Faithfulness, Context Recall, Answer Relevancy, and Context Precision without reference
+under their exact Ragas names. Answerable-response, unsafe-answer, and citation-reference validity
+remain plainly labeled deterministic rates in a separate group; `answer_utility` is removed instead
+of renamed. **Proof** -> Offline scorecard tests verify the exact metric inventory, applicability
+populations, EN/VI aggregation, citation-validity counting, and absence of the legacy `outcomes`
+field. The completed v16 development artifact remains immutable historical evidence; the subsequent
+20-case critical v17 run is a failure-selected diagnostic, not a new full-development result.
+**Commit/artifact** -> proposed `refactor: report standard ragas metric names`;
+`artifacts/metrics/atv320-development-critical-e2e-v17.json`.
+
+### Atomic fact aliases were lossy Ragas references
+
+**Symptom** -> In the 40-item schema-v15 judge-validation cohort, human agreement was 24.14% for
+answer correctness and 68.97% for citation support, despite 100% agreement for context completeness
+and abstention. A representative correct answer preserved the manual's “before handling” condition,
+while its reference alias retained only “the product has sufficiently cooled down.” **Root cause**
+-> Matcher aliases were rendered as bullet fragments and reused as if they were complete reference
+answers; this discarded conditions and relations before Ragas claim decomposition. **Fix** ->
+Schema v16 gives each answerable item an independent natural reference answer with a separate human
+review status, retains atomic facts for audit, and refuses provider egress until selected references
+are approved. Generated answers are not reused as ground truth. **Proof** -> Characterization tests
+cover the complete cooling/handling relation, missing approval fails closed, and all 80 EN/VI
+development references were independently approved in the private review pack. **Commit/artifact** -> implementation pending commit; the
+historical sanitized agreement artifact is
+`artifacts/metrics/atv320-judge-validation-v1-agreement.json`.
+
+### Cited headings and fixed-answer judge replay (Batch A)
+
+**Symptom** -> Critical review v17 found correct table answers whose scope was carried by headings,
+and human-correct answers with low or zero F1. **Root cause** -> Faithfulness received bare chunk
+text, while human assessment interpreted `FC == 1` as a correctness verdict. Regenerating answers
+would confound evaluation-input correction with generator variance. **Fix** -> V18/source identity
+14 uses verified title/heading/full text for cited final evidence only; Context Recall retains the
+exact bounded generator context. Development-only judge replay imports fixed answers, and future
+private review runs capture identity-bound inputs before judging. Assessment v2 reports continuous
+FC by human labels and diagnostic support tables with `REVIEW_REQUIRED`, not overall PASS/FAIL.
+**Proof** -> Offline validation imported all 20 original v17 review inputs against dataset/corpus
+without generator or judge calls. Synthetic tests cover source mismatch before egress, fixed-answer
+resume after judge failure, preservation of edited labels, and sanitized outputs. **Commit/artifact**
+-> implementation pending review/commit; source artifact
+`artifacts/metrics/atv320-development-critical-e2e-v17.json`, SHA-256
+`ec475e7ee3ffcca92292a4d91a5954a4a0b829745df2b31e20f1e0840e6cb7a1`.
+
+Offline validation: Ruff passed; 465 pytest tests passed on the local Python 3.13.5 interpreter
+(one existing Starlette/httpx deprecation warning). Compose configuration and `git diff --check`
+passed; 15 local Markdown links resolved. Compose also warned that the sandbox could not read the
+user Docker config. Frozen chunk and development dataset hashes, plus the v17 source artifact hash, remain
+unchanged. Production/application, UI, dataset and Docker configuration files were not edited.
+
+The subsequently approved evaluation-only rebuild completed with image ID
+`sha256:50e40e461411446da5f6ec43540e95b814ecb2a569b2a0be0bd9759a972f6e67`.
+Python 3.11.16 validated Ragas 0.4.3/OpenAI 2.53.0, all five Collections imports, adapter
+construction using a dummy key, and both E2E/assessment CLI help commands. In a network-disabled
+container, 438 tests passed with one Starlette/AnyIO deprecation warning. The 27 tests in
+`tests/test_ingestion.py` were excluded because this image deliberately has no Docling; the first
+full collection attempt failed for that missing dependency, not an ingestion behavior failure.
+Pytest's existing pure-Python tooling and required test fixtures were mounted read-only for this
+check, without adding test dependencies to the image. No credentials, PDFs or Qdrant volumes were
+mounted; no provider scoring, model download, ingestion build or runtime-service restart occurred.
+
+Two separately approved live v18 replays then judged the same 20 legacy inputs without generation,
+Qdrant, retrieval models or optional diagnostics. Each completed all 20 cases and 43 core metric
+calls. R1 artifact SHA-256 is
+`6183008e6e321400aa14fd63aae24076e6c71ce86eb6d46ffa015a4952fb2b36`; R2 is
+`0ec03f7e62984c2f9734c6e27a4538dbc469bc575003cb60dd571f550e3e4945`.
+Both retained all v17 retrieval/evidence fingerprints and passed raw-content scans. Exact provider
+billing was unavailable from the adapter and must not be inferred from stored generation usage.
+
+Context Recall was exactly stable: mean `0.6134`, with all 17 applicable item scores unchanged
+across v17/R1/R2. The five human-identified heading-dependent cases (`dvi005`, `dvi006`, `dvi008`,
+`dvi010`, `dvi068`) improved in mean Faithfulness from `0.1500` in v17 to `0.9000` and `1.0000` in
+R1/R2. Overall Faithfulness moved from `0.5229` to `0.7473` and `0.8883`. This supports the cited
+heading input correction, not a production quality claim. Faithfulness still showed judge variance:
+`dvi012` scored `0.0` then `1.0`, while `dvi006` scored `0.5` then `1.0`.
+
+Factual Correctness, whose answer/reference inputs did not change, averaged `0.6162` and `0.5585`
+versus v17's `0.5392`. Seven of 13 applicable items changed between R1 and R2; mean absolute delta
+was `0.2115`, with `dvi032` moving from `0.0` to `1.0` and `dvi021` from `0.67` to `0.0`.
+Therefore it remains a noisy continuous diagnostic and cannot serve as a binary correctness gate.
+Context misses and all behavior outcomes remained unchanged; replay cannot repair retrieval or
+generation failures. Private label files for this critical pack still contain null templates, so no
+assessment-v2 human aggregation is claimed from them.
+
+### Development retrieval variant diagnosis (Batch B)
+
+**Symptom** -> The critical cohort contained answerable misses whose authoritative evidence was
+absent from the final top five, but aggregate E2E scores could not identify the responsible stage.
+**Root cause** -> A separately approved, provider-free schema-v5 run over all 80 answerable
+development items located the first incomplete authoritative boundary: 10 items at bounded
+candidate selection, four at the normal dense/sparse component limits, two at raw cross-encoder
+top five, two at the role/list policy, and one (`dvi045`) outside both diagnostic component top
+100 lists. Sixty-one items remained complete. Same-document deduplication, pruning, and the final
+evidence selector introduced no first losses. **Fix** -> All six preregistered variants were
+compared pairwise without changing the production default. Refill changed no coverage;
+query-expansion v2 rescued only `dvi028`; the dense-reserve variant regressed; and the
+sparse-reserve variant rescued `dvi024` plus candidate coverage for `dvi044`, but only one final
+evidence miss and fewer than the four-item shortlist minimum. The decision is therefore to keep
+the baseline and not promote a retrieval variant. **Proof** -> Each sanitized artifact contains 80
+rows, the same dataset/corpus identities, zero provider/held-out/confirmation calls, and no raw
+question, answer, fact alias, or evidence text. Complete candidate/evidence rates were
+`0.8125/0.7625` for baseline, `0.8250/0.7750` for query-expansion v2, `0.8000/0.7250` for
+dense reserve, and `0.8375/0.7750` for sparse reserve. `dvi026` had five highly repetitive final
+chunks (pairwise token Jaccard up to `0.965`) while its qrel remained outside the candidate budget.
+For `dvi071` and the Installation facet of `dvi076`, authoritative evidence ranked in raw
+cross-encoder top three but the role policy moved it below top five. **Commit/artifact** -> no code
+commit and no production promotion; ignored local artifacts
+`artifacts/metrics/atv320-development-retrieval-*-v5.json`, with baseline SHA-256
+`ee5c156d6d8a30f16c00497f36e8a0c35e1426f74465e66b9a8355caa9e03145` and final sparse-reserve
+SHA-256 `ea3d9d6767b4f81244d7cf246ef96c14971614870caafec4bbcf74bd0123d1db`.
+
+The separately approved Batch C screen completed without a production promotion. Keep
+evaluation-contract correction, stochastic judge/generator variance, and validated production
+improvement as distinct claims.
+
+### Bounded scope-aware generation experiment (Batch C)
+
+**Symptom** -> Human review found answers that accepted an unsupported premise, mixed the right
+identifier with the wrong purpose, overstated missing evidence as absence from the manual, or
+assembled a safety procedure without all necessary conditions. **Root cause** -> The production
+prompt strongly enforces grounding and source IDs but does not state these scope and partial-answer
+rules explicitly. **Fix** -> One generic `scope-aware-v1` prompt was tested in the evaluator on the
+20-case critical cohort. It contained no development IDs or case-specific terminology, and its
+policy/hash was isolated from production checkpoints. **Proof** -> All 20 retrieval/evidence
+fingerprints matched the production v17 source, but behavior did not improve: answerable response
+remained `13/17`; the same four answerable items abstained; and all three unanswerable items were
+still answered (`unsafe_answer_rate=1.0`). Factual Correctness fell to `0.4862`, compared with
+`0.5585-0.6162` in the two fixed-answer production replays; Faithfulness `0.8141` remained inside
+observed judge variation, and Context Recall was effectively unchanged at `0.6176`. The candidate
+therefore failed the preregistered critical screen and was not run on full development. Its prompt,
+selector, tests, and current-operation documentation were removed instead of leaving rejected
+experiment code active. **Commit/artifact** -> no production commit or promotion; ignored sanitized
+artifact SHA-256 `3ea36362352afe112490a5fbdff4e93f44144f240d7e1f6fca8b63d980f5e587` and private review pack
+under `artifacts/local-review/development-critical-scope-aware-v1-v18/`.
 
 ## Portfolio conclusions
 

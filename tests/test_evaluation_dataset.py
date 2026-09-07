@@ -315,6 +315,16 @@ def test_optimization_fact_families_require_bilingual_structural_parity() -> Non
     with pytest.raises(DatasetValidationError, match="invalid family sizes"):
         validate_dataset(orphaned, chunks, kind="development")
 
+    missing_paired_reference = development.copy()
+    missing_paired_reference[0] = missing_paired_reference[0].model_copy(
+        update={
+            "reference_answer": "A complete reviewed reference.",
+            "reference_answer_review_status": "needs_human_review",
+        }
+    )
+    with pytest.raises(DatasetValidationError, match="mismatched reference-answer coverage"):
+        validate_dataset(missing_paired_reference, chunks, kind="development")
+
 
 def test_development_split_rejects_fact_family_and_question_leakage() -> None:
     development, development_chunks = _optimization_split(
@@ -397,6 +407,33 @@ def test_approved_answerable_requires_reviewed_answer_facts() -> None:
         EvaluationItem.model_validate(
             draft.model_dump() | {"review_status": "approved"}
         )
+
+
+def test_reference_answer_requires_text_and_separate_review_status() -> None:
+    item = _answerable(1).model_dump()
+    item["reference_answer"] = (
+        "Before handling the product, verify that it has sufficiently cooled down."
+    )
+    with pytest.raises(ValueError, match="must be set together"):
+        EvaluationItem.model_validate(item)
+
+    item["reference_answer_review_status"] = "needs_human_review"
+    draft = EvaluationItem.model_validate(item)
+    assert draft.reference_answer.startswith("Before handling")
+    assert draft.reference_answer_review_status == "needs_human_review"
+
+    item["reference_answer"] = "   "
+    with pytest.raises(ValueError, match="must not be blank"):
+        EvaluationItem.model_validate(item)
+
+
+def test_unanswerable_item_rejects_reference_answer() -> None:
+    item = _unanswerable(1).model_dump()
+    item["reference_answer"] = "Unsupported answer."
+    item["reference_answer_review_status"] = "approved"
+
+    with pytest.raises(ValueError, match="cannot contain a reference answer"):
+        EvaluationItem.model_validate(item)
 
 
 def test_answer_facts_reject_duplicate_ids_and_aliases() -> None:

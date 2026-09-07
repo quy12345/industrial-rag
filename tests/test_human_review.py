@@ -97,7 +97,7 @@ def test_private_pack_is_atomic_private_and_resumable(monkeypatch, tmp_path: Pat
     monkeypatch.chdir(tmp_path)
     item = next(
         row for row in read_dataset(Path(__file__).parents[1] / DEVELOPMENT_PATH) if row.answerable
-    )
+    ).model_copy(update={"reference_answer_review_status": "approved"})
     path = Path("artifacts/local-review/judge-validation-v1/review.md")
     pack = PrivateReviewPack.open(path, selected_ids=[item.id], checkpoint_ids=[])
 
@@ -171,13 +171,13 @@ def _labels(cases: list[dict]) -> list[dict]:
 
 def _artifact(cases: list[dict]) -> dict:
     return {
-        "schema_version": 15,
+        "schema_version": 17,
         "run_identity": {"dataset_sha256": "a" * 64, "private": "NO_RAW_CONTENT"},
         "cases": cases,
     }
 
 
-def test_agreement_passes_at_threshold_and_output_is_sanitized() -> None:
+def test_assessment_is_descriptive_even_with_perfect_agreement_and_is_sanitized() -> None:
     cases = [_case(f"a{index}", answerable=True, abstained=False) for index in range(30)] + [
         _case(
             f"u{index}",
@@ -191,7 +191,8 @@ def test_agreement_passes_at_threshold_and_output_is_sanitized() -> None:
     ]
     result = validate_scorecard_agreement(_artifact(cases), _labels(cases))
 
-    assert result["status"] == "PASS"
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert result["schema_version"] == 2
     assert result["answered_answerable_count"] == 30
     assert all(row["agreement_rate"] == 1 for row in result["rubrics"].values())
     encoded = json.dumps(result)
@@ -203,8 +204,46 @@ def test_agreement_reports_confusion_and_rejects_incomplete_applicable_labels() 
     labels = _labels(cases)
     labels[0]["answer_correct"] = False
     result = validate_scorecard_agreement(_artifact(cases), labels)
-    assert result["rubrics"]["answer_correct"]["fp"] == 1
+    assert "answer_correct" not in result["rubrics"]
+    assert result["factual_correctness_by_human_label"]["human_incorrect"] == {
+        "count": 1,
+        "mean": 1.0,
+        "median": 1.0,
+    }
+    assert result["factual_correctness_review_item_ids"] == ["a0"]
 
     labels[0]["answer_correct"] = None
     with pytest.raises(HumanReviewError, match="incomplete"):
         validate_scorecard_agreement(_artifact(cases), labels)
+
+
+def test_low_f1_is_not_a_binary_wrong_answer_verdict_and_citation_support_is_separate():
+    cases = [_case("a1", answerable=True, abstained=False, factual=0.4)]
+    labels = _labels(cases)
+    labels[0]["citation_supported"] = False  # valid ID, wrong purpose according to human
+    result = validate_scorecard_agreement(_artifact(cases), labels)
+    assert result["factual_correctness_by_human_label"]["human_correct"] == {
+        "count": 1,
+        "mean": 0.4,
+        "median": 0.4,
+    }
+    assert result["cases"][0]["human_answer_correct"] is True
+    assert "automatic_answer_correct" not in result["cases"][0]
+    assert result["rubrics"]["citation_supported"]["fp"] == 1
+    assert result["status"] == "REVIEW_REQUIRED"
+
+
+@pytest.mark.parametrize("score", [None, float("nan"), float("inf")])
+def test_assessment_rejects_missing_or_nonfinite_applicable_scores(score):
+    cases = [_case("a1", answerable=True, abstained=False, factual=score)]
+    with pytest.raises(HumanReviewError, match="missing or invalid"):
+        validate_scorecard_agreement(_artifact(cases), _labels(cases))
+
+
+def test_answerable_abstention_is_a_system_miss_even_if_generator_refusal_was_safe():
+    cases = [_case("a1", answerable=True, abstained=True, factual=None, faithfulness=None)]
+    labels = _labels(cases)
+    labels[0]["abstention_correct"] = False
+    result = validate_scorecard_agreement(_artifact(cases), labels)
+    assert result["cases"][0]["automatic_answerability_outcome"] is False
+    assert result["rubrics"]["abstention_correct"]["tn"] == 1

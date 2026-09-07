@@ -1,6 +1,6 @@
 """Run the approval-gated ATV320 E2E Ragas scorecard.
 
-The command writes only compact sanitized schema-v15 artifacts. Raw review data is
+The command writes only compact sanitized schema-v18 artifacts. Raw review data is
 allowed only in the ignored ``artifacts/local-review`` tree.
 """
 
@@ -44,11 +44,22 @@ from evaluation.dataset import (
     validate_dataset,
     validate_evaluation_manifest,
 )
-from evaluation.e2e import build_case_record, build_scorecard
+from evaluation.e2e import build_case_record, build_scorecard, retrieval_evidence_fingerprint
 from evaluation.human_review import (
     PrivateReviewPack,
+    import_legacy_review,
     select_judge_validation_cohort,
     selected_ids_sha256,
+)
+from evaluation.review_inputs import (
+    INPUT_POLICY_ID,
+    PrivateInputJournal,
+    ReviewInput,
+    ReviewInputError,
+    load_replay_source,
+    payload_sha256,
+    scores_from_payload,
+    verify_evidence,
 )
 from evaluation.semantic import (
     MetricScore,
@@ -58,6 +69,7 @@ from evaluation.semantic import (
     RagasScores,
     SemanticConfigurationError,
     SemanticJudgeError,
+    headed_cited_contexts,
     render_reviewed_reference,
     semantic_run_identity,
 )
@@ -79,12 +91,13 @@ PRIVATE_HELDOUT_ROOT = Path("data/eval/phase7/private-heldout-v2")
 PRIVATE_HELDOUT_DATASET_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2.jsonl"
 PRIVATE_HELDOUT_MANIFEST_PATH = PRIVATE_HELDOUT_ROOT / "heldout-v2-manifest.json"
 FROZEN_CHUNKS_PATH = Path("artifacts/phase7/frozen-chunks.jsonl")
-ARTIFACT_SCHEMA_VERSION = 15
-SOURCE_IDENTITY_VERSION = 11
+ARTIFACT_SCHEMA_VERSION = 18
+SOURCE_IDENTITY_VERSION = 14
 SOURCE_IDENTITY_PATHS = {
     "dataset_contract": Path("evaluation/dataset.py"),
     "evaluator": Path("evaluation/e2e.py"),
     "human_review": Path("evaluation/human_review.py"),
+    "review_inputs": Path("evaluation/review_inputs.py"),
     "semantic_evaluator": Path("evaluation/semantic.py"),
     "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "generation_prompt": Path("app/application/generation_prompt.py"),
@@ -99,10 +112,105 @@ def main(argv: Sequence[str] | None = None) -> int:
     _validate_approvals(args)
     chunks = load_frozen_chunks(FROZEN_CHUNKS_PATH)
     dataset, validation, manifest = _load_dataset(args.dataset, chunks)
+    if args.replay_artifact is not None:
+        return _run_replay(args, chunks=chunks, dataset=dataset)
     selected = _select_items(dataset, args)
+    _require_reviewed_references(selected)
     settings = _runtime_settings(Settings())
-    judge = _build_judge(args)
+    identity = _run_identity(
+        args=args,
+        dataset=dataset,
+        selected=selected,
+        chunks=chunks,
+        settings=settings,
+        manifest=manifest,
+    )
+    records = _load_checkpoint(args.checkpoint, identity)
+    _validate_checkpoint_prefix(records, selected)
+    _protect_output(args.output, identity)
 
+    corpus = {chunk.chunk_id: chunk for chunk in chunks}
+    journal = (
+        PrivateInputJournal.open(
+            args.local_review_output.with_name("inputs.jsonl"), identity, selected, corpus
+        )
+        if args.local_review_output is not None
+        else None
+    )
+    review_pack = (
+        PrivateReviewPack.open(
+            args.local_review_output,
+            selected_ids=[item.id for item in selected],
+            checkpoint_ids=[str(record["id"]) for record in records],
+        )
+        if args.local_review_output is not None
+        else None
+    )
+    if review_pack is not None and journal is not None:
+        for record in records:
+            saved = journal.rows.get(str(record["id"]))
+            if saved is None or saved.to_payload()["input_sha256"] != record["input_sha256"]:
+                raise ReviewInputError("Completed checkpoint is missing its bound private input.")
+            if saved.item.id not in review_pack._completed_ids:
+                review_pack.append(
+                    item=saved.item,
+                    execution=saved.execution,
+                    scores=scores_from_payload(record["ragas"]),
+                    max_context_chars=saved.max_context_chars,
+                )
+    if len(records) == len(selected):
+        return _finish_run(args, identity, records)
+    judge = _build_judge(args)
+    completed_ids = {str(record["id"]) for record in records}
+    service = None
+    for item in selected:
+        if item.id in completed_ids:
+            continue
+        try:
+            saved = journal.rows.get(item.id) if journal is not None else None
+            if saved is None:
+                if service is None:
+                    service = _build_query_service(settings)
+                execution = service.execute(question=item.question, document_id=None, top_k=5)
+                verify_evidence(execution, corpus)
+                saved = ReviewInput(item, execution, settings.generation_max_context_chars)
+                if journal is not None:
+                    journal.append(saved)
+            execution = saved.execution
+            scores = _score_execution(
+                item,
+                execution,
+                judge=judge,
+                include_diagnostics=args.ragas_diagnostics,
+                max_context_chars=settings.generation_max_context_chars,
+                corpus=corpus,
+            )
+            record = build_case_record(
+                item, execution, scores, input_sha256=saved.to_payload()["input_sha256"]
+            )
+            records.append(record)
+            _write_checkpoint(args.checkpoint, identity, records)
+            if review_pack is not None:
+                review_pack.append(
+                    item=item,
+                    execution=execution,
+                    scores=scores,
+                    max_context_chars=settings.generation_max_context_chars,
+                )
+        except SemanticJudgeError as exc:
+            _write_checkpoint(args.checkpoint, identity, records)
+            raise RuntimeError(str(exc)) from None
+        except Exception:
+            _write_checkpoint(args.checkpoint, identity, records)
+            raise RuntimeError(f"ATV320 execution failed for dataset item {item.id}.") from None
+
+    if len(records) != len(selected):
+        raise RuntimeError("Checkpoint result count does not match selected items.")
+    return _finish_run(args, identity, records)
+
+
+def _build_query_service(settings: Settings) -> QueryService:
+    """Construct external retrieval dependencies only when a new answer is needed."""
     from app.composition.retrieval import (
         LazyQueryRetriever,
         build_query_retriever,
@@ -116,7 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         collection_names=(settings.qdrant_collection, settings.qdrant_hybrid_collection),
         contract=ATV320_RETRIEVAL_CONTRACT,
     )
-    service = QueryService(
+    return QueryService(
         retriever=LazyQueryRetriever(
             lambda: build_query_retriever(
                 settings,
@@ -128,62 +236,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         generator=_build_generation_adapter(settings),
         settings=settings,
     )
-    identity = _run_identity(
-        args=args,
-        dataset=dataset,
-        selected=selected,
-        chunks=chunks,
-        settings=settings,
-        manifest=manifest,
-    )
-    records = _load_checkpoint(args.checkpoint, identity)
-    _validate_checkpoint_prefix(records, selected)
-    review_pack = (
-        PrivateReviewPack.open(
-            args.local_review_output,
-            selected_ids=[item.id for item in selected],
-            checkpoint_ids=[str(record["id"]) for record in records],
-        )
-        if args.local_review_output is not None
-        else None
-    )
-    completed_ids = {str(record["id"]) for record in records}
-    for item in selected:
-        if item.id in completed_ids:
-            continue
-        try:
-            execution = service.execute(question=item.question, document_id=None, top_k=5)
-            scores = _score_execution(
-                item,
-                execution,
-                judge=judge,
-                include_diagnostics=args.ragas_diagnostics,
-                max_context_chars=settings.generation_max_context_chars,
-            )
-            record = build_case_record(item, execution, scores)
-            if review_pack is not None:
-                review_pack.append(
-                    item=item,
-                    execution=execution,
-                    scores=scores,
-                    max_context_chars=settings.generation_max_context_chars,
-                )
-            records.append(record)
-            _write_checkpoint(args.checkpoint, identity, records)
-        except SemanticJudgeError as exc:
-            _write_checkpoint(args.checkpoint, identity, records)
-            raise RuntimeError(str(exc)) from None
-        except Exception as exc:
-            _write_checkpoint(args.checkpoint, identity, records)
-            raise RuntimeError(f"ATV320 execution failed for dataset item {item.id}.") from exc
 
-    if len(records) != len(selected):
-        raise RuntimeError("Checkpoint result count does not match selected items.")
+
+def _finish_run(
+    args: argparse.Namespace, identity: dict[str, Any], records: list[dict[str, Any]]
+) -> int:
+    scorecard = build_scorecard(records)
+    scorecard["operational"]["measurement_provenance"] = {
+        "retrieval_generation": "historical_source_run"
+        if identity["execution_mode"] == "judge_replay"
+        else "live",
+        "judge": "current_run",
+        "generation_usage": "historical_not_rebilled"
+        if identity["execution_mode"] == "judge_replay"
+        else "live",
+        "judge_token_usage": "unavailable_from_current_adapter",
+    }
     output = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "timestamp": datetime.now(UTC).isoformat(),
         "run_identity": identity,
-        "scorecard": build_scorecard(records),
+        "scorecard": scorecard,
         "cases": records,
         "sanitization": {
             "raw_question": "excluded",
@@ -200,12 +273,146 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+def _run_replay(
+    args: argparse.Namespace, *, chunks: list[Any], dataset: list[EvaluationItem]
+) -> int:
+    """Judge fixed inputs only. This branch never constructs the runtime service."""
+    source = load_replay_source(
+        args.replay_artifact,
+        items=dataset,
+        chunks=chunks,
+        source_files=_source_identity()["files"],
+    )
+    origin = source["run_identity"]
+    if source["schema_version"] == 18 and (
+        origin.get("execution_mode") != "live"
+        or origin.get("frozen_chunks_sha256") != _file_sha256(FROZEN_CHUNKS_PATH)
+    ):
+        raise ReviewInputError("V18 replay requires an unchanged corpus and a live source run.")
+    if origin["generation"].get("model") != "qwen/qwen3-235b-a22b-2507":
+        raise ReviewInputError("This replay approval is scoped to the existing Qwen generator.")
+    by_id = {item.id: item for item in dataset}
+    selected = [by_id[item_id] for item_id in origin["selected_item_ids"]]
+    _require_reviewed_references(selected)
+    corpus = {chunk.chunk_id: chunk for chunk in chunks}
+    imported = import_legacy_review(
+        args.replay_review,
+        items=selected,
+        cases=source["cases"],
+        corpus=corpus,
+        max_context_chars=origin["generation_max_context_chars"],
+    )
+    import_policy = "legacy_review_import"
+    if source["schema_version"] == 18:
+        journal_path = args.replay_review.with_name("inputs.jsonl")
+        if not journal_path.is_file():
+            raise ReviewInputError("V18 replay requires its original private input journal.")
+        journal = PrivateInputJournal.open(journal_path, origin, selected, corpus)
+        captured = []
+        for value, record in zip(imported, source["cases"], strict=True):
+            saved = journal.rows.get(value.item.id)
+            if saved is None or saved.to_payload()["input_sha256"] != record["input_sha256"]:
+                raise ReviewInputError("Artifact and captured input hash differ.")
+            if (
+                retrieval_evidence_fingerprint(saved.execution)
+                != record["retrieval_evidence_fingerprint"]
+            ):
+                raise ReviewInputError("Captured retrieval fingerprint differs from its artifact.")
+            if (
+                saved.execution.response.answer != value.execution.response.answer
+                or saved.generation_context() != value.generation_context()
+                or [row.chunk_id for row in saved.execution.response.citations]
+                != record["citation_ids"]
+                or [row.chunk_id for row in saved.execution.evidence_candidates]
+                != record["evidence_candidate_ids"]
+            ):
+                raise ReviewInputError("Markdown and captured input differ.")
+            captured.append(saved)
+        imported = captured
+        import_policy = INPUT_POLICY_ID
+    inputs_hash = payload_sha256([value.to_payload()["input_sha256"] for value in imported])
+    identity = {
+        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "execution_mode": "judge_replay",
+        "dataset": "development",
+        "dataset_sha256": dataset_sha256(dataset),
+        "selected_item_ids": [item.id for item in selected],
+        "corpus": chunk_set_metadata(chunks),
+        "contract_chunk_ids_sha256": ATV320_RETRIEVAL_CONTRACT.chunk_ids_sha256,
+        "frozen_chunks_sha256": _file_sha256(FROZEN_CHUNKS_PATH),
+        "evidence_top_k": 5,
+        "generation_max_context_chars": origin["generation_max_context_chars"],
+        "generation": {"model": "qwen/qwen3-235b-a22b-2507", "execution": "not_called"},
+        "ragas": semantic_run_identity(include_diagnostics=False),
+        "source_identity": _source_identity(),
+        "libraries": _library_versions(),
+        "runtime": _runtime_profile(),
+        "review": {"cohort": None, "selected_ids_sha256": selected_ids_sha256(selected)},
+        "replay": {
+            "source_artifact_sha256": _file_sha256(args.replay_artifact),
+            "source_run_identity_sha256": payload_sha256(origin),
+            "input_policy": import_policy,
+            "inputs_sha256": inputs_hash,
+            "original_answer_hash_verified": import_policy != "legacy_review_import",
+        },
+    }
+    records = _load_checkpoint(args.checkpoint, identity)
+    _validate_checkpoint_prefix(records, selected)
+    _protect_output(args.output, identity)
+    if len(records) == len(selected):
+        return _finish_run(args, identity, records)
+    # Every imported item and source boundary is validated before judge construction.
+    judge = _build_judge(args)
+    for value, original_record in zip(
+        imported[len(records) :], source["cases"][len(records) :], strict=True
+    ):
+        try:
+            scores = _score_execution(
+                value.item,
+                value.execution,
+                judge=judge,
+                include_diagnostics=False,
+                max_context_chars=value.max_context_chars,
+                corpus=corpus,
+            )
+            record = build_case_record(
+                value.item,
+                value.execution,
+                scores,
+                input_sha256=value.to_payload()["input_sha256"],
+            )
+            record["retrieval_evidence_fingerprint"] = original_record[
+                "retrieval_evidence_fingerprint"
+            ]
+            records.append(record)
+            _write_checkpoint(args.checkpoint, identity, records)
+        except SemanticJudgeError as exc:
+            _write_checkpoint(args.checkpoint, identity, records)
+            raise RuntimeError(str(exc)) from None
+        except Exception:
+            _write_checkpoint(args.checkpoint, identity, records)
+            raise RuntimeError(f"Judge replay failed for item {value.item.id}.") from None
+    return _finish_run(args, identity, records)
+
+
+def _protect_output(path: Path, identity: dict[str, Any]) -> None:
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing["run_identity"] != identity:
+                raise ValueError
+        except Exception:
+            raise ReviewInputError(
+                "Refusing to overwrite an unrelated evaluation artifact."
+            ) from None
+
+
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dataset", choices=("development", "confirmation", "heldout-v2"), required=True
     )
-    parser.add_argument("--provider-approval-token", required=True)
+    parser.add_argument("--provider-approval-token")
     parser.add_argument("--judge-provider-approval-token", required=True)
     parser.add_argument("--ragas-diagnostics", action="store_true")
     parser.add_argument("--review-cohort", choices=("judge-validation-v1",))
@@ -213,7 +420,40 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--local-review-output", type=Path)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--replay-artifact", type=Path)
+    parser.add_argument("--replay-review", type=Path)
     args = parser.parse_args(argv)
+    replay = args.replay_artifact is not None
+    if replay != (args.replay_review is not None):
+        parser.error("--replay-artifact and --replay-review must be provided together")
+    if replay:
+        if args.dataset != "development":
+            parser.error("Judge replay is permitted only for development")
+        if (
+            args.review_cohort
+            or args.review_item_id
+            or args.local_review_output
+            or args.ragas_diagnostics
+        ):
+            parser.error(
+                "Replay uses the source selection and core metrics only; "
+                "review/diagnostic flags are not allowed"
+            )
+        if args.output is None or args.checkpoint is None:
+            parser.error("Replay requires explicit --output and --checkpoint")
+        _require_private_review_path(args.replay_review)
+        sources = {
+            args.replay_artifact.resolve(),
+            args.replay_review.resolve(),
+            args.replay_review.with_name("inputs.jsonl").resolve(),
+            args.replay_review.with_name("labels.jsonl").resolve(),
+        }
+        if args.output.resolve() in sources or args.checkpoint.resolve() in sources:
+            parser.error("Replay must not overwrite source files")
+    elif args.provider_approval_token is None:
+        parser.error("the following arguments are required: --provider-approval-token")
+    if args.output and args.checkpoint and args.output.resolve() == args.checkpoint.resolve():
+        parser.error("Output and checkpoint must be different files")
     if args.review_cohort and args.review_item_id:
         parser.error("--review-cohort and --review-item-id are mutually exclusive")
     if (args.review_cohort or args.review_item_id) and args.dataset != "development":
@@ -223,16 +463,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     partial = bool(args.review_cohort or args.review_item_id)
     if partial and args.local_review_output is None:
         parser.error("Review selection requires --local-review-output")
-    if args.local_review_output is not None and not partial:
-        parser.error("--local-review-output requires a review selection")
+    if args.local_review_output is not None and args.dataset != "development":
+        parser.error("Private input capture is permitted only for development")
     if partial and (args.output is None or args.checkpoint is None):
         parser.error("Partial review requires explicit --output and --checkpoint")
     if args.local_review_output is not None:
         _require_private_review_path(args.local_review_output)
     if args.output is None:
-        args.output = Path(f"artifacts/metrics/atv320-{args.dataset}-e2e-v15.json")
+        args.output = Path(f"artifacts/metrics/atv320-{args.dataset}-e2e-v18.json")
     if args.checkpoint is None:
-        args.checkpoint = Path(f"artifacts/metrics/atv320-{args.dataset}-e2e-v15-checkpoint.jsonl")
+        args.checkpoint = Path(f"artifacts/metrics/atv320-{args.dataset}-e2e-v18-checkpoint.jsonl")
     return args
 
 
@@ -244,7 +484,10 @@ def _validate_approvals(
         "confirmation": CONFIRMATION_PROVIDER_APPROVAL_TOKEN,
         "heldout-v2": HELDOUT_PROVIDER_APPROVAL_TOKEN,
     }[args.dataset]
-    if args.provider_approval_token != expected_generator:
+    if (
+        not getattr(args, "replay_artifact", None)
+        and args.provider_approval_token != expected_generator
+    ):
         raise SystemExit("Generator approval token is missing or invalid for this dataset.")
     if args.judge_provider_approval_token != RAGAS_APPROVAL_TOKENS[args.dataset]:
         raise SystemExit("Ragas scorecard approval token is missing or invalid for this dataset.")
@@ -268,6 +511,7 @@ def _score_execution(
     judge: RagasJudge,
     include_diagnostics: bool,
     max_context_chars: int,
+    corpus: Mapping[str, Any],
 ) -> RagasScores:
     not_applicable = MetricScore.not_applicable()
     if not item.answerable:
@@ -283,10 +527,10 @@ def _score_execution(
     citation_ids = [citation.chunk_id for citation in execution.response.citations]
     candidates_by_id = {row.chunk_id: row for row in execution.evidence_candidates}
     citations_valid = bool(citation_ids) and set(citation_ids) <= set(candidates_by_id)
-    cited_contexts = tuple(
-        candidates_by_id[chunk_id].text
-        for chunk_id in dict.fromkeys(citation_ids)
-        if chunk_id in candidates_by_id
+    cited_contexts = (
+        headed_cited_contexts(execution.evidence_candidates, citation_ids, corpus)
+        if citations_valid
+        else ()
     )
     if not generation_context:
         return RagasScores(
@@ -312,6 +556,21 @@ def _score_execution(
         score_context_recall=True,
         include_diagnostics=include_diagnostics,
     )
+    required = {
+        "factual_correctness": answered,
+        "faithfulness": answered and citations_valid,
+        "context_recall": True,
+        "answer_relevancy": include_diagnostics and answered,
+        "context_precision_without_reference": include_diagnostics and answered,
+    }
+    for name, enabled in required.items():
+        metric = getattr(scores, name, None)
+        if (
+            not isinstance(metric, MetricScore)
+            or (enabled and (metric.status != "complete" or metric.score is None))
+            or (not enabled and metric.status != "not_applicable")
+        ):
+            raise SemanticJudgeError(item_id=item.id, metric=name, category="invalid_score")
     if answered and not citations_valid:
         scores = replace(
             scores,
@@ -370,6 +629,22 @@ def _load_dataset(
     return items, validation, manifest
 
 
+def _require_reviewed_references(items: Sequence[EvaluationItem]) -> None:
+    """Fail before provider/model construction when selected references are not approved."""
+
+    pending = [
+        item.id
+        for item in items
+        if item.answerable
+        and (item.reference_answer is None or item.reference_answer_review_status != "approved")
+    ]
+    if pending:
+        raise SystemExit(
+            "ATV320 E2E evaluation requires approved natural reference answers; "
+            f"pending record count: {len(pending)}."
+        )
+
+
 def _runtime_settings(settings: Settings) -> Settings:
     return settings.model_copy(
         update={
@@ -407,6 +682,9 @@ def _run_identity(
     generation = generation_endpoint_identity(settings)
     return {
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "execution_mode": "live",
+        "private_input_policy_id": INPUT_POLICY_ID,
+        "frozen_chunks_sha256": _file_sha256(FROZEN_CHUNKS_PATH),
         "dataset": args.dataset,
         "dataset_sha256": dataset_sha256(dataset),
         "selected_item_ids": [item.id for item in selected],
@@ -474,8 +752,8 @@ def _load_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any
         lines = path.read_text(encoding="utf-8").splitlines()
         header = json.loads(lines[0]) if lines else {}
         records = [json.loads(line) for line in lines[1:]]
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Malformed ATV320 checkpoint: {path}") from exc
+    except (OSError, json.JSONDecodeError):
+        raise RuntimeError("Malformed ATV320 checkpoint.") from None
     if header != {"run_identity": identity}:
         raise RuntimeError("Existing ATV320 checkpoint belongs to a different frozen run.")
     ids = [record.get("id") for record in records]

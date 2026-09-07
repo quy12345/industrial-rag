@@ -1,4 +1,4 @@
-"""Offline contracts for the compact schema-v15 E2E scorecard."""
+"""Offline contracts for the compact schema-v17 E2E scorecard."""
 
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ def test_missing_or_unknown_citation_is_invalid_without_changing_case_shape() ->
     assert record["ragas"]["faithfulness"]["score"] == 0
 
 
-def test_scorecard_has_exactly_four_outcomes_and_penalizes_abstention() -> None:
+def test_scorecard_reports_standard_ragas_and_deterministic_behavior_metrics() -> None:
     answered = build_case_record(_item("en"), _execution(), _scores(factual=0.8, recall=0.9))
     abstained = build_case_record(
         _item("vi", language="vi"),
@@ -145,18 +145,49 @@ def test_scorecard_has_exactly_four_outcomes_and_penalizes_abstention() -> None:
 
     scorecard = build_scorecard([answered, abstained, safe, unsafe])
 
-    assert set(scorecard["outcomes"]) == {
-        "answer_utility",
-        "unsafe_answer_rate",
-        "citation_faithfulness",
-        "final_context_recall",
+    assert set(scorecard["ragas_metrics"]) == {
+        "factual_correctness",
+        "faithfulness",
+        "context_recall",
+        "answer_relevancy",
+        "context_precision_without_reference",
     }
-    assert scorecard["outcomes"]["answer_utility"]["mean"] == pytest.approx(0.4)
-    assert scorecard["outcomes"]["unsafe_answer_rate"]["mean"] == pytest.approx(0.5)
-    assert scorecard["outcomes"]["final_context_recall"]["per_language"]["vi"]["denominator"] == 1
+    assert scorecard["ragas_metrics"]["factual_correctness"]["mean"] == pytest.approx(0.8)
+    assert scorecard["ragas_metrics"]["context_recall"]["mean"] == pytest.approx(0.7)
+    assert scorecard["ragas_metrics"]["context_recall"]["per_language"]["vi"]["count"] == 1
+    assert scorecard["ragas_metrics"]["answer_relevancy"]["mean"] is None
+    assert scorecard["ragas_metrics"]["answer_relevancy"]["not_applicable_count"] == 1
+    assert set(scorecard["behavior_metrics"]) == {
+        "answerable_response_rate",
+        "unsafe_answer_rate",
+        "citation_reference_validity_rate",
+    }
+    assert scorecard["behavior_metrics"]["answerable_response_rate"]["rate"] == 0.5
+    assert scorecard["behavior_metrics"]["unsafe_answer_rate"]["rate"] == 0.5
+    assert scorecard["behavior_metrics"]["citation_reference_validity_rate"]["rate"] == 1
+    assert "outcomes" not in scorecard
+    assert "answer_utility" not in scorecard
     assert scorecard["status"] == "BASELINE_ONLY"
     assert scorecard["overall_pass"] is None
     assert scorecard["thresholds"] == {}
+
+
+def test_citation_reference_validity_is_reported_as_a_behavior_rate() -> None:
+    valid = build_case_record(_item("valid"), _execution(), _scores())
+    invalid = build_case_record(
+        _item("invalid"),
+        _execution(citation_id="unknown"),
+        _scores(faithfulness=0),
+    )
+
+    metric = build_scorecard([valid, invalid])["behavior_metrics"][
+        "citation_reference_validity_rate"
+    ]
+
+    assert metric["numerator"] == 1
+    assert metric["denominator"] == 2
+    assert metric["rate"] == 0.5
+    assert metric["invalid_citation_item_ids"] == ["invalid"]
 
 
 def test_fingerprint_covers_ordered_candidate_rerank_and_evidence_boundaries() -> None:

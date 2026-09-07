@@ -11,10 +11,14 @@ import importlib.metadata
 import json
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Protocol
 
+from app.domain.documents import DocumentChunk
+from app.domain.retrieval import RetrievalCandidate
+from app.domain.retrieval_contracts import ATV320_RETRIEVAL_CONTRACT
 from evaluation.dataset import EvaluationItem
 
 RAGAS_VERSION = "0.4.3"
@@ -29,7 +33,8 @@ EMBEDDING_MODEL = "openai/text-embedding-3-small"
 JUDGE_TIMEOUT_SECONDS = 60.0
 JUDGE_MAX_RETRIES = 1
 JUDGE_MAX_COMPLETION_TOKENS = 4096
-REFERENCE_POLICY_ID = "reviewed_expected_fact_reference_v1"
+REFERENCE_POLICY_ID = "reviewed_natural_reference_answer_v2"
+CITED_CONTEXT_POLICY_ID = "headed_cited_chunks_v2"
 CORE_METRICS = ("factual_correctness", "faithfulness", "context_recall")
 DIAGNOSTIC_METRICS = ("answer_relevancy", "context_precision_without_reference")
 
@@ -86,7 +91,7 @@ class RagasScores:
     faithfulness: MetricScore
     context_recall: MetricScore
     answer_relevancy: MetricScore
-    context_precision: MetricScore
+    context_precision_without_reference: MetricScore
 
     def to_payload(self) -> dict[str, dict[str, str | float | None]]:
         return {
@@ -94,7 +99,9 @@ class RagasScores:
             "faithfulness": self.faithfulness.to_payload(),
             "context_recall": self.context_recall.to_payload(),
             "answer_relevancy": self.answer_relevancy.to_payload(),
-            "context_precision_without_reference": self.context_precision.to_payload(),
+            "context_precision_without_reference": (
+                self.context_precision_without_reference.to_payload()
+            ),
         }
 
 
@@ -127,9 +134,40 @@ class SemanticJudgeError(RuntimeError):
 
 
 def render_reviewed_reference(item: EvaluationItem) -> str:
-    """Render exactly the first reviewed alias of every expected fact."""
+    """Return the independently reviewed natural-language reference answer."""
 
-    return "\n".join(f"- {fact.aliases[0]}" for fact in item.expected_answer_facts)
+    if not item.answerable:
+        return ""
+    if item.reference_answer is None or item.reference_answer_review_status != "approved":
+        raise SemanticConfigurationError(
+            "Answerable evaluation item requires an approved reference answer."
+        )
+    return item.reference_answer
+
+
+def headed_cited_contexts(
+    evidence: tuple[RetrievalCandidate, ...],
+    citation_ids: list[str],
+    corpus: Mapping[str, DocumentChunk],
+) -> tuple[str, ...]:
+    """Render only verified cited chunks, deduplicated in final-evidence order."""
+    selected = set(citation_ids)
+    rendered: list[str] = []
+    for candidate in evidence:
+        if candidate.chunk_id not in selected:
+            continue
+        chunk = corpus.get(candidate.chunk_id)
+        fields = ("document_id", "filename", "text", "page_numbers", "headings", "content_type")
+        if chunk is None or any(
+            getattr(candidate, field) != getattr(chunk, field) for field in fields
+        ):
+            raise SemanticConfigurationError("Cited evidence does not match the frozen corpus.")
+        context = ATV320_RETRIEVAL_CONTRACT.document_context_by_id.get(chunk.document_id, {})
+        title = context.get("document_title") or chunk.filename
+        heading = " > ".join(chunk.headings) or "n/a"
+        rendered.append(f"Document title: {title}\nHeading: {heading}\n\n{chunk.text}")
+        selected.remove(candidate.chunk_id)
+    return tuple(rendered)
 
 
 class RagasScorecardJudge:
@@ -168,7 +206,7 @@ class RagasScorecardJudge:
         self._faithfulness: Any = Faithfulness(llm=llm)
         self._context_recall: Any = ContextRecall(llm=llm)
         self._answer_relevancy: Any | None = None
-        self._context_precision: Any | None = None
+        self._context_precision_without_reference: Any | None = None
         if include_diagnostics:
             embeddings: Any = embedding_factory(
                 "openai",
@@ -176,7 +214,7 @@ class RagasScorecardJudge:
                 client=_OpenRouterEmbeddingClient(client),
             )
             self._answer_relevancy = AnswerRelevancy(llm=llm, embeddings=embeddings)
-            self._context_precision = ContextPrecisionWithoutReference(llm=llm)
+            self._context_precision_without_reference = ContextPrecisionWithoutReference(llm=llm)
 
     def score(
         self,
@@ -221,16 +259,22 @@ class RagasScorecardJudge:
             user_input=evaluation_input.question,
             response=evaluation_input.answer,
         )
-        precision = self._optional_metric(
+        context_precision_without_reference = self._optional_metric(
             evaluation_input,
             enabled=include_diagnostics and score_factual_correctness,
             name="context_precision_without_reference",
-            metric=self._context_precision,
+            metric=self._context_precision_without_reference,
             user_input=evaluation_input.question,
             response=evaluation_input.answer,
             retrieved_contexts=list(evaluation_input.final_contexts),
         )
-        return RagasScores(factual, faithfulness, recall, relevancy, precision)
+        return RagasScores(
+            factual,
+            faithfulness,
+            recall,
+            relevancy,
+            context_precision_without_reference,
+        )
 
     def _optional_metric(
         self,
@@ -285,6 +329,7 @@ def semantic_run_identity(*, include_diagnostics: bool) -> dict[str, object]:
         "maximum_completion_tokens": JUDGE_MAX_COMPLETION_TOKENS,
         "store": False,
         "reference_policy_id": REFERENCE_POLICY_ID,
+        "cited_context_policy_id": CITED_CONTEXT_POLICY_ID,
         "core_metrics": list(CORE_METRICS),
         "diagnostic_metrics": list(DIAGNOSTIC_METRICS) if include_diagnostics else [],
         "embedding_model": EMBEDDING_MODEL if include_diagnostics else None,

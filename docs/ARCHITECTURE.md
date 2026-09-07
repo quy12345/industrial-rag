@@ -35,9 +35,10 @@ app/
 evaluation/
 |-- dataset.py           Dataset parsing and validation contracts
 |-- retrieval.py         Deep provider-free retrieval diagnostics
-|-- e2e.py               Compact case records and four-outcome scorecard
+|-- e2e.py               Compact records, standard Ragas metrics and behavior rates
 |-- semantic.py          Ragas/OpenRouter adapter and raw-input policy
-`-- human_review.py      Private review packs and sanitized judge agreement
+|-- review_inputs.py     Identity-bound private snapshots and replay validation
+`-- human_review.py      Private review packs/import and descriptive human assessment
 
 scripts/
 |-- operations/          Supported operational adapters
@@ -156,12 +157,39 @@ stable IDs, document IDs, pages, heading counts, and exact-duplicate alternative
 API retains its existing `top_k` range; this diagnostic cap is not a runtime configuration change.
 Evidence metrics in this schema are measured diagnostics, not additional exit-code gates; promotion
 criteria remain deferred until a reviewed development winner exists. The E2E evaluator emits
-compact schema-v15 checkpoints and artifacts and binds resume to corpus, dataset, endpoint, model,
-Ragas configuration, and source identity. It reports answer utility, unsafe-answer rate, citation
-faithfulness, and final-context recall without a composite score. Schema v15 is a threshold-free
-baseline contract. It disables retrieval trace capture; the separate retrieval evaluator remains
-the owner of qrel ranks, variants, and deep stage traces. Current production composition does not
-capture evaluation traces.
+compact schema-v18 checkpoints and artifacts and binds resume to corpus, dataset, endpoint, model,
+Ragas configuration, and source identity. It reports the five Ragas metrics by their canonical
+names: Factual Correctness, Faithfulness, Context Recall, Answer Relevancy, and Context Precision
+without reference. Deterministic behavior rates are a separate group: answerable response, unsafe
+answer, and citation-reference validity. Schema v18 has no renamed composite outcomes, quality
+threshold, or composite score. It disables retrieval trace capture; the separate retrieval
+evaluator remains the owner of qrel ranks, variants, and deep stage traces. Current production
+composition does not capture evaluation traces.
+
+Answerable optimization records own an independent natural-language `reference_answer` and a
+separate review status. Ragas Factual Correctness and Context Recall consume this complete reference
+instead of reconstructing an answer from atomic matcher aliases. Atomic expected facts remain the
+auditable annotation contract. Missing or unapproved references stop E2E before provider/model
+construction; generated answers are never promoted into their own references.
+
+Faithfulness uses `headed_cited_chunks_v2`: frozen document title, heading and full chunk text,
+only for citations within final evidence, deduplicated in final-evidence order. It adds neither
+uncited sources nor qrels. Context Recall still receives the exact bounded context supplied to
+generation. Missing or invalid citations produce deterministic zero Faithfulness.
+
+E2E has `execution_mode=live|judge_replay`. Development replay validates the source artifact,
+dataset, corpus, review content and production source pins before constructing a judge. It never
+constructs a generator, Qdrant client or retrieval model. Legacy v17 Markdown imports are explicitly
+`legacy_review_import`: the original answer had no generation-time hash. New private review runs
+persist `inputs.jsonl` atomically before judging, binding inputs to the run identity and a per-case
+hash. A failed judge can resume without regenerating the stored answer. Completed checkpoints can
+repair a lagging Markdown pack; user-edited labels are preserved. Raw snapshots remain ignored.
+
+Human assessment schema v2 is descriptive (`REVIEW_REQUIRED`), not a quality certification.
+Factual Correctness remains continuous F1, grouped by human-correct/incorrect labels. Faithfulness
+and Context Recall retain complete-support confusion tables and per-case scores for inspection.
+Answerability outcomes are end-to-end: a safe generator refusal caused by missing evidence is still
+an answerable system miss. A critical error-selected cohort cannot establish representative quality.
 
 ## Invariants
 

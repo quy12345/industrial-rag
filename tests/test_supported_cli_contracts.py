@@ -172,7 +172,7 @@ def test_supported_cli_help_preserves_the_public_option_surface(
     assert expected_options <= set(result.stdout.split())
 
 
-def test_e2e_help_exposes_exactly_the_compact_v15_option_surface() -> None:
+def test_e2e_help_exposes_exactly_the_compact_v18_option_surface() -> None:
     result = _run_cli("scripts.evaluation.evaluate_e2e", "--help")
 
     assert result.returncode == 0
@@ -187,6 +187,8 @@ def test_e2e_help_exposes_exactly_the_compact_v15_option_surface() -> None:
         "--local-review-output",
         "--checkpoint",
         "--output",
+        "--replay-artifact",
+        "--replay-review",
     }
 
 
@@ -206,7 +208,7 @@ def test_e2e_help_exposes_exactly_the_compact_v15_option_surface() -> None:
         (
             "scripts.evaluation.evaluate_e2e",
             ("--dataset", "development"),
-            "the following arguments are required: --provider-approval-token",
+            "the following arguments are required: --judge-provider-approval-token",
         ),
     ],
 )

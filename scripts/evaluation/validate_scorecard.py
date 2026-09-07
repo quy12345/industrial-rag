@@ -1,4 +1,4 @@
-"""Validate sanitized schema-v15 scorecard agreement against private labels."""
+"""Describe continuous Ragas scores against private human labels (assessment v2)."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except HumanReviewError as exc:
         raise SystemExit(f"Scorecard agreement validation failed: {exc}") from None
     print(f"Sanitized scorecard agreement written: {args.output}")
-    return 0 if result["status"] == "PASS" else 2
+    return 0
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

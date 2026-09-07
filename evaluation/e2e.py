@@ -5,19 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
-from statistics import mean
+from collections.abc import Callable, Mapping, Sequence
+from statistics import mean, median
 from typing import Any
 
 from app.application.query_service import QueryExecution
 from evaluation.dataset import EvaluationItem
 from evaluation.semantic import RagasScores
 
-SCORECARD_OUTCOMES = (
-    "answer_utility",
-    "unsafe_answer_rate",
-    "citation_faithfulness",
-    "final_context_recall",
+RAGAS_METRICS = (
+    "factual_correctness",
+    "faithfulness",
+    "context_recall",
+    "answer_relevancy",
+    "context_precision_without_reference",
 )
 CASE_KEYS = frozenset(
     {
@@ -35,6 +36,7 @@ CASE_KEYS = frozenset(
         "retrieval_evidence_fingerprint",
         "timings_ms",
         "usage",
+        "input_sha256",
     }
 )
 
@@ -43,8 +45,10 @@ def build_case_record(
     item: EvaluationItem,
     execution: QueryExecution,
     ragas_scores: RagasScores,
+    *,
+    input_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Project one execution into the allowlisted schema-v15 case contract."""
+    """Project one execution into the allowlisted schema-v18 case contract."""
 
     citation_ids = [citation.chunk_id for citation in execution.response.citations]
     evidence_ids = [candidate.chunk_id for candidate in execution.evidence_candidates]
@@ -77,12 +81,13 @@ def build_case_record(
                     ragas_scores.faithfulness,
                     ragas_scores.context_recall,
                     ragas_scores.answer_relevancy,
-                    ragas_scores.context_precision,
+                    ragas_scores.context_precision_without_reference,
                 )
             ),
             "total": execution.timings.total_ms,
         },
         "usage": _usage_payload(execution),
+        "input_sha256": input_sha256,
     }
     if set(record) != CASE_KEYS:
         raise RuntimeError("Compact E2E case projection drifted from its allowlist.")
@@ -102,47 +107,51 @@ def retrieval_evidence_fingerprint(execution: QueryExecution) -> str:
 
 
 def build_scorecard(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Aggregate the four canonical outcomes without inventing a composite score."""
+    """Report canonical Ragas names separately from deterministic behavior metrics."""
 
     if not records:
         raise ValueError("A scorecard requires at least one case.")
     answerable = [row for row in records if bool(row["answerable"])]
     unanswerable = [row for row in records if not bool(row["answerable"])]
     answered_answerable = [row for row in answerable if not bool(row["abstained"])]
-
-    outcomes = {
-        "answer_utility": _outcome(
-            records=answerable,
-            values=[
-                0.0 if row["abstained"] else _metric_score(row, "factual_correctness")
-                for row in answerable
-            ],
-            failures=[
-                str(row["id"])
-                for row in answerable
-                if row["abstained"] or _metric_score(row, "factual_correctness") < 1.0
-            ],
+    answered = [row for row in records if not bool(row["abstained"])]
+    metric_populations = {
+        "factual_correctness": (answered_answerable, "answered_answerable"),
+        "faithfulness": (answered_answerable, "answered_answerable"),
+        "context_recall": (answerable, "answerable"),
+        "answer_relevancy": (answered_answerable, "answered_answerable"),
+        "context_precision_without_reference": (
+            answered_answerable,
+            "answered_answerable",
         ),
-        "unsafe_answer_rate": _outcome(
+    }
+    ragas_metrics = {
+        metric: _ragas_metric(
+            records=metric_populations[metric][0],
+            metric=metric,
+            population=metric_populations[metric][1],
+        )
+        for metric in RAGAS_METRICS
+    }
+    behavior_metrics = {
+        "answerable_response_rate": _rate_metric(
+            records=answerable,
+            positive=lambda row: not bool(row["abstained"]),
+            item_ids_key="abstained_item_ids",
+            selected_ids=[str(row["id"]) for row in answerable if row["abstained"]],
+        ),
+        "unsafe_answer_rate": _rate_metric(
             records=unanswerable,
-            values=[0.0 if row["abstained"] else 1.0 for row in unanswerable],
-            failures=[str(row["id"]) for row in unanswerable if not row["abstained"]],
+            positive=lambda row: not bool(row["abstained"]),
+            item_ids_key="unsafe_answer_item_ids",
+            selected_ids=[str(row["id"]) for row in unanswerable if not row["abstained"]],
         ),
-        "citation_faithfulness": _outcome(
-            records=answered_answerable,
-            values=[_metric_score(row, "faithfulness") for row in answered_answerable],
-            failures=[
-                str(row["id"])
-                for row in answered_answerable
-                if _metric_score(row, "faithfulness") < 1.0
-                or not bool(row["citation_reference_valid"])
-            ],
-        ),
-        "final_context_recall": _outcome(
-            records=answerable,
-            values=[_metric_score(row, "context_recall") for row in answerable],
-            failures=[
-                str(row["id"]) for row in answerable if _metric_score(row, "context_recall") < 1.0
+        "citation_reference_validity_rate": _rate_metric(
+            records=answered,
+            positive=lambda row: bool(row["citation_reference_valid"]),
+            item_ids_key="invalid_citation_item_ids",
+            selected_ids=[
+                str(row["id"]) for row in answered if not row["citation_reference_valid"]
             ],
         ),
     }
@@ -150,47 +159,49 @@ def build_scorecard(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "status": "BASELINE_ONLY",
         "overall_pass": None,
         "thresholds": {},
-        "outcomes": outcomes,
+        "ragas_metrics": ragas_metrics,
+        "behavior_metrics": behavior_metrics,
         "operational": _operational_summary(records),
     }
 
 
-def _outcome(
+def _ragas_metric(
     *,
     records: Sequence[Mapping[str, Any]],
-    values: Sequence[float],
-    failures: Sequence[str],
+    metric: str,
+    population: str,
 ) -> dict[str, Any]:
-    if len(records) != len(values):
-        raise ValueError("Outcome values must align with applicable records.")
+    scored: list[tuple[Mapping[str, Any], float]] = []
+    for row in records:
+        score = _metric_score(row, metric)
+        if score is not None:
+            scored.append((row, score))
+    values = [value for _, value in scored]
     languages = sorted({str(row["language"]) for row in records})
     return {
-        "sum": sum(values),
-        "denominator": len(values),
+        "population": population,
+        "population_count": len(records),
+        "count": len(values),
+        "not_applicable_count": len(records) - len(values),
         "mean": mean(values) if values else None,
-        "applicable_count": len(values),
-        "excluded_count": 0,
-        "per_language": {
-            language: _language_outcome(records, values, language) for language in languages
-        },
-        "failure_item_ids": list(failures),
+        "median": median(values) if values else None,
+        "status_counts": _metric_status_counts(records, metric),
+        "per_language": {language: _language_metric(scored, language) for language in languages},
     }
 
 
-def _language_outcome(
-    records: Sequence[Mapping[str, Any]], values: Sequence[float], language: str
+def _language_metric(
+    scored: Sequence[tuple[Mapping[str, Any], float]], language: str
 ) -> dict[str, int | float | None]:
-    selected = [
-        value for row, value in zip(records, values, strict=True) if row["language"] == language
-    ]
+    selected = [value for row, value in scored if row["language"] == language]
     return {
-        "sum": sum(selected),
-        "denominator": len(selected),
+        "count": len(selected),
         "mean": mean(selected) if selected else None,
+        "median": median(selected) if selected else None,
     }
 
 
-def _metric_score(record: Mapping[str, Any], metric: str) -> float:
+def _metric_score(record: Mapping[str, Any], metric: str) -> float | None:
     ragas = record.get("ragas")
     if not isinstance(ragas, Mapping):
         raise ValueError("E2E case has no Ragas payload.")
@@ -198,9 +209,57 @@ def _metric_score(record: Mapping[str, Any], metric: str) -> float:
     if not isinstance(payload, Mapping):
         raise ValueError(f"E2E case has no {metric} payload.")
     score = payload.get("score")
+    if score is None and payload.get("status") == "not_applicable":
+        return None
     if not isinstance(score, (int, float)) or isinstance(score, bool) or not math.isfinite(score):
         raise ValueError(f"E2E case has no finite {metric} score.")
     return float(score)
+
+
+def _metric_status_counts(records: Sequence[Mapping[str, Any]], metric: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in records:
+        ragas = row.get("ragas")
+        payload = ragas.get(metric) if isinstance(ragas, Mapping) else None
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("status"), str):
+            raise ValueError(f"E2E case has no {metric} status.")
+        status = str(payload["status"])
+        counts[status] = counts.get(status, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _rate_metric(
+    *,
+    records: Sequence[Mapping[str, Any]],
+    positive: Callable[[Mapping[str, Any]], bool],
+    item_ids_key: str,
+    selected_ids: Sequence[str],
+) -> dict[str, Any]:
+    numerator = sum(bool(positive(row)) for row in records)
+    languages = sorted({str(row["language"]) for row in records})
+    return {
+        "numerator": numerator,
+        "denominator": len(records),
+        "rate": numerator / len(records) if records else None,
+        "per_language": {
+            language: _language_rate(records, positive, language) for language in languages
+        },
+        item_ids_key: list(selected_ids),
+    }
+
+
+def _language_rate(
+    records: Sequence[Mapping[str, Any]],
+    positive: Callable[[Mapping[str, Any]], bool],
+    language: str,
+) -> dict[str, int | float | None]:
+    selected = [row for row in records if row["language"] == language]
+    numerator = sum(bool(positive(row)) for row in selected)
+    return {
+        "numerator": numerator,
+        "denominator": len(selected),
+        "rate": numerator / len(selected) if selected else None,
+    }
 
 
 def _operational_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from app.application.query_service import QueryExecution, QueryTimings
 from app.contracts.query import Citation, QueryResponse
+from app.domain.documents import DocumentChunk
 from app.domain.retrieval import RetrievalCandidate
 from evaluation.dataset import EvaluationItem
 from evaluation.semantic import (
@@ -16,6 +18,7 @@ from evaluation.semantic import (
     RagasEvaluationInput,
     RagasScorecardJudge,
     RagasScores,
+    SemanticConfigurationError,
     SemanticJudgeError,
     _configure_openrouter_llm,
     _OpenRouterEmbeddingClient,
@@ -61,6 +64,10 @@ def _item(*, answerable: bool = True) -> EvaluationItem:
                 "required_token_groups": [["secret"]],
             },
         ],
+        reference_answer=(
+            "Before handling the product, verify that it has sufficiently cooled down."
+        ),
+        reference_answer_review_status="approved",
         citation_required=True,
         review_status="approved",
     )
@@ -114,6 +121,13 @@ def _execution(
     )
 
 
+def _corpus() -> dict[str, DocumentChunk]:
+    return {
+        row.chunk_id: DocumentChunk.model_validate(row.model_dump())
+        for row in _execution().evidence_candidates
+    }
+
+
 class FakeJudge:
     def __init__(self) -> None:
         self.calls: list[tuple[RagasEvaluationInput, dict[str, bool]]] = []
@@ -131,12 +145,33 @@ class FakeJudge:
         )
 
 
-def test_reference_uses_only_first_alias_in_dataset_order() -> None:
+def test_reference_uses_reviewed_natural_answer_instead_of_fact_aliases() -> None:
     reference = render_reviewed_reference(_item())
 
-    assert reference == "- canonical one\n- canonical two"
+    assert reference == (
+        "Before handling the product, verify that it has sufficiently cooled down."
+    )
     assert "alternative" not in reference
     assert "secret" not in reference
+
+
+def test_reference_requires_separate_human_approval() -> None:
+    pending = _item().model_copy(update={"reference_answer_review_status": "needs_human_review"})
+
+    with pytest.raises(
+        SemanticConfigurationError,
+        match="requires an approved reference answer",
+    ):
+        render_reviewed_reference(pending)
+
+
+def test_e2e_rejects_pending_reference_before_provider_construction() -> None:
+    pending = _item().model_copy(update={"reference_answer_review_status": "needs_human_review"})
+
+    with pytest.raises(SystemExit, match="requires approved natural reference answers"):
+        evaluate_e2e._require_reviewed_references([pending])
+
+    evaluate_e2e._require_reviewed_references([_item()])
 
 
 def test_answered_mapping_sends_only_cited_full_context_and_bounded_evidence() -> None:
@@ -147,10 +182,13 @@ def test_answered_mapping_sends_only_cited_full_context_and_bounded_evidence() -
         judge=judge,
         include_diagnostics=False,
         max_context_chars=4_000,
+        corpus=_corpus(),
     )
 
     inputs, flags = judge.calls[0]
-    assert inputs.cited_contexts == ("CITED_FULL_TEXT",)
+    assert inputs.cited_contexts == (
+        "Document title: manual.pdf\nHeading: Safety\n\nCITED_FULL_TEXT",
+    )
     assert "UNCITED_SENTINEL" not in inputs.cited_contexts
     assert "CITED_FULL_TEXT" in inputs.generation_context
     assert "UNCITED_SENTINEL" in inputs.generation_context
@@ -185,6 +223,7 @@ def test_applicability_matrix(
         judge=judge,
         include_diagnostics=False,
         max_context_chars=4_000,
+        corpus=_corpus(),
     )
 
     assert len(judge.calls) == expected_calls
@@ -201,6 +240,7 @@ def test_empty_context_is_zero_without_judge_call() -> None:
         judge=judge,
         include_diagnostics=False,
         max_context_chars=4_000,
+        corpus=_corpus(),
     )
 
     assert judge.calls == []
@@ -215,10 +255,52 @@ def test_invalid_citation_skips_faithfulness_and_records_zero() -> None:
         judge=judge,
         include_diagnostics=False,
         max_context_chars=4_000,
+        corpus=_corpus(),
     )
 
     assert judge.calls[0][1]["score_faithfulness"] is False
     assert scores.faithfulness == MetricScore.deterministic_zero("invalid_citations")
+
+
+def test_context_recall_receives_exact_truncated_generator_context() -> None:
+    from app.application.generation_prompt import format_evidence
+
+    execution = _execution()
+    evidence = tuple(
+        row.model_copy(update={"text": row.text * 300}) for row in execution.evidence_candidates
+    )
+    execution = replace(execution, evidence_candidates=evidence)
+    corpus = {row.chunk_id: DocumentChunk.model_validate(row.model_dump()) for row in evidence}
+    judge = FakeJudge()
+    evaluate_e2e._score_execution(
+        _item(),
+        execution,
+        judge=judge,
+        include_diagnostics=False,
+        max_context_chars=1000,
+        corpus=corpus,
+    )
+    expected = format_evidence(evidence, max_chars=1000)
+    assert expected.truncated_source_ids
+    assert judge.calls[0][0].generation_context == expected.text
+    assert evidence[0].text in judge.calls[0][0].cited_contexts[0]
+    assert evidence[1].text not in judge.calls[0][0].cited_contexts[0]
+
+
+def test_required_metric_cannot_silently_become_not_applicable() -> None:
+    class MissingScoreJudge(FakeJudge):
+        def score(self, value, **flags):
+            return replace(super().score(value, **flags), faithfulness=MetricScore.not_applicable())
+
+    with pytest.raises(SemanticJudgeError, match="faithfulness"):
+        evaluate_e2e._score_execution(
+            _item(),
+            _execution(),
+            judge=MissingScoreJudge(),
+            include_diagnostics=False,
+            max_context_chars=4000,
+            corpus=_corpus(),
+        )
 
 
 def test_semantic_identity_is_deterministic_and_embedding_is_diagnostic_only() -> None:

@@ -4,21 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import mean, median
 from typing import Any
 
 from app.application.generation_prompt import format_evidence
-from app.application.query_service import QueryExecution
+from app.application.query_service import QueryExecution, QueryTimings
+from app.contracts.query import Citation, QueryResponse
+from app.domain.documents import DocumentChunk
+from app.domain.generation import TokenUsage
 from evaluation.dataset import EvaluationItem
-from evaluation.semantic import RagasScores, render_reviewed_reference
+from evaluation.review_inputs import ReviewInput, ReviewInputError, corpus_candidate, private_path
+from evaluation.semantic import MetricScore, RagasScores, render_reviewed_reference
 
 REVIEW_COHORT_ID = "judge-validation-v1"
 REVIEW_POLICY_ID = "metadata-stratified-fact-family-v1"
-AGREEMENT_THRESHOLD = 0.85
 PRIVATE_REVIEW_ROOT = Path("artifacts/local-review")
 _ANSWERABLE_FAMILY_COUNT = 15
 _UNANSWERABLE_FAMILY_COUNT = 5
@@ -168,28 +174,138 @@ class PrivateReviewPack:
         self._completed_ids.append(item.id)
 
 
+def import_legacy_review(
+    path: Path,
+    *,
+    items: Sequence[EvaluationItem],
+    cases: Sequence[Mapping[str, Any]],
+    corpus: Mapping[str, DocumentChunk],
+    max_context_chars: int,
+) -> list[ReviewInput]:
+    """Import exactly review-pack-v1, not arbitrary Markdown.
+
+    No original answer digest exists in v17. Validation binds all independently
+    available fields; the imported answer's authenticity remains unverified.
+    """
+    try:
+        content = private_path(path).read_text(encoding="utf-8")
+        parts = re.split(r"\n<!-- item:([a-z0-9]+) -->\n", content)
+        if parts[0] != _review_header(_ids_sha256([item.id for item in items])):
+            raise ValueError
+        if parts[1::2] != [item.id for item in items] or len(cases) != len(items):
+            raise ValueError
+        result: list[ReviewInput] = []
+        for item, case, body in zip(items, cases, parts[2::2], strict=True):
+            before = f"## {item.id}\n\nQuestion:\n\n{item.question}\n\nGenerated answer:\n\n"
+            delimiter = "\n\nReviewed reference answer:\n\n"
+            if not body.startswith(before) or body.count(delimiter) != 1:
+                raise ValueError
+            answer = body[len(before) :].split(delimiter)[0]
+            if not answer.strip():
+                raise ValueError
+            evidence = tuple(
+                corpus_candidate(corpus[cid]) for cid in case["evidence_candidate_ids"]
+            )
+            citations = []
+            for cid in case["citation_ids"]:
+                chunk = corpus[cid]
+                citations.append(
+                    Citation(
+                        chunk_id=cid,
+                        document_id=chunk.document_id,
+                        filename=chunk.filename,
+                        page_numbers=chunk.page_numbers,
+                        headings=chunk.headings,
+                        excerpt="",
+                    )
+                )
+            timings = case["timings_ms"]
+            execution = QueryExecution(
+                response=QueryResponse(
+                    answer=answer, abstained=case["abstained"], citations=citations
+                ),
+                timings=QueryTimings(
+                    *(
+                        timings[key]
+                        for key in (
+                            "retrieval",
+                            "rerank",
+                            "evidence_gate",
+                            "generation",
+                            "citation_validation",
+                            "total",
+                        )
+                    )
+                ),
+                usage=TokenUsage(**case["usage"]) if case["usage"] is not None else None,
+                evidence_candidates=evidence,
+                evidence_context_chars=(
+                    len(format_evidence(evidence, max_chars=max_context_chars).text)
+                    if evidence and timings["generation"] > 0
+                    else 0
+                ),
+            )
+            scores = RagasScores(
+                *(
+                    MetricScore(**case["ragas"][key])
+                    for key in (
+                        "factual_correctness",
+                        "faithfulness",
+                        "context_recall",
+                        "answer_relevancy",
+                        "context_precision_without_reference",
+                    )
+                )
+            )
+            expected = _render_review_section(
+                item=item, execution=execution, scores=scores, max_context_chars=max_context_chars
+            ).split(f"\n<!-- item:{item.id} -->\n", 1)[1]
+            # The checklist is editable; every other section must match the canonical renderer.
+            divider = "Reviewer checklist:\n\n"
+            if body.count(divider) != 1 or body.split(divider)[0] != expected.split(divider)[0]:
+                raise ValueError
+            if (
+                body.split(divider)[1].replace("[x]", "[ ]").replace("[X]", "[ ]")
+                != expected.split(divider)[1]
+            ):
+                raise ValueError
+            result.append(ReviewInput(item, execution, max_context_chars))
+        return result
+    except Exception:
+        raise ReviewInputError(
+            "Legacy review format, selection, or source content mismatch."
+        ) from None
+
+
 def validate_scorecard_agreement(
     artifact: Mapping[str, Any], labels: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
-    """Compare schema-v15 binary verdicts with private human labels."""
+    """Describe human/judge discrepancies without binarizing Factual Correctness."""
 
-    if artifact.get("schema_version") != 15:
-        raise HumanReviewError("Agreement validation requires a schema-v15 artifact.")
+    if artifact.get("schema_version") not in {15, 16, 17, 18}:
+        raise HumanReviewError(
+            "Human assessment requires a schema-v15 through schema-v18 artifact."
+        )
     cases = artifact.get("cases")
     if not isinstance(cases, list) or not cases:
         raise HumanReviewError("Scorecard artifact has no cases.")
     by_id = _validated_labels(labels)
     case_ids = [str(case.get("id")) for case in cases if isinstance(case, Mapping)]
-    if len(case_ids) != len(cases) or set(case_ids) != set(by_id):
+    if (
+        len(case_ids) != len(cases)
+        or len(set(case_ids)) != len(case_ids)
+        or set(case_ids) != set(by_id)
+    ):
         raise HumanReviewError("Artifact cases and human labels must have identical IDs.")
 
     rubrics = {
-        "answer_correct": [],
         "citation_supported": [],
         "context_complete": [],
         "abstention_correct": [],
     }
-    missed_unsafe: list[str] = []
+    factual_groups: dict[str, list[float]] = {"human_correct": [], "human_incorrect": []}
+    score_rows: list[dict[str, Any]] = []
+    factual_review_ids: list[str] = []
     answered_answerable = 0
     for case in cases:
         assert isinstance(case, Mapping)
@@ -204,7 +320,6 @@ def validate_scorecard_agreement(
             "abstention_correct": True,
         }
         automatic = {
-            "answer_correct": not abstained and _score(case, "factual_correctness") == 1.0,
             "citation_supported": _score(case, "faithfulness") == 1.0,
             "context_complete": _score(case, "context_recall") == 1.0,
             "abstention_correct": (answerable and not abstained) or (not answerable and abstained),
@@ -221,36 +336,70 @@ def validate_scorecard_agreement(
                         f"Non-applicable label must remain null: {item_id}/{rubric}"
                     )
                 continue
-            rubrics[rubric].append((item_id, automatic[rubric], human))
-        if (
-            not answerable
-            and not abstained
-            and label["abstention_correct"] is False
-            and automatic["abstention_correct"] is True
-        ):
-            missed_unsafe.append(item_id)
+            if rubric == "answer_correct":
+                value = _required_score(case, "factual_correctness")
+                factual_groups["human_correct" if human else "human_incorrect"].append(value)
+                # These are inspection flags, not automatic correctness verdicts.
+                if (human and value < 1.0) or (not human and value > 0.0):
+                    factual_review_ids.append(item_id)
+            else:
+                rubrics[rubric].append((item_id, automatic[rubric], human))
+        score_rows.append(
+            {
+                "id": item_id,
+                "human_answer_correct": label["answer_correct"],
+                "factual_correctness": (
+                    _required_score(case, "factual_correctness")
+                    if applicable["answer_correct"]
+                    else None
+                ),
+                "human_citation_supported": label["citation_supported"],
+                "faithfulness": (
+                    _required_score(case, "faithfulness")
+                    if applicable["citation_supported"]
+                    else None
+                ),
+                "human_context_complete": label["context_complete"],
+                "context_recall": _required_score(case, "context_recall") if answerable else None,
+                "human_abstention_correct": label["abstention_correct"],
+                "automatic_answerability_outcome": automatic["abstention_correct"],
+            }
+        )
 
     agreement = {name: _agreement_payload(rows) for name, rows in rubrics.items()}
-    enough_answer_samples = answered_answerable >= 20
-    accepted = (
-        enough_answer_samples
-        and not missed_unsafe
-        and all(row["agreement_rate"] >= AGREEMENT_THRESHOLD for row in agreement.values())
-    )
     run_identity = artifact.get("run_identity")
+    review = run_identity.get("review", {}) if isinstance(run_identity, Mapping) else {}
     return {
-        "schema_version": 1,
-        "cohort_id": REVIEW_COHORT_ID,
+        "schema_version": 2,
+        "cohort_id": review.get("cohort"),
+        "sampling_note": "Descriptive review only; not a representative judge certification.",
         "dataset_sha256": _nested_string(run_identity, "dataset_sha256"),
         "artifact_identity_sha256": _mapping_sha256(run_identity),
         "selected_item_ids_sha256": _ids_sha256(case_ids),
         "rubrics": agreement,
+        "factual_correctness_by_human_label": {
+            name: {
+                "count": len(values),
+                "mean": mean(values) if values else None,
+                "median": median(values) if values else None,
+            }
+            for name, values in factual_groups.items()
+        },
+        "factual_correctness_review_item_ids": factual_review_ids,
+        "cases": score_rows,
         "answered_answerable_count": answered_answerable,
-        "minimum_answered_answerable_count": 20,
-        "missed_unsafe_false_answer_ids": missed_unsafe,
-        "acceptance_threshold": AGREEMENT_THRESHOLD,
-        "status": "PASS" if accepted else "FAIL",
+        "abstention_interpretation": (
+            "End-to-end answerability outcome; an answerable retrieval miss remains a system miss."
+        ),
+        "status": "REVIEW_REQUIRED",
     }
+
+
+def _required_score(case: Mapping[str, Any], metric: str) -> float:
+    value = _score(case, metric)
+    if value is None or not math.isfinite(value) or not 0 <= value <= 1:
+        raise HumanReviewError("Applicable human-assessment metric is missing or invalid.")
+    return value
 
 
 def _validate_families(families: Mapping[str, Sequence[EvaluationItem]]) -> None:
@@ -316,7 +465,7 @@ def _render_review_section(
         f"\n<!-- item:{item.id} -->\n## {item.id}\n\n"
         f"Question:\n\n{item.question}\n\n"
         f"Generated answer:\n\n{execution.response.answer}\n\n"
-        f"Reviewed reference facts:\n\n{render_reviewed_reference(item) or '(not applicable)'}\n\n"
+        f"Reviewed reference answer:\n\n{render_reviewed_reference(item) or '(not applicable)'}\n\n"
         f"Citations:\n\n{citation_lines}\n\n"
         f"Cited chunks:\n\n{cited_chunks}\n\n"
         f"Final generation evidence:\n\n```text\n{evidence}\n```\n\n"
@@ -357,7 +506,7 @@ def _validate_existing_pack(
     if f"<!-- review-pack-v1 selected={selected_hash} -->" not in content:
         raise HumanReviewError("Existing review pack belongs to another selection.")
     completed = [item_id for item_id in selected_ids if f"<!-- item:{item_id} -->" in content]
-    if completed != list(checkpoint_ids):
+    if completed != list(checkpoint_ids)[: len(completed)]:
         raise HumanReviewError("Review pack and sanitized checkpoint are out of sync.")
     existing_labels = _read_jsonl(labels)
     if [row.get("id") for row in existing_labels] != list(selected_ids):
@@ -385,10 +534,7 @@ def _validated_labels(
     for row in labels:
         if set(row) != required or not isinstance(row.get("id"), str):
             raise HumanReviewError("Human label row has an invalid schema.")
-        if any(
-            row[key] is not None and type(row[key]) is not bool
-            for key in required - {"id"}
-        ):
+        if any(row[key] is not None and type(row[key]) is not bool for key in required - {"id"}):
             raise HumanReviewError("Human labels must be true, false, or null.")
         item_id = str(row["id"])
         if item_id in by_id:

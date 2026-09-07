@@ -279,6 +279,8 @@ class EvaluationItem(BaseModel):
     expected_phrases: list[str]
     phrase_match_mode: PhraseMatchMode = "all"
     expected_answer_facts: list[ExpectedAnswerFact] = Field(default_factory=list)
+    reference_answer: str | None = None
+    reference_answer_review_status: ReviewStatus | None = None
     citation_required: bool
     annotation_notes: str | None = None
     unanswerable_reason: str | None = None
@@ -300,6 +302,16 @@ class EvaluationItem(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("must not be blank")
+        return normalized
+
+    @field_validator("reference_answer")
+    @classmethod
+    def normalized_optional_reference_answer(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("reference_answer must not be blank")
         return normalized
 
     @field_validator("expected_document_ids", "relevant_chunk_ids", "expected_phrases")
@@ -338,6 +350,17 @@ class EvaluationItem(BaseModel):
                 raise ValueError("expected_answer_facts must have unique IDs")
             if self.review_status == "approved" and not self.expected_answer_facts:
                 raise ValueError("approved answerable items require expected_answer_facts")
+            if (self.reference_answer is None) != (
+                self.reference_answer_review_status is None
+            ):
+                raise ValueError(
+                    "reference_answer and reference_answer_review_status must be set together"
+                )
+            if (
+                self.reference_answer_review_status == "approved"
+                and self.reference_answer is None
+            ):
+                raise ValueError("approved reference answers require reference_answer")
             if self.evidence_requirements:
                 requirement_ids = [requirement.id for requirement in self.evidence_requirements]
                 if len(set(requirement_ids)) != len(requirement_ids):
@@ -376,6 +399,11 @@ class EvaluationItem(BaseModel):
                 raise ValueError("unanswerable items must use unanswerable type and no citation")
             if not self.unanswerable_reason or not self.unanswerable_reason.strip():
                 raise ValueError("unanswerable items require unanswerable_reason")
+            if (
+                self.reference_answer is not None
+                or self.reference_answer_review_status is not None
+            ):
+                raise ValueError("unanswerable items cannot contain a reference answer")
 
 
 def chunk_ids_sha256(chunks: Iterable[DocumentChunk]) -> str:
@@ -571,6 +599,14 @@ def validate_dataset(
             ),
             "answerable_missing_answer_facts": sum(
                 item.answerable and not item.expected_answer_facts for item in items
+            ),
+            "answerable_missing_reference_answers": sum(
+                item.answerable and item.reference_answer is None for item in items
+            ),
+            "answerable_unapproved_reference_answers": sum(
+                item.answerable
+                and item.reference_answer_review_status != "approved"
+                for item in items
             ),
         },
     }
@@ -835,6 +871,10 @@ def _validate_bilingual_fact_families(
         if _fact_structure(first) != _fact_structure(second):
             raise DatasetValidationError(
                 f"{kind} fact family {family_id} has mismatched expected-fact structure."
+            )
+        if (first.reference_answer is None) != (second.reference_answer is None):
+            raise DatasetValidationError(
+                f"{kind} fact family {family_id} has mismatched reference-answer coverage."
             )
 
 

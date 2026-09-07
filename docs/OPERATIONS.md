@@ -169,9 +169,9 @@ The command labels its result `retrieval gates PASS/FAIL`: reviewed-authority co
 strict document identity remains diagnostic. Any metric movement is an evaluation-contract
 correction, not a production quality claim.
 Non-baseline variants are rejected for the legacy suite, and the command has no
-confirmation or held-out dataset choice. The current
-repository does not yet contain the reviewed development/confirmation payloads, so no variant run,
-winner, or quality improvement is claimed by this implementation alone.
+confirmation or held-out dataset choice. Reviewed development/confirmation payloads remain private
+and are not distributed by Git. The existence of a variant implementation is not evidence of a
+validated winner or a production quality improvement.
 
 Use the trace to check the raw ceiling first: qrel absence from both diagnostic dense top 100 and
 sparse top 100 means refill, RRF reserves, and lexical fusion cannot recover it. Stop this tuning
@@ -183,9 +183,13 @@ supported way to continue an interrupted full sealed run.
 
 ## Current E2E Ragas scorecard
 
-Schema v15 supports one E2E workflow for `development`, sealed `confirmation`, and exposed
-`heldout-v2`. It always runs the configured generator plus Ragas Factual Correctness,
+Schema v18 supports live E2E for `development`, sealed `confirmation`, and exposed
+`heldout-v2`, plus development-only fixed-answer judge replay. Live mode runs the configured
+generator plus Ragas Factual Correctness,
 Faithfulness, and Context Recall. Generator egress and judge egress require separate approvals.
+Each selected answerable item must have an independently reviewed natural reference answer.
+The evaluator refuses the run before provider/model construction when any selected reference is
+missing or still marked `needs_human_review`.
 
 ```powershell
 docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
@@ -195,15 +199,26 @@ docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
   --ragas-diagnostics
 ```
 
-The four canonical outcomes are answer utility, unsafe-answer rate, citation faithfulness, and
-final-context recall. Optional Answer Relevancy and Context Precision without reference are
-diagnostics only. The scorecard has no composite score or thresholds: v15 reports
-`BASELINE_ONLY`, and a valid complete run exits zero regardless of score.
+The artifact uses the metric names published by Ragas rather than project-specific outcome aliases:
 
-Default outputs are `artifacts/metrics/atv320-{dataset}-e2e-v15.json` and
-`artifacts/metrics/atv320-{dataset}-e2e-v15-checkpoint.jsonl`. They exclude raw questions,
+- `factual_correctness` compares an answered answerable response with its reviewed reference,
+  using continuous F1, not a binary `score == 1` correctness verdict;
+- `faithfulness` checks support from cited full chunks including verified document title and
+  heading (`headed_cited_chunks_v2`), in final-evidence order; uncited sources are never added;
+- `context_recall` checks whether the final generation context covers the reviewed reference;
+- `answer_relevancy` and `context_precision_without_reference` are populated when
+  `--ragas-diagnostics` is enabled.
+
+These judge scores live under `scorecard.ragas_metrics`. Deterministic counts live separately under
+`scorecard.behavior_metrics`: `answerable_response_rate`, `unsafe_answer_rate`, and
+`citation_reference_validity_rate`. There is no `answer_utility`, renamed faithfulness/recall,
+weighted composite, or implicit threshold. Schema v18 reports `BASELINE_ONLY`, and a valid complete
+run exits zero regardless of score.
+
+Default outputs are `artifacts/metrics/atv320-{dataset}-e2e-v18.json` and
+`artifacts/metrics/atv320-{dataset}-e2e-v18-checkpoint.jsonl`. They exclude raw questions,
 answers, reviewed references, evidence, prompts, provider output, judge reasoning, and retrieval
-traces. V14 checkpoints fail closed. E2E fixes the evidence boundary at five and uses
+traces. Earlier checkpoints fail closed through run/source identity. E2E fixes the evidence boundary at five and uses
 `capture_trace=False`; use `scripts.evaluation.evaluate_retrieval` for deep stage diagnostics.
 
 Ragas uses OpenRouter model `openai/gpt-5.6-luna`, low reasoning, OpenAI-only routing, no fallback,
@@ -213,46 +228,107 @@ alone initialize `openai/text-embedding-3-small`. `OPENROUTER_API_KEY` remains i
 
 ## Human validation of the scorecard
 
-Before any full development baseline, run the fixed 40-item metadata-selected cohort. This sends
+The first schema-v15 judge-validation cohort showed why complete references are required: human
+agreement was 24.14% for answer correctness and 68.97% for citation support, while context and
+abstention agreement were both 100%. Many correct answers were compared with short matcher aliases
+that omitted conditions or relations. That v15 result is historical diagnostic evidence, not a
+production-quality score or a threshold-calibration set.
+
+Development v16 has 80 natural reference answers approved through a separate private human review.
+For future reference revisions, use the ignored private files without comparing drafts to generated answers:
+
+```text
+artifacts/local-review/reference-answers-v1/review.md
+artifacts/local-review/reference-answers-v1/labels.jsonl
+```
+
+Set `reference_answer_approved` to `true` only when the draft directly answers the question,
+contains every required fact/condition/value/unit/identifier/order, adds no unsupported claim, and
+reads naturally in the question language. Use `false` when a revision is required. Dataset curators
+may change `reference_answer_review_status` to `approved` only after every draft is accepted. Never
+commit or share this private review material.
+
+After the reference set is approved, run the fixed 40-item metadata-selected cohort again. This sends
 30 answerable and 10 unanswerable EN/VI-balanced cases to both the configured generator and Ragas,
 so it requires fresh approval for both egress paths:
 
 ```powershell
-docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e \`
-  --dataset development \`
-  --review-cohort judge-validation-v1 \`
-  --local-review-output artifacts/local-review/judge-validation-v1/review.md \`
-  --checkpoint artifacts/metrics/atv320-judge-validation-v1-e2e-v15-checkpoint.jsonl \`
-  --output artifacts/metrics/atv320-judge-validation-v1-e2e-v15.json \`
-  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS" \`
-  --judge-provider-approval-token "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS SCORECARD EGRESS" \`
+docker compose run --rm evaluation python -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --review-cohort judge-validation-v1 `
+  --local-review-output artifacts/local-review/judge-validation-v18/review.md `
+  --checkpoint artifacts/metrics/atv320-judge-validation-v18-checkpoint.jsonl `
+  --output artifacts/metrics/atv320-judge-validation-v18.json `
+  --provider-approval-token "APPROVE ATV320 DEVELOPMENT GENERATOR EGRESS" `
+  --judge-provider-approval-token "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS SCORECARD EGRESS" `
   --ragas-diagnostics
 ```
 
-The private directory contains `review.md` and `labels.jsonl`. It is Git-ignored and contains raw
+The private directory contains `review.md`, `labels.jsonl`, and `inputs.jsonl`. It is Git-ignored and contains raw
 questions, answers, reviewed facts, citations, cited chunks, and final generation evidence. Never
 commit, upload, paste into CI, or share these files. Replace applicable `null` values in
 `labels.jsonl` with `true` or `false`; leave only genuinely non-applicable fields as `null`.
+The input journal is captured atomically after generation, before judging. After judge failure,
+resume the same command/checkpoint: the stored answer is reused. Completed checkpoints can repair
+a lagging Markdown pack after an interrupted write; edited labels are never overwritten. Use a new
+directory for a different run identity. Explicit `--local-review-output` can also capture a full
+development run; review-cohort/item selection still requires separate explicit output/checkpoint.
 
 Validate agreement without provider access:
 
 ```powershell
-.\.venv\Scripts\python.exe -m scripts.evaluation.validate_scorecard \`
-  --artifact artifacts/metrics/atv320-judge-validation-v1-e2e-v15.json \`
-  --labels artifacts/local-review/judge-validation-v1/labels.jsonl \`
-  --output artifacts/metrics/atv320-judge-validation-v1-agreement.json
+.\.venv\Scripts\python.exe -m scripts.evaluation.validate_scorecard `
+  --artifact artifacts/metrics/atv320-judge-validation-v18.json `
+  --labels artifacts/local-review/judge-validation-v18/labels.jsonl `
+  --output artifacts/metrics/atv320-judge-validation-v18-assessment-v2.json
 ```
 
-The sanitized agreement artifact contains only hashes, applicable counts, TP/TN/FP/FN,
-disagreement IDs, and acceptance status. Each rubric must reach at least 85%, all applicable labels
-must be complete, correctness/faithfulness need at least 20 answered-answerable samples, and no
-human-confirmed unsafe false answer may be missed. Exit code is zero for PASS and two for a valid
-FAIL. If validation fails, stop and diagnose categories; do not tune a prompt or threshold to
-individual review items.
+Assessment v2 reports `REVIEW_REQUIRED` and exits zero for a valid report; incomplete labels or
+invalid input/schema exit nonzero. Factual Correctness is grouped by human-correct/incorrect labels
+with count/mean/median and inspection IDs, without automatic binary correctness. Complete-support
+confusion tables remain for Faithfulness and Context Recall, with per-case raw scores (not raw text).
+`abstention_correct` measures end-to-end answerability, so a safe generator refusal caused by a
+retrieval miss remains a system miss. There is no overall 85% PASS/FAIL certification. Historical
+assessment-v1 files are unchanged. Critical cohorts selected by failures are diagnostic, not a
+representative quality estimate. Stop and review unexplained judge disagreement in important
+categories; do not keep rerunning or tune prompts until scores look better.
 
-After agreement passes and only after a separate approval, run full development once using the
-current E2E command with `--ragas-diagnostics`. Do not run confirmation or held-out in E04 and do
-not derive thresholds from that same baseline.
+## Replay fixed development answers (judge only)
+
+After a separate cost/egress approval, the first replay uses the unchanged 20-case v17 review:
+
+```powershell
+docker compose run --rm --no-deps evaluation python -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --replay-artifact artifacts/metrics/atv320-development-critical-e2e-v17.json `
+  --replay-review artifacts/local-review/development-critical-v17/review.md `
+  --output artifacts/metrics/atv320-development-critical-judge-v18-r1.json `
+  --checkpoint artifacts/metrics/atv320-development-critical-judge-v18-r1-checkpoint.jsonl `
+  --judge-provider-approval-token "APPROVE ATV320 DEVELOPMENT OPENROUTER RAGAS SCORECARD EGRESS"
+```
+
+The evaluator image must contain the current code; rebuilding the evaluation target requires
+separate approval. Do not rebuild ingestion. The two replay flags must be provided together, with
+explicit output/checkpoint. Replay fixes selection to the source artifact and runs core metrics
+only: no generator token, optional diagnostics, Qdrant client or retrieval models. `OPENROUTER_API_KEY`
+is still required. For the planned second independent judge measurement, change **both** output and
+checkpoint from `r1` to `r2`; reuse `r1` only to resume incomplete work, not to obtain another sample.
+Compare per-case scores across v17/r1/r2, not just aggregate means.
+
+All cases are validated before judge construction: dataset/reference identity, production source
+pins, frozen metadata/text, selected IDs, citations, and exact rendered evidence. The parser accepts
+only the existing private review format. A v17 answer had no generation-time hash, so provenance is
+`legacy_review_import` and `original_answer_hash_verified=false`; its import hash does not prove
+the Markdown was never edited. New live v18 review sources additionally require `inputs.jsonl`
+whose captured input hashes match the artifact; an altered answer is rejected. A replay artifact
+is not a new generation source: repeat replay against the original live artifact/review pair.
+
+`execution_mode=judge_replay` identifies these runs. Retrieval/generation timings and generation
+usage are inherited historical measurements, **not new cost or latency improvements**; only judge
+timing is newly measured. The current adapter does not expose judge token usage or exact billed
+cost, which are explicitly marked unavailable, not zero. Source artifact and input hashes bind
+resume; a changed policy/source or v17 checkpoint fails closed. Keep source files unchanged.
+No confirmation/held-out run or production policy promotion is authorized by replay commands.
 
 ## Historical evaluator contracts
 
@@ -260,7 +336,8 @@ Schema v8 is the latest executed held-out evidence. Schemas v9-v14 recorded comp
 fact-matcher, provenance, generation-variant, and hybrid-judge experiments. E04 hard-cut those
 active commands and modules after their durable lessons moved to `PROJECT_JOURNEY.md`. The original
 commands and artifacts remain discoverable in Git history; they are not supported operations and
-cannot resume under schema v15/source identity v11.
+cannot resume under schema v18/source identity v14. V17 artifacts remain historical evidence and
+can be imported for judge replay, but their checkpoints cannot be resumed as v18 runs.
 
 ## Reproduce ingestion without indexing
 
