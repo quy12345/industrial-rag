@@ -435,6 +435,19 @@ experiment code active. **Commit/artifact** -> no production commit or promotion
 artifact SHA-256 `3ea36362352afe112490a5fbdff4e93f44144f240d7e1f6fca8b63d980f5e587` and private review pack
 under `artifacts/local-review/development-critical-scope-aware-v1-v18/`.
 
+### Deterministic protected-scope guard (Q06)
+
+**Symptom** -> The generator combined nearby but distinct credential, pairing, QR, and product-data
+facts into unsupported relations. **Root cause** -> Citation identity alone did not require the
+protected technical scope named in a question to occur in the rendered final evidence. **Fix** -> A
+small bilingual, boundary-safe registry checks only questions with at least two protected concepts,
+first over the exact rendered final evidence and then over validated cited sources. The new
+development-only scope replay validates historical live artifact/input identities separately from
+the target policy and records no raw content. **Proof** -> Offline policy, truncation, citation, and
+replay tests cover the behavior; no provider, Qdrant, or held-out run occurred. A scope pass remains
+lexical presence only and is not an entailment verdict. **Commit/artifact** -> `571d51c`;
+development scope replay is pending explicit execution approval.
+
 ## Portfolio conclusions
 
 - Correct evaluation labels are as important as the retrieval implementation.

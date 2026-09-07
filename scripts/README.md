@@ -54,14 +54,14 @@ production generation contract and the three core Ragas metrics. Generator egres
 require independent dataset-specific approval tokens. Optional Answer Relevancy and Context
 Precision diagnostics are enabled with `--ragas-diagnostics`.
 
-The compact schema-v18 scorecard exposes Ragas results under their standard names: Factual
+The compact schema-v19 scorecard exposes Ragas results under their standard names: Factual
 Correctness, Faithfulness, Context Recall, Answer Relevancy, and Context Precision without
 reference. It reports deterministic answerable-response, unsafe-answer, and citation-reference
 validity rates separately; none is relabeled as a Ragas metric or merged into a composite score. It
 fixes the final evidence boundary at five and disables retrieval trace capture. Answerable items
 require independent natural reference answers with a separate approved review status; expected
 fact aliases remain audit annotations and are not rendered as Ragas references. Use
-`evaluate_retrieval` for provider-free deep stage diagnostics. Schema v18 is `BASELINE_ONLY`: it
+`evaluate_retrieval` for provider-free deep stage diagnostics. Schema v19 is `BASELINE_ONLY`: it
 has no thresholds and a valid run exits zero regardless of score.
 Development, sealed confirmation, and exposed held-out v2 are the only E2E dataset choices. The
 latest executed held-out artifact remains v8 until a newer run is explicitly approved and
@@ -74,6 +74,11 @@ before judging, so interrupted review runs can reuse generation. See [Operations
 for replay provenance, cost accounting and legacy import limitations. `validate_scorecard` emits
 assessment v2 (`REVIEW_REQUIRED`, exit zero for valid reports), with continuous F1 grouped by human
 labels, not `F1 == 1` answer-correctness verdicts.
+
+`evaluate_e2e --scope-replay-artifact ... --scope-replay-inputs ...` is development-only and
+provider-free. It validates a live artifact and private captured inputs, then emits sanitized
+deterministic evidence-scope decisions with separate origin and target policy identities. It does
+not accept a judge or generator approval token.
 
 ## Archive
 

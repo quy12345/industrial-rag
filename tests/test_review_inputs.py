@@ -232,7 +232,7 @@ def test_replay_never_builds_runtime_and_resume_preserves_answer_and_historical_
     assert judge.inputs[0].answer == "PRIVATE_ANSWER"
     assert "Heading: Handling" in judge.inputs[0].cited_contexts[0]
     output = json.loads(args.output.read_text())
-    assert output["schema_version"] == 18
+    assert output["schema_version"] == 19
     assert output["run_identity"]["execution_mode"] == "judge_replay"
     assert output["run_identity"]["replay"]["input_policy"] == "legacy_review_import"
     assert output["run_identity"]["replay"]["original_answer_hash_verified"] is False
@@ -445,6 +445,89 @@ def test_v18_replay_requires_captured_answer_hash(replay_setup, monkeypatch):
     )
     with pytest.raises(ReviewInputError, match="captured input differ"):
         cli._run_replay(args, chunks=chunks, dataset=items)
+
+
+def test_scope_replay_uses_captured_inputs_without_external_clients(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    item = _item().model_copy(update={"question": "What Bluetooth pairing PIN is required?"})
+    chunks = [_chunk()]
+    corpus = {"c1": chunks[0]}
+    frozen = tmp_path / "frozen.jsonl"
+    frozen.write_text("synthetic frozen corpus", encoding="utf-8")
+    monkeypatch.setattr(cli, "FROZEN_CHUNKS_PATH", frozen)
+    monkeypatch.setattr(cli, "_file_sha256", lambda _: "b" * 64)
+    origin = {
+        "artifact_schema_version": 18,
+        "execution_mode": "live",
+        "frozen_chunks_sha256": "b" * 64,
+        "source_identity": {
+            "version": 14,
+            "files": {
+                key: "a" * 64
+                for key in (
+                    "generation_prompt",
+                    "query_service",
+                    "retrieval_composition",
+                    "retrieval_contract",
+                )
+            },
+        },
+        "dataset": "development",
+        "dataset_sha256": dataset_sha256([item]),
+        "corpus": chunk_set_metadata(chunks),
+        "selected_item_ids": [item.id],
+        "contract_chunk_ids_sha256": ATV320_RETRIEVAL_CONTRACT.chunk_ids_sha256,
+        "generation_max_context_chars": 4000,
+        "evidence_top_k": 5,
+        "generation": {"model": "qwen/qwen3-235b-a22b-2507"},
+    }
+    input_path = Path("artifacts/local-review/scope/inputs.jsonl")
+    journal = PrivateInputJournal.open(input_path, origin, [item], corpus)
+    saved = ReviewInput(item, _execution(), 4000)
+    journal.append(saved)
+    source_record = build_case_record(
+        item,
+        saved.execution,
+        _scores(),
+        input_sha256=saved.to_payload()["input_sha256"],
+    )
+    source_path = Path("source-v18.json")
+    write_json_atomic(
+        source_path,
+        {"schema_version": 18, "run_identity": origin, "cases": [source_record]},
+    )
+    args = cli._parse_args(
+        [
+            "--dataset",
+            "development",
+            "--scope-replay-artifact",
+            str(source_path),
+            "--scope-replay-inputs",
+            str(input_path),
+            "--output",
+            "scope.json",
+            "--checkpoint",
+            "scope-checkpoint.jsonl",
+        ]
+    )
+    cli._validate_approvals(args, environ={})
+    monkeypatch.setattr(cli, "Settings", lambda: pytest.fail("scope replay built Settings"))
+    monkeypatch.setattr(cli, "QueryService", lambda *args, **kwargs: pytest.fail("runtime built"))
+    monkeypatch.setattr(cli, "_build_judge", lambda _: pytest.fail("judge built"))
+
+    assert cli._run_scope_replay(args, chunks=chunks, dataset=[item]) == 0
+    output = json.loads(args.output.read_text(encoding="utf-8"))
+    assert output["kind"] == "evidence_scope_replay"
+    assert output["cases"][0]["proposed_abstention_reason"] == "evidence_scope_missing"
+    assert output["cases"][0]["pre_generation_scope"]["missing_concept_ids"] == [
+        "bluetooth",
+        "credential",
+        "pairing",
+    ]
+    assert output["run_identity"]["replay"]["source_artifact_sha256"] == "b" * 64
+    encoded = args.output.read_text() + args.checkpoint.read_text()
+    for sentinel in ("PRIVATE_QUESTION", "PRIVATE_ANSWER", "PRIVATE_EVIDENCE"):
+        assert sentinel not in encoded
 
 
 @pytest.mark.parametrize(

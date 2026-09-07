@@ -20,13 +20,14 @@ CANONICAL_SOURCE_IDENTITY_PATHS = {
     "evaluation_command": Path("scripts/evaluation/evaluate_e2e.py"),
     "generation_prompt": Path("app/application/generation_prompt.py"),
     "query_service": Path("app/application/query_service.py"),
+    "evidence_scope_policy": Path("app/domain/policies/evidence_scope.py"),
     "retrieval_composition": Path("app/composition/retrieval.py"),
     "retrieval_contract": Path("app/domain/retrieval_contracts.py"),
 }
 
 
-def test_e2e_source_identity_v14_hashes_canonical_behavior_owners() -> None:
-    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 14
+def test_e2e_source_identity_v15_hashes_canonical_behavior_owners() -> None:
+    assert evaluate_e2e.SOURCE_IDENTITY_VERSION == 15
     assert evaluate_e2e.SOURCE_IDENTITY_PATHS == CANONICAL_SOURCE_IDENTITY_PATHS
 
     expected_files = {
@@ -35,7 +36,7 @@ def test_e2e_source_identity_v14_hashes_canonical_behavior_owners() -> None:
     }
 
     assert evaluate_e2e._source_identity() == {
-        "version": 14,
+        "version": 15,
         "files": expected_files,
         "system_prompt_sha256": (
             "bee13049c510701f72259a760fc9bab29e80e20b62f35ca27b13e1dff8f8fc93"

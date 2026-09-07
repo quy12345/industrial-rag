@@ -282,9 +282,9 @@ def validate_scorecard_agreement(
 ) -> dict[str, Any]:
     """Describe human/judge discrepancies without binarizing Factual Correctness."""
 
-    if artifact.get("schema_version") not in {15, 16, 17, 18}:
+    if artifact.get("schema_version") not in {15, 16, 17, 18, 19}:
         raise HumanReviewError(
-            "Human assessment requires a schema-v15 through schema-v18 artifact."
+            "Human assessment requires a schema-v15 through schema-v19 artifact."
         )
     cases = artifact.get("cases")
     if not isinstance(cases, list) or not cases:

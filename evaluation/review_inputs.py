@@ -38,15 +38,55 @@ def load_replay_source(
     source_files: Mapping[str, str],
 ) -> dict[str, Any]:
     """Validate the sanitized source before reading private answers or creating clients."""
+    return _load_e2e_source(
+        path,
+        items=items,
+        chunks=chunks,
+        source_files=source_files,
+        allowed_versions={17, 18, 19},
+    )
+
+
+def load_scope_replay_source(
+    path: Path,
+    *,
+    items: Sequence[EvaluationItem],
+    chunks: Sequence[DocumentChunk],
+) -> dict[str, Any]:
+    """Validate an identity-bound live source without pinning it to current code.
+
+    Scope replay compares a historical source boundary with a new policy. It
+    therefore validates the origin identity shape but deliberately does not
+    require its production source hashes to equal the target policy's hashes.
+    """
+    return _load_e2e_source(
+        path,
+        items=items,
+        chunks=chunks,
+        source_files=None,
+        allowed_versions={18, 19},
+    )
+
+
+def _load_e2e_source(
+    path: Path,
+    *,
+    items: Sequence[EvaluationItem],
+    chunks: Sequence[DocumentChunk],
+    source_files: Mapping[str, str] | None,
+    allowed_versions: set[int],
+) -> dict[str, Any]:
+    """Validate sanitized E2E records before loading a private input journal."""
     from evaluation.e2e import CASE_KEYS, RAGAS_METRICS
 
     try:
         artifact = json.loads(path.read_text(encoding="utf-8"))
         version = artifact["schema_version"]
         identity = artifact["run_identity"]
-        if version not in {17, 18} or identity["artifact_schema_version"] != version:
+        if version not in allowed_versions or identity["artifact_schema_version"] != version:
             raise ValueError
-        if identity["source_identity"]["version"] != {17: 13, 18: 14}[version]:
+        source_identity = identity["source_identity"]
+        if source_identity["version"] != {17: 13, 18: 14, 19: 15}[version]:
             raise ValueError
         if identity["dataset"] != "development" or identity["dataset_sha256"] != dataset_sha256(
             items
@@ -63,14 +103,22 @@ def load_replay_source(
             raise ValueError
         if identity["generation_max_context_chars"] <= 0:
             raise ValueError
-        for key in (
+        required_source_keys = (
             "generation_prompt",
             "query_service",
             "retrieval_composition",
             "retrieval_contract",
+        )
+        if source_files is not None:
+            for key in required_source_keys:
+                if source_identity["files"][key] != source_files[key]:
+                    raise ValueError
+        elif any(
+            not isinstance(source_identity["files"].get(key), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", source_identity["files"][key])
+            for key in required_source_keys
         ):
-            if identity["source_identity"]["files"][key] != source_files[key]:
-                raise ValueError
+            raise ValueError
         ids = identity["selected_item_ids"]
         if not ids or len(ids) > 120 or len(set(ids)) != len(ids):
             raise ValueError
@@ -110,7 +158,7 @@ def load_replay_source(
                 raise ValueError
             if not re.fullmatch(r"[0-9a-f]{64}", case["retrieval_evidence_fingerprint"]):
                 raise ValueError
-            if version == 18 and not re.fullmatch(r"[0-9a-f]{64}", case["input_sha256"]):
+            if version >= 18 and not re.fullmatch(r"[0-9a-f]{64}", case["input_sha256"]):
                 raise ValueError
             if set(case["timings_ms"]) != {
                 "retrieval",

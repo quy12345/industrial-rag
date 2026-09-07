@@ -48,7 +48,7 @@ def build_case_record(
     *,
     input_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Project one execution into the allowlisted schema-v18 case contract."""
+    """Project one execution into the allowlisted schema-v19 case contract."""
 
     citation_ids = [citation.chunk_id for citation in execution.response.citations]
     evidence_ids = [candidate.chunk_id for candidate in execution.evidence_candidates]

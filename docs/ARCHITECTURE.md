@@ -165,11 +165,11 @@ stable IDs, document IDs, pages, heading counts, and exact-duplicate alternative
 API retains its existing `top_k` range; this diagnostic cap is not a runtime configuration change.
 Evidence metrics in this schema are measured diagnostics, not additional exit-code gates; promotion
 criteria remain deferred until a reviewed development winner exists. The E2E evaluator emits
-compact schema-v18 checkpoints and artifacts and binds resume to corpus, dataset, endpoint, model,
+compact schema-v19 checkpoints and artifacts and binds resume to corpus, dataset, endpoint, model,
 Ragas configuration, and source identity. It reports the five Ragas metrics by their canonical
 names: Factual Correctness, Faithfulness, Context Recall, Answer Relevancy, and Context Precision
 without reference. Deterministic behavior rates are a separate group: answerable response, unsafe
-answer, and citation-reference validity. Schema v18 has no renamed composite outcomes, quality
+answer, and citation-reference validity. Schema v19 has no renamed composite outcomes, quality
 threshold, or composite score. It disables retrieval trace capture; the separate retrieval
 evaluator remains the owner of qrel ranks, variants, and deep stage traces. Current production
 composition does not capture evaluation traces.
@@ -192,6 +192,11 @@ constructs a generator, Qdrant client or retrieval model. Legacy v17 Markdown im
 persist `inputs.jsonl` atomically before judging, binding inputs to the run identity and a per-case
 hash. A failed judge can resume without regenerating the stored answer. Completed checkpoints can
 repair a lagging Markdown pack; user-edited labels are preserved. Raw snapshots remain ignored.
+
+`execution_mode=scope_replay` is a development-only, provider-free comparison of a captured live
+input boundary with the current evidence-scope policy. It validates the origin source identity and
+private input hashes separately from the target policy identity, records pre-generation and cited
+scope decisions without raw text, and cannot resume under a different candidate or scope policy.
 
 Human assessment schema v2 is descriptive (`REVIEW_REQUIRED`), not a quality certification.
 Factual Correctness remains continuous F1, grouped by human-correct/incorrect labels. Faithfulness

@@ -183,7 +183,7 @@ supported way to continue an interrupted full sealed run.
 
 ## Current E2E Ragas scorecard
 
-Schema v18 supports live E2E for `development`, sealed `confirmation`, and exposed
+Schema v19 supports live E2E for `development`, sealed `confirmation`, and exposed
 `heldout-v2`, plus development-only fixed-answer judge replay. Live mode runs the configured
 generator plus Ragas Factual Correctness,
 Faithfulness, and Context Recall. Generator egress and judge egress require separate approvals.
@@ -212,11 +212,11 @@ The artifact uses the metric names published by Ragas rather than project-specif
 These judge scores live under `scorecard.ragas_metrics`. Deterministic counts live separately under
 `scorecard.behavior_metrics`: `answerable_response_rate`, `unsafe_answer_rate`, and
 `citation_reference_validity_rate`. There is no `answer_utility`, renamed faithfulness/recall,
-weighted composite, or implicit threshold. Schema v18 reports `BASELINE_ONLY`, and a valid complete
+weighted composite, or implicit threshold. Schema v19 reports `BASELINE_ONLY`, and a valid complete
 run exits zero regardless of score.
 
-Default outputs are `artifacts/metrics/atv320-{dataset}-e2e-v18.json` and
-`artifacts/metrics/atv320-{dataset}-e2e-v18-checkpoint.jsonl`. They exclude raw questions,
+Default outputs are `artifacts/metrics/atv320-{dataset}-e2e-v19.json` and
+`artifacts/metrics/atv320-{dataset}-e2e-v19-checkpoint.jsonl`. They exclude raw questions,
 answers, reviewed references, evidence, prompts, provider output, judge reasoning, and retrieval
 traces. Earlier checkpoints fail closed through run/source identity. E2E fixes the evidence boundary at five and uses
 `capture_trace=False`; use `scripts.evaluation.evaluate_retrieval` for deep stage diagnostics.
@@ -329,6 +329,29 @@ timing is newly measured. The current adapter does not expose judge token usage 
 cost, which are explicitly marked unavailable, not zero. Source artifact and input hashes bind
 resume; a changed policy/source or v17 checkpoint fails closed. Keep source files unchanged.
 No confirmation/held-out run or production policy promotion is authorized by replay commands.
+
+## Replay deterministic evidence scope
+
+`--scope-replay-artifact` replays only the deterministic evidence-scope guard over a prior live
+development artifact and its identity-bound `inputs.jsonl`. It makes no generator, judge, Qdrant,
+or retrieval-model call and accepts no approval token. Both source paths plus explicit output and
+checkpoint are required; the input journal must remain under `artifacts/local-review/`.
+
+```powershell
+docker compose run --rm --no-deps evaluation python -m scripts.evaluation.evaluate_e2e `
+  --dataset development `
+  --scope-replay-artifact artifacts/metrics/atv320-development-e2e-v19.json `
+  --scope-replay-inputs artifacts/local-review/development-v19/inputs.jsonl `
+  --output artifacts/metrics/atv320-development-scope-replay-v1.json `
+  --checkpoint artifacts/metrics/atv320-development-scope-replay-v1-checkpoint.jsonl
+```
+
+The sanitized output records stable IDs, original abstention state, pre-generation scope, cited
+scope, the proposed abstention reason, source artifact hash, origin source identity, target policy
+hashes, and candidate-policy hash. A scope pass proves only protected-concept presence; it does not
+prove the answer's relations or entailment. Existing v18 sources can be replayed only when their
+private input journal and frozen corpus identity validate; v17 Markdown imports are excluded because
+they have no captured generation-time input hash.
 
 ## Historical evaluator contracts
 

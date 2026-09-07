@@ -172,7 +172,7 @@ def test_supported_cli_help_preserves_the_public_option_surface(
     assert expected_options <= set(result.stdout.split())
 
 
-def test_e2e_help_exposes_exactly_the_compact_v18_option_surface() -> None:
+def test_e2e_help_exposes_exactly_the_compact_v19_option_surface() -> None:
     result = _run_cli("scripts.evaluation.evaluate_e2e", "--help")
 
     assert result.returncode == 0
@@ -189,6 +189,8 @@ def test_e2e_help_exposes_exactly_the_compact_v18_option_surface() -> None:
         "--output",
         "--replay-artifact",
         "--replay-review",
+        "--scope-replay-artifact",
+        "--scope-replay-inputs",
     }
 
 
