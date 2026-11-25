@@ -448,6 +448,24 @@ replay tests cover the behavior; no provider, Qdrant, or held-out run occurred. 
 lexical presence only and is not an entailment verdict. **Commit/artifact** -> `571d51c`;
 development scope replay is pending explicit execution approval.
 
+### Resumed records bypassed the sanitized artifact contract
+
+**Symptom** -> A synthetic checkpoint carrying an extra raw-answer field was accepted and copied into
+an artifact that declared raw content excluded. **Root cause** -> Resume checked the run header and
+item order, but did not enforce the compact record allowlist used by fresh projections. Nested
+metric payloads and scope-replay checkpoints had the same unchecked boundary. **Fix** -> Validate
+exact fields, types, applicability, hash/ID formats, and citation/scope consistency on checkpoint
+load and before both checkpoint and artifact writes; bind resumed metadata to selected items and
+reject duplicate records. **Proof** -> Offline tests verify that raw fields, unknown corpus IDs,
+out-of-range scores, diagnostics inconsistent with run settings, and impossible empty-evidence
+scope decisions leave the previous output byte-for-byte intact. The tests cover empty-context
+recall, identical-source scope consistency, and checkpoint round trips. An interrupted scope replay
+resumes at the second item and preserves the first record. Completed E2E checkpoints can publish
+without constructing a judge or retrieval/generation runtime. No provider or benchmark run was performed;
+this is an evaluation-integrity fix, not a measured product-quality improvement. **Commit/artifact**
+-> proposed `fix: validate evaluation checkpoint records before resume`;
+`tests/test_evaluation_checkpoints.py`.
+
 ## Portfolio conclusions
 
 - Correct evaluation labels are as important as the retrieval implementation.

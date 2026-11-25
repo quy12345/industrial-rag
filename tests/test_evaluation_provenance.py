@@ -52,10 +52,11 @@ def test_legacy_checkpoint_fails_closed_under_source_identity_v8(tmp_path: Path)
             "evaluator": "legacy",
         }
     }
-    evaluate_e2e._write_checkpoint(checkpoint, legacy_identity, [])
+    evaluate_e2e._write_checkpoint(checkpoint, legacy_identity, [], set())
 
     with pytest.raises(RuntimeError, match="different frozen run"):
         evaluate_e2e._load_checkpoint(
             checkpoint,
             {"source_identity": evaluate_e2e._source_identity()},
+            set(),
         )

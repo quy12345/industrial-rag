@@ -12,7 +12,7 @@ import importlib.metadata
 import json
 import os
 import platform
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,7 +45,13 @@ from evaluation.dataset import (
     validate_dataset,
     validate_evaluation_manifest,
 )
-from evaluation.e2e import build_case_record, build_scorecard, retrieval_evidence_fingerprint
+from evaluation.e2e import (
+    build_case_record,
+    build_scorecard,
+    retrieval_evidence_fingerprint,
+    validate_case_record,
+    validate_scope_case_record,
+)
 from evaluation.human_review import (
     PrivateReviewPack,
     import_legacy_review,
@@ -130,11 +136,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings=settings,
         manifest=manifest,
     )
-    records = _load_checkpoint(args.checkpoint, identity)
+    corpus = {chunk.chunk_id: chunk for chunk in chunks}
+    records = _load_checkpoint(args.checkpoint, identity, corpus.keys())
     _validate_checkpoint_prefix(records, selected)
     _protect_output(args.output, identity)
 
-    corpus = {chunk.chunk_id: chunk for chunk in chunks}
     journal = (
         PrivateInputJournal.open(
             args.local_review_output.with_name("inputs.jsonl"), identity, selected, corpus
@@ -164,7 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_context_chars=saved.max_context_chars,
                 )
     if len(records) == len(selected):
-        return _finish_run(args, identity, records)
+        return _finish_run(args, identity, records, corpus.keys())
     judge = _build_judge(args)
     completed_ids = {str(record["id"]) for record in records}
     service = None
@@ -194,7 +200,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 item, execution, scores, input_sha256=saved.to_payload()["input_sha256"]
             )
             records.append(record)
-            _write_checkpoint(args.checkpoint, identity, records)
+            _write_checkpoint(args.checkpoint, identity, records, corpus.keys())
             if review_pack is not None:
                 review_pack.append(
                     item=item,
@@ -203,15 +209,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_context_chars=settings.generation_max_context_chars,
                 )
         except SemanticJudgeError as exc:
-            _write_checkpoint(args.checkpoint, identity, records)
+            _write_checkpoint(args.checkpoint, identity, records, corpus.keys())
             raise RuntimeError(str(exc)) from None
         except Exception:
-            _write_checkpoint(args.checkpoint, identity, records)
+            _write_checkpoint(args.checkpoint, identity, records, corpus.keys())
             raise RuntimeError(f"ATV320 execution failed for dataset item {item.id}.") from None
 
     if len(records) != len(selected):
         raise RuntimeError("Checkpoint result count does not match selected items.")
-    return _finish_run(args, identity, records)
+    return _finish_run(args, identity, records, corpus.keys())
 
 
 def _build_query_service(settings: Settings) -> QueryService:
@@ -244,8 +250,10 @@ def _build_query_service(settings: Settings) -> QueryService:
 
 
 def _finish_run(
-    args: argparse.Namespace, identity: dict[str, Any], records: list[dict[str, Any]]
+    args: argparse.Namespace, identity: dict[str, Any], records: list[dict[str, Any]],
+    corpus_ids: Set[str],
 ) -> int:
+    _validate_checkpoint_records(records, identity, corpus_ids)
     scorecard = build_scorecard(records)
     scorecard["operational"]["measurement_provenance"] = {
         "retrieval_generation": "historical_source_run"
@@ -361,11 +369,11 @@ def _run_replay(
             "original_answer_hash_verified": import_policy != "legacy_review_import",
         },
     }
-    records = _load_checkpoint(args.checkpoint, identity)
+    records = _load_checkpoint(args.checkpoint, identity, corpus.keys())
     _validate_checkpoint_prefix(records, selected)
     _protect_output(args.output, identity)
     if len(records) == len(selected):
-        return _finish_run(args, identity, records)
+        return _finish_run(args, identity, records, corpus.keys())
     # Every imported item and source boundary is validated before judge construction.
     judge = _build_judge(args)
     for value, original_record in zip(
@@ -390,14 +398,14 @@ def _run_replay(
                 "retrieval_evidence_fingerprint"
             ]
             records.append(record)
-            _write_checkpoint(args.checkpoint, identity, records)
+            _write_checkpoint(args.checkpoint, identity, records, corpus.keys())
         except SemanticJudgeError as exc:
-            _write_checkpoint(args.checkpoint, identity, records)
+            _write_checkpoint(args.checkpoint, identity, records, corpus.keys())
             raise RuntimeError(str(exc)) from None
         except Exception:
-            _write_checkpoint(args.checkpoint, identity, records)
+            _write_checkpoint(args.checkpoint, identity, records, corpus.keys())
             raise RuntimeError(f"Judge replay failed for item {value.item.id}.") from None
-    return _finish_run(args, identity, records)
+    return _finish_run(args, identity, records, corpus.keys())
 
 
 def _run_scope_replay(
@@ -464,11 +472,11 @@ def _run_scope_replay(
             "origin_source_identity": origin["source_identity"],
         },
     }
-    records = _load_scope_checkpoint(args.checkpoint, identity)
+    records = _load_scope_checkpoint(args.checkpoint, identity, corpus.keys())
     _validate_scope_checkpoint_prefix(records, selected)
     _protect_output(args.output, identity)
     if len(records) == len(selected):
-        return _finish_scope_replay(args, identity, records)
+        return _finish_scope_replay(args, identity, records, corpus.keys())
 
     for value in saved_inputs[len(records) :]:
         bundle = format_evidence(
@@ -516,8 +524,8 @@ def _run_scope_replay(
             "proposed_abstention_reason": proposed_reason,
         }
         records.append(record)
-        _write_scope_checkpoint(args.checkpoint, identity, records)
-    return _finish_scope_replay(args, identity, records)
+        _write_scope_checkpoint(args.checkpoint, identity, records, corpus.keys())
+    return _finish_scope_replay(args, identity, records, corpus.keys())
 
 
 def _rendered_scope_texts(
@@ -538,8 +546,10 @@ def _scope_decision_payload(decision) -> dict[str, Any]:
 
 
 def _finish_scope_replay(
-    args: argparse.Namespace, identity: dict[str, Any], records: list[dict[str, Any]]
+    args: argparse.Namespace, identity: dict[str, Any], records: list[dict[str, Any]],
+    corpus_ids: Set[str],
 ) -> int:
+    _validate_checkpoint_records(records, identity, corpus_ids, scope=True)
     output = {
         "schema_version": 1,
         "kind": "evidence_scope_replay",
@@ -940,7 +950,9 @@ def _library_versions() -> dict[str, str]:
     return versions
 
 
-def _load_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any]]:
+def _load_checkpoint(
+    path: Path, identity: dict[str, Any], corpus_ids: Set[str]
+) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
@@ -951,17 +963,37 @@ def _load_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any
         raise RuntimeError("Malformed ATV320 checkpoint.") from None
     if header != {"run_identity": identity}:
         raise RuntimeError("Existing ATV320 checkpoint belongs to a different frozen run.")
-    ids = [record.get("id") for record in records]
-    if len(ids) != len(set(ids)):
-        raise RuntimeError("Existing ATV320 checkpoint contains duplicate item IDs.")
+    _validate_checkpoint_records(records, identity, corpus_ids)
     return records
 
 
-def _write_checkpoint(path: Path, identity: dict[str, Any], records: list[dict[str, Any]]) -> None:
+def _validate_checkpoint_records(
+    records: list[dict[str, Any]], identity: dict[str, Any], corpus_ids: Set[str], *,
+    scope: bool = False,
+) -> None:
+    try:
+        for record in records:
+            if scope:
+                validate_scope_case_record(record, corpus_ids)
+            else:
+                validate_case_record(record, corpus_ids, identity["ragas"]["diagnostic_metrics"])
+    except (ValueError, TypeError, OverflowError):
+        raise RuntimeError("Invalid sanitized evaluation checkpoint record.") from None
+    ids = [record["id"] for record in records]
+    if len(ids) != len(set(ids)):
+        raise RuntimeError("Evaluation checkpoint contains duplicate item IDs.")
+
+
+def _write_checkpoint(
+    path: Path, identity: dict[str, Any], records: list[dict[str, Any]], corpus_ids: Set[str]
+) -> None:
+    _validate_checkpoint_records(records, identity, corpus_ids)
     write_jsonl_atomic(path, [{"run_identity": identity}, *records])
 
 
-def _load_scope_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[str, Any]]:
+def _load_scope_checkpoint(
+    path: Path, identity: dict[str, Any], corpus_ids: Set[str]
+) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
@@ -972,15 +1004,14 @@ def _load_scope_checkpoint(path: Path, identity: dict[str, Any]) -> list[dict[st
         raise RuntimeError("Malformed evidence-scope replay checkpoint.") from None
     if header != {"run_identity": identity}:
         raise RuntimeError("Existing evidence-scope replay checkpoint belongs to another run.")
-    ids = [record.get("id") for record in records]
-    if len(ids) != len(set(ids)):
-        raise RuntimeError("Evidence-scope replay checkpoint contains duplicate item IDs.")
+    _validate_checkpoint_records(records, identity, corpus_ids, scope=True)
     return records
 
 
 def _write_scope_checkpoint(
-    path: Path, identity: dict[str, Any], records: list[dict[str, Any]]
+    path: Path, identity: dict[str, Any], records: list[dict[str, Any]], corpus_ids: Set[str]
 ) -> None:
+    _validate_checkpoint_records(records, identity, corpus_ids, scope=True)
     write_jsonl_atomic(path, [{"run_identity": identity}, *records])
 
 
@@ -989,6 +1020,13 @@ def _validate_checkpoint_prefix(
 ) -> None:
     if [record.get("id") for record in records] != [item.id for item in selected[: len(records)]]:
         raise RuntimeError("Existing ATV320 checkpoint does not match dataset order.")
+    fields = ("answerable", "fact_family_id", "language", "question_type")
+    if any(
+        record.get(name) != getattr(item, name)
+        for record, item in zip(records, selected, strict=False)
+        for name in fields
+    ):
+        raise RuntimeError("Existing ATV320 checkpoint does not match dataset metadata.")
 
 
 def _validate_scope_checkpoint_prefix(
@@ -996,6 +1034,11 @@ def _validate_scope_checkpoint_prefix(
 ) -> None:
     if [record.get("id") for record in records] != [item.id for item in selected[: len(records)]]:
         raise RuntimeError("Evidence-scope replay checkpoint does not match dataset order.")
+    if any(
+        record.get("answerable") != item.answerable
+        for record, item in zip(records, selected, strict=False)
+    ):
+        raise RuntimeError("Evidence-scope replay checkpoint does not match dataset metadata.")
 
 
 def _sealed_comparison_hash(manifest: Mapping[str, Any], dataset: str) -> str:

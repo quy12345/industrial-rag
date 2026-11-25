@@ -303,10 +303,14 @@ class RagasScorecardJudge:
                 metric=metric_name,
                 category="provider_or_structured_output_error",
             ) from None
-        lower_bound = -1.0 if metric_name == "answer_relevancy" else 0.0
-        if not math.isfinite(value) or not lower_bound <= value <= 1.0:
+        if not valid_metric_score(metric_name, value):
             raise SemanticJudgeError(item_id=item_id, metric=metric_name, category="invalid_score")
         return value
+
+
+def valid_metric_score(metric_name: str, score: float) -> bool:
+    lower_bound = -1.0 if metric_name == "answer_relevancy" else 0.0
+    return math.isfinite(score) and lower_bound <= score <= 1.0
 
 
 def semantic_run_identity(*, include_diagnostics: bool) -> dict[str, object]:

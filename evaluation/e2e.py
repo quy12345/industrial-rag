@@ -5,21 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Callable, Mapping, Sequence
+import re
+from collections.abc import Callable, Mapping, Sequence, Set
 from statistics import mean, median
-from typing import Any
+from typing import Any, get_args
 
-from app.application.query_service import QueryExecution
-from evaluation.dataset import EvaluationItem
-from evaluation.semantic import RagasScores
+from app.application.query_service import AbstentionReason, QueryExecution
+from app.domain.policies.evidence_scope import PROTECTED_TECHNICAL_CONCEPTS
+from evaluation.dataset import EvaluationItem, QuestionType
+from evaluation.semantic import CORE_METRICS, DIAGNOSTIC_METRICS, RagasScores, valid_metric_score
 
-RAGAS_METRICS = (
-    "factual_correctness",
-    "faithfulness",
-    "context_recall",
-    "answer_relevancy",
-    "context_precision_without_reference",
-)
+RAGAS_METRICS = CORE_METRICS + DIAGNOSTIC_METRICS
 CASE_KEYS = frozenset(
     {
         "id",
@@ -39,6 +35,185 @@ CASE_KEYS = frozenset(
         "input_sha256",
     }
 )
+SCOPE_CASE_KEYS = frozenset(
+    {
+        "id",
+        "answerable",
+        "original_abstained",
+        "original_abstention_reason",
+        "evidence_candidate_ids",
+        "citation_ids",
+        "retrieval_evidence_fingerprint",
+        "pre_generation_scope",
+        "cited_scope",
+        "proposed_abstention_reason",
+    }
+)
+
+
+def validate_case_record(
+    record: object, corpus_ids: Set[str], diagnostic_metrics: Sequence[str]
+) -> None:
+    """Validate the complete sanitized case, including nested metric payloads."""
+
+    row = _exact_fields(record, CASE_KEYS)
+    _require(_opaque_id(row["id"]))
+    _require(row["fact_family_id"] is None or _opaque_id(row["fact_family_id"]))
+    _require(isinstance(row["language"], str) and row["language"] in {"en", "vi"})
+    _require(
+        isinstance(row["question_type"], str) and row["question_type"] in get_args(QuestionType)
+    )
+    _require(type(row["answerable"]) is bool and type(row["abstained"]) is bool)
+    _require(row["outcome"] == ("abstained" if row["abstained"] else "answered"))
+    _require(_sha256(row["retrieval_evidence_fingerprint"]) and _sha256(row["input_sha256"]))
+    evidence = _record_ids(row["evidence_candidate_ids"])
+    citations = _record_ids(row["citation_ids"])
+    _require(set(evidence + citations) <= corpus_ids)
+    citation_valid = not citations if row["abstained"] else (
+        bool(citations) and set(citations) <= set(evidence)
+    )
+    _require(type(row["citation_reference_valid"]) is bool)
+    _require(row["citation_reference_valid"] == citation_valid)
+    _require(not row["abstained"] or not citations)
+    timings = _exact_fields(
+        row["timings_ms"],
+        frozenset({
+            "retrieval", "rerank", "evidence_gate", "generation",
+            "citation_validation", "judge", "total",
+        }),
+    )
+    _require(all(_finite_number(value) and value >= 0 for value in timings.values()))
+    if row["usage"] is not None:
+        usage = _exact_fields(row["usage"], frozenset({
+            "input_tokens", "output_tokens", "cached_input_tokens",
+        }))
+        _require(
+            all(value is None or (type(value) is int and value >= 0) for value in usage.values())
+        )
+    metrics = _exact_fields(row["ragas"], frozenset(RAGAS_METRICS))
+    for name, payload in metrics.items():
+        _validate_metric(payload, name)
+    statuses = {name: payload["status"] for name, payload in metrics.items()}
+    answered = row["answerable"] and not row["abstained"]
+    empty_context = statuses["context_recall"] == "empty_context"
+    # No source can produce context; nonempty evidence alone does not prove it was rendered.
+    _require(not row["answerable"] or bool(evidence) or empty_context)
+    expected = {
+        "factual_correctness": "complete" if answered and not empty_context else "not_applicable",
+        "faithfulness": (
+            "invalid_citations" if answered and (not citation_valid or empty_context)
+            else "complete" if answered else "not_applicable"
+        ),
+        "context_recall": (
+            "empty_context" if row["answerable"] and empty_context
+            else "complete" if row["answerable"] else "not_applicable"
+        ),
+    }
+    for name in DIAGNOSTIC_METRICS:
+        applicable = answered and not empty_context and name in diagnostic_metrics
+        expected[name] = "complete" if applicable else "not_applicable"
+    _require(all(statuses[name] == status for name, status in expected.items()))
+
+
+def validate_scope_case_record(record: object, corpus_ids: Set[str]) -> None:
+    """Validate allowlisted scope decisions without loading private source text."""
+
+    row = _exact_fields(record, SCOPE_CASE_KEYS)
+    _require(_opaque_id(row["id"]) and _sha256(row["retrieval_evidence_fingerprint"]))
+    _require(type(row["answerable"]) is bool and type(row["original_abstained"]) is bool)
+    reason = row["original_abstention_reason"]
+    _require(reason is None or (isinstance(reason, str) and reason in get_args(AbstentionReason)))
+    _require(row["original_abstained"] == (reason is not None))
+    evidence = _record_ids(row["evidence_candidate_ids"])
+    _require(set(evidence) <= corpus_ids)
+    citations = _record_ids(row["citation_ids"])
+    _require(set(citations) <= set(evidence))
+    _require(not row["original_abstained"] or not citations)
+    _require(row["original_abstained"] or bool(citations))
+    pre = _validate_scope_decision(row["pre_generation_scope"])
+    if not evidence and pre["status"] != "not_applicable":
+        _require(set(pre["missing_concept_ids"]) == set(pre["query_concept_ids"]))
+    cited = _validate_scope_decision(row["cited_scope"]) if citations else None
+    _require(bool(citations) or row["cited_scope"] is None)
+    if cited is not None:
+        _require(pre["query_concept_ids"] == cited["query_concept_ids"])
+        if set(citations) == set(evidence):
+            _require(pre == cited)
+    proposed = (
+        "evidence_scope_missing" if pre["status"] == "missing_scope"
+        else "cited_evidence_scope_missing" if cited and cited["status"] == "missing_scope"
+        else None
+    )
+    _require(row["proposed_abstention_reason"] == proposed)
+
+
+def _require(condition: bool) -> None:
+    if not condition:
+        raise ValueError("Invalid sanitized evaluation record.")
+
+
+def _exact_fields(value: object, fields: frozenset[str]) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError("Invalid sanitized evaluation record.")
+    return value
+
+
+def _opaque_id(value: object, *, limit: int = 64) -> bool:
+    return isinstance(value, str) and len(value) <= limit and bool(
+        re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", value)
+    )
+
+
+def _sha256(value: object) -> bool:
+    return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-f]{64}", value))
+
+
+def _finite_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _record_ids(value: object) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("Invalid sanitized evaluation record.")
+    _require(len(value) <= 5 and all(_opaque_id(item, limit=256) for item in value))
+    _require(len(set(value)) == len(value))
+    return value
+
+
+def _validate_metric(value: object, name: str) -> None:
+    payload = _exact_fields(value, frozenset({"status", "score", "latency_ms"}))
+    status, score, latency = payload["status"], payload["score"], payload["latency_ms"]
+    allowed = {"complete", "not_applicable"}
+    if name == "context_recall":
+        allowed.add("empty_context")
+    if name == "faithfulness":
+        allowed.add("invalid_citations")
+    _require(isinstance(status, str) and status in allowed)
+    _require(_finite_number(latency) and latency >= 0)
+    if status == "not_applicable":
+        _require(score is None and latency == 0)
+    else:
+        _require(type(score) in (int, float) and valid_metric_score(name, score))
+        if status != "complete":
+            _require(score == 0 and latency == 0)
+
+
+def _validate_scope_decision(value: object) -> dict[str, Any]:
+    row = _exact_fields(value, frozenset({"status", "query_concept_ids", "missing_concept_ids"}))
+    concepts = {concept.identifier for concept in PROTECTED_TECHNICAL_CONCEPTS}
+    for name in ("query_concept_ids", "missing_concept_ids"):
+        ids = row[name]
+        _require(isinstance(ids, list) and all(isinstance(item, str) for item in ids))
+        _require(len(ids) == len(set(ids)) and set(ids) <= concepts)
+    _require(set(row["missing_concept_ids"]) <= set(row["query_concept_ids"]))
+    applicable = len(row["query_concept_ids"]) >= 2
+    status = (
+        "missing_scope" if applicable and row["missing_concept_ids"]
+        else "covered" if applicable else "not_applicable"
+    )
+    _require(row["status"] == status)
+    _require(applicable or not row["missing_concept_ids"])
+    return row
 
 
 def build_case_record(

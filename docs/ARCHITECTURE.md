@@ -174,6 +174,20 @@ threshold, or composite score. It disables retrieval trace capture; the separate
 evaluator remains the owner of qrel ranks, variants, and deep stage traces. Current production
 composition does not capture evaluation traces.
 
+E2E and scope replay checkpoints are untrusted serialized inputs. Their records are checked against
+exact top-level and nested field allowlists, strict scalar types, metric applicability, opaque IDs,
+hash formats, and citation/scope consistency before resume and before checkpoint or artifact
+publication. Duplicate IDs are rejected; resumed prefixes must also match the selected dataset's
+order and annotation metadata. Invalid records fail with content-free errors before external client
+construction or output replacement. Answerable cases without evidence must retain deterministic
+empty-context recall; identical final/cited source sets must have identical scope decisions.
+Evidence and citation IDs must belong to the loaded frozen corpus. Metric scores use the live
+judge's per-metric bounds. Diagnostic scores must match the run's enabled metrics and the case's
+eligibility. With empty evidence, an applicable scope decision must list every queried concept as
+missing. Nonempty evidence does not imply rendered generation context. These checks do not authenticate
+scores against a malicious editor who can replace a fully schema-valid record, and do not replace
+private-input hash validation.
+
 Answerable optimization records own an independent natural-language `reference_answer` and a
 separate review status. Ragas Factual Correctness and Context Recall consume this complete reference
 instead of reconstructing an answer from atomic matcher aliases. Atomic expected facts remain the

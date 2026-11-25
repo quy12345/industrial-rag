@@ -368,6 +368,7 @@ def test_live_judge_failure_resumes_saved_answer_without_regeneration(replay_set
             "source_identity": {"version": 14},
             "execution_mode": "live",
             "dataset": "development",
+            "ragas": {"diagnostic_metrics": []},
         },
     )
     monkeypatch.setitem(
@@ -447,9 +448,10 @@ def test_v18_replay_requires_captured_answer_hash(replay_setup, monkeypatch):
         cli._run_replay(args, chunks=chunks, dataset=items)
 
 
-def test_scope_replay_uses_captured_inputs_without_external_clients(tmp_path, monkeypatch):
+def test_scope_replay_resumes_captured_inputs_without_external_clients(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     item = _item().model_copy(update={"question": "What Bluetooth pairing PIN is required?"})
+    items = [item, item.model_copy(update={"id": "a2"})]
     chunks = [_chunk()]
     corpus = {"c1": chunks[0]}
     frozen = tmp_path / "frozen.jsonl"
@@ -473,28 +475,27 @@ def test_scope_replay_uses_captured_inputs_without_external_clients(tmp_path, mo
             },
         },
         "dataset": "development",
-        "dataset_sha256": dataset_sha256([item]),
+        "dataset_sha256": dataset_sha256(items),
         "corpus": chunk_set_metadata(chunks),
-        "selected_item_ids": [item.id],
+        "selected_item_ids": [row.id for row in items],
         "contract_chunk_ids_sha256": ATV320_RETRIEVAL_CONTRACT.chunk_ids_sha256,
         "generation_max_context_chars": 4000,
         "evidence_top_k": 5,
         "generation": {"model": "qwen/qwen3-235b-a22b-2507"},
     }
     input_path = Path("artifacts/local-review/scope/inputs.jsonl")
-    journal = PrivateInputJournal.open(input_path, origin, [item], corpus)
-    saved = ReviewInput(item, _execution(), 4000)
-    journal.append(saved)
-    source_record = build_case_record(
-        item,
-        saved.execution,
-        _scores(),
-        input_sha256=saved.to_payload()["input_sha256"],
-    )
+    journal = PrivateInputJournal.open(input_path, origin, items, corpus)
+    source_records = []
+    for row in items:
+        saved = ReviewInput(row, _execution(), 4000)
+        journal.append(saved)
+        source_records.append(build_case_record(
+            row, saved.execution, _scores(), input_sha256=saved.to_payload()["input_sha256"]
+        ))
     source_path = Path("source-v18.json")
     write_json_atomic(
         source_path,
-        {"schema_version": 18, "run_identity": origin, "cases": [source_record]},
+        {"schema_version": 18, "run_identity": origin, "cases": source_records},
     )
     args = cli._parse_args(
         [
@@ -515,8 +516,26 @@ def test_scope_replay_uses_captured_inputs_without_external_clients(tmp_path, mo
     monkeypatch.setattr(cli, "QueryService", lambda *args, **kwargs: pytest.fail("runtime built"))
     monkeypatch.setattr(cli, "_build_judge", lambda _: pytest.fail("judge built"))
 
-    assert cli._run_scope_replay(args, chunks=chunks, dataset=[item]) == 0
+    write = cli._write_scope_checkpoint
+    writes = []
+
+    def interrupt_second_write(path, identity, records, corpus_ids):
+        writes.append(records[-1]["id"])
+        if writes == ["a1", "a2"]:
+            raise InterruptedError
+        write(path, identity, records, corpus_ids)
+
+    monkeypatch.setattr(cli, "_write_scope_checkpoint", interrupt_second_write)
+    with pytest.raises(InterruptedError):
+        cli._run_scope_replay(args, chunks=chunks, dataset=items)
+    first = [json.loads(line) for line in args.checkpoint.read_text().splitlines()[1:]]
+    assert [record["id"] for record in first] == ["a1"]
+    assert not args.output.exists()
+    assert cli._run_scope_replay(args, chunks=chunks, dataset=items) == 0
+    assert writes == ["a1", "a2", "a2"]
     output = json.loads(args.output.read_text(encoding="utf-8"))
+    assert output["cases"][:1] == first
+    assert [record["id"] for record in output["cases"]] == ["a1", "a2"]
     assert output["kind"] == "evidence_scope_replay"
     assert output["cases"][0]["proposed_abstention_reason"] == "evidence_scope_missing"
     assert output["cases"][0]["pre_generation_scope"]["missing_concept_ids"] == [
@@ -544,7 +563,7 @@ def test_replay_rejects_identity_or_schema_drift_before_egress(replay_setup, mon
     elif mutation == "selected":
         source["run_identity"]["selected_item_ids"] = ["a1"]
     else:
-        cli._write_checkpoint(args.checkpoint, source["run_identity"], [])
+        cli._write_checkpoint(args.checkpoint, source["run_identity"], [], set())
     write_json_atomic(args.replay_artifact, source)
     called = []
     monkeypatch.setattr(cli, "_build_judge", lambda _: called.append(True))
